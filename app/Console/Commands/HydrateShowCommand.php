@@ -53,8 +53,12 @@ final class HydrateShowCommand extends Command
         }
 
         $count = $show->episodes()->count();
+        $state = $show->feedState()->first();
         $this->line("Episodes now in DB: {$count}");
-        $this->line('Feed state: '.($show->feedState()->value('state') ?? 'none'));
+        $this->line('Feed state: '.($state?->state ?? 'none'));
+        if (filled($state?->last_error)) {
+            $this->warn('Last feed error: '.$state->last_error);
+        }
 
         return self::SUCCESS;
     }

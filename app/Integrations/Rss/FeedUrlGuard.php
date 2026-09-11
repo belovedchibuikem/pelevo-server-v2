@@ -28,10 +28,35 @@ class FeedUrlGuard
         }
     }
 
+    /**
+     * @return list<string>
+     */
     protected function resolve(string $host): array
     {
-        $records = dns_get_record($host, DNS_A | DNS_AAAA);
+        // DNS_A|DNS_AAAA is unreliable on many Linux builds; query separately.
+        $addresses = [];
+        foreach ([DNS_A, DNS_AAAA] as $type) {
+            $records = @dns_get_record($host, $type);
+            if (! is_array($records)) {
+                continue;
+            }
+            foreach ($records as $record) {
+                $ip = $record['ip'] ?? $record['ipv6'] ?? null;
+                if (is_string($ip) && $ip !== '') {
+                    $addresses[] = $ip;
+                }
+            }
+        }
 
-        return array_values(array_filter(array_map(fn (array $record): ?string => $record['ip'] ?? $record['ipv6'] ?? null, $records ?: [])));
+        if ($addresses === []) {
+            $fallback = @gethostbynamel($host) ?: [];
+            foreach ($fallback as $ip) {
+                if (is_string($ip) && $ip !== '') {
+                    $addresses[] = $ip;
+                }
+            }
+        }
+
+        return array_values(array_unique($addresses));
     }
 }

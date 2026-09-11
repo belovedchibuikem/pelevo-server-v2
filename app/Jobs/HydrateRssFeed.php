@@ -12,6 +12,7 @@ use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -61,9 +62,9 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 $this->applyResolvedUrl($show, $result['resolved_url']);
                 $newEpisodes = [];
                 $channel = $result['xml']->channel ?? $result['xml'];
-                foreach ($channel->item ?? [] as $item) {
+                    foreach ($channel->item ?? [] as $item) {
                     $guid = trim((string) ($item->guid ?? '')) ?: hash('sha256', trim((string) $item->title).'|'.trim((string) ($item->enclosure['url'] ?? '')).'|'.trim((string) $item->pubDate));
-                    $audioUrl = filter_var((string) ($item->enclosure['url'] ?? ''), FILTER_VALIDATE_URL);
+                    $audioUrl = $this->enclosureUrl($item);
                     if (! $audioUrl || ! str_starts_with($audioUrl, 'https://')) {
                         continue;
                     }
@@ -85,6 +86,10 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             }
         } catch (Throwable $exception) {
             $syncRun->update(['state' => 'failed', 'error' => substr($exception->getMessage(), 0, 1000), 'finished_at' => now()]);
+            Log::warning('catalog.rss.hydrate_failed', [
+                'show_id' => $this->showId,
+                'message' => $exception->getMessage(),
+            ]);
 
             throw $exception;
         }
@@ -113,6 +118,32 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         if (! $conflict) {
             $show->update(['rss_url' => $resolvedUrl]);
         }
+    }
+
+    private function enclosureUrl(\SimpleXMLElement $item): ?string
+    {
+        $candidates = [];
+        if (isset($item->enclosure)) {
+            foreach ($item->enclosure as $enclosure) {
+                $attributes = $enclosure->attributes();
+                $candidates[] = trim((string) ($attributes['url'] ?? $enclosure['url'] ?? ''));
+            }
+        }
+        $media = $item->children('http://search.yahoo.com/mrss/', false);
+        if (isset($media->content)) {
+            foreach ($media->content as $content) {
+                $attributes = $content->attributes();
+                $candidates[] = trim((string) ($attributes['url'] ?? ''));
+            }
+        }
+        foreach ($candidates as $candidate) {
+            $url = filter_var($candidate, FILTER_VALIDATE_URL);
+            if (is_string($url) && str_starts_with($url, 'https://')) {
+                return $url;
+            }
+        }
+
+        return null;
     }
 
     private function durationSeconds(\SimpleXMLElement $item): ?int
