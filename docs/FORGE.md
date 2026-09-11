@@ -122,7 +122,20 @@ Search discovery needs live credentials on the **server**. Local `api/.env` is n
 Empty results with log `Podcast Index API key or secret is missing` means step 1–2 (or 3) was skipped.
 
 
-## Flutter client
+## Episodes after search discovery
+
+Podcast Index only discovers the **show**. Episodes come from the show’s RSS feed via the `rss` Horizon queue (`HydrateRssFeed`).
+
+If a show opens with “No episodes”:
+
+```bash
+php artisan horizon:status          # must be running
+php artisan pelevo:hydrate-show "Wardrobe Memo" --sync
+```
+
+`--sync` hydrates immediately in the console (useful when Horizon was down). Without `--sync`, the job is queued on `rss`.
+
+
 
 Release builds default to the live API:
 

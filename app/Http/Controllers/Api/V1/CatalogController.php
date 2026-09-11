@@ -88,6 +88,7 @@ final class CatalogController extends Controller
             return ApiResponse::success(['redirect_to' => $destination], ['canonical_location' => route('api.show', $destination)], 308)->header('Location', route('api.show', $destination));
         }
 
+        $this->ensureRssHydrationQueued($show);
         $payload = $this->presentShowDetail($show, $request);
 
         return ApiResponse::success($payload);
@@ -95,9 +96,15 @@ final class CatalogController extends Controller
 
     public function episodes(Show $show, Request $request): JsonResponse
     {
+        $this->ensureRssHydrationQueued($show);
         $items = $show->episodes()->where('availability', 'available')->orderByDesc('published_at')->orderByDesc('id')->cursorPaginate(min($request->integer('limit', 20), 50));
 
-        return ApiResponse::success(collect($items->items())->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show))->values(), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()]);
+        return ApiResponse::success(collect($items->items())->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show))->values(), [
+            'cursor' => $items->nextCursor()?->encode(),
+            'has_more' => $items->hasMorePages(),
+            'feed_state' => $show->feedState?->state,
+            'episodes_syncing' => $this->episodesSyncing($show),
+        ]);
     }
 
     public function episode(Episode $episode): JsonResponse
@@ -251,6 +258,8 @@ final class CatalogController extends Controller
             'rating_count' => (int) ($rating->rating_count ?? 0),
             'following' => $follow !== null,
             'notifications_enabled' => (bool) ($follow->notifications_enabled ?? false),
+            'feed_state' => $show->feedState?->state,
+            'episodes_syncing' => $this->episodesSyncing($show),
             'claimed_by_viewer' => $userId !== null && DB::table('verified_show_claims')
                 ->join('show_claims', 'show_claims.id', '=', 'verified_show_claims.show_claim_id')
                 ->join('creator_profiles', 'creator_profiles.id', '=', 'show_claims.creator_profile_id')
@@ -282,5 +291,40 @@ final class CatalogController extends Controller
         }
 
         return $payload;
+    }
+
+    private function episodesSyncing(Show $show): bool
+    {
+        if ($show->episodes()->exists()) {
+            return false;
+        }
+
+        $state = $show->feedState?->state;
+
+        return in_array($state, [null, 'pending', 'running', 'failed'], true);
+    }
+
+    private function ensureRssHydrationQueued(Show $show): void
+    {
+        if (! $this->episodesSyncing($show)) {
+            return;
+        }
+
+        $key = 'show-hydrate:'.$show->id;
+        if (! Cache::add($key, true, now()->addMinutes(2))) {
+            return;
+        }
+
+        $show->feedState()->firstOrCreate([], [
+            'state' => 'pending',
+            'consecutive_failures' => 0,
+            'next_poll_at' => now(),
+        ]);
+
+        HydrateRssFeed::dispatch($show->id);
+        Log::info('catalog.show.hydrate_queued', [
+            'show_id' => $show->id,
+            'feed_state' => $show->feedState?->fresh()?->state,
+        ]);
     }
 }
