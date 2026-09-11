@@ -227,12 +227,15 @@ final class CatalogController extends Controller
 
     private function presentShowCard(Show $show): array
     {
+        $userId = request()->user()?->id;
+
         return [
             'id' => $show->id,
             'title' => $show->title,
             'author' => $show->author,
             'artwork_url' => $show->artwork_url,
             'description' => $show->description,
+            'following' => $userId !== null && DB::table('follows')->where('user_id', $userId)->where('show_id', $show->id)->exists(),
         ];
     }
 
