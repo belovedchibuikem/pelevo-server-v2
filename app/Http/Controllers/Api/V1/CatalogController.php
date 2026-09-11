@@ -160,6 +160,7 @@ final class CatalogController extends Controller
         $request->user()->followedShows()->syncWithoutDetaching([$show->id => ['notifications_enabled' => true]]);
         $cache->user($request->user()->id);
         $cache->public();
+        $this->ensureRssHydrationQueued($show);
 
         return ApiResponse::success(['following' => true]);
     }

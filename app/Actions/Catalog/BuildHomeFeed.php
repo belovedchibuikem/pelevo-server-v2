@@ -60,12 +60,13 @@ final class BuildHomeFeed
             'moods' => $this->categories(6),
             'pick_for_today' => $madeForYou->take(1),
             'continue_listening' => $this->continueListening($userId),
+            'shows_you_follow' => $this->followedShows($userId),
             'made_for_you' => $madeForYou,
             'quick_listen' => $this->quickListen($filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
             'because_you_listened' => $this->affinityEpisodes($userId, $trending, true),
             'trending' => $trending,
             'new_from_following' => $this->following($userId),
-            'african_voices' => $this->africanVoices($filters['country'] ?? null),
+            'african_voices' => $this->africanVoiceShows($filters['country'] ?? null),
             'try_something_new' => $this->unexploredCategories($userId),
             'explore_by_topic' => $this->categories(30),
         ];
@@ -81,6 +82,17 @@ final class BuildHomeFeed
             ->addSelect('playback_progress.position_seconds', 'playback_progress.version')
             ->orderByDesc('playback_progress.updated_at')
             ->limit(20)
+            ->get();
+    }
+
+    private function followedShows(string $userId): Collection
+    {
+        return $this->shows()
+            ->join('follows', 'follows.show_id', '=', 'shows.id')
+            ->where('follows.user_id', $userId)
+            ->orderByDesc('follows.created_at')
+            ->orderByDesc('shows.id')
+            ->limit(30)
             ->get();
     }
 
@@ -112,15 +124,15 @@ final class BuildHomeFeed
             ->get();
     }
 
-    private function africanVoices(?string $country = null): Collection
+    private function africanVoiceShows(?string $country = null): Collection
     {
         $countries = ['NG', 'GH', 'KE', 'ZA', 'UG', 'TZ', 'RW', 'ET', 'CM', 'SN', 'CI'];
         $selected = is_string($country) ? strtoupper($country) : null;
 
-        return $this->episodes()
+        return $this->shows()
             ->whereIn('shows.country_code', $selected !== null && in_array($selected, $countries, true) ? [$selected] : $countries)
-            ->orderByDesc('episodes.published_at')
-            ->orderByDesc('episodes.id')
+            ->orderByDesc('shows.updated_at')
+            ->orderByDesc('shows.id')
             ->limit(30)
             ->get();
     }
@@ -192,6 +204,21 @@ final class BuildHomeFeed
             ->orderBy('categories.id');
     }
 
+    private function shows(): Builder
+    {
+        return DB::table('shows')
+            ->where('shows.status', 'active')
+            ->select(
+                'shows.id',
+                DB::raw("'show' AS type"),
+                'shows.title',
+                'shows.author as subtitle',
+                'shows.artwork_url',
+                'shows.author',
+                'shows.country_code',
+            );
+    }
+
     private function episodes(): Builder
     {
         return DB::table('episodes')
@@ -234,12 +261,13 @@ final class BuildHomeFeed
             ['key' => 'moods', 'title' => 'What are you in the mood for?', 'subtitle' => 'Browse topics that match this moment', 'kind' => 'categories'],
             ['key' => 'pick_for_today', 'title' => 'Your pick for today', 'subtitle' => 'One episode selected from Pelevo recommendations', 'kind' => 'hero_episode'],
             ['key' => 'continue_listening', 'title' => 'Continue listening', 'subtitle' => 'Pick up where you left off', 'kind' => 'episode_progress'],
+            ['key' => 'shows_you_follow', 'title' => 'Shows you follow', 'subtitle' => 'Open a podcast to browse its episodes', 'kind' => 'shows'],
             ['key' => 'made_for_you', 'title' => 'Made for you', 'subtitle' => 'Personalized episode picks', 'kind' => 'episodes'],
             ['key' => 'quick_listen', 'title' => 'Quick listen', 'subtitle' => 'Short episodes that fit your time', 'kind' => 'episodes'],
             ['key' => 'because_you_listened', 'title' => 'Because you listened', 'subtitle' => 'More from topics you already enjoy', 'kind' => 'episodes'],
             ['key' => 'trending', 'title' => 'Trending on Pelevo', 'subtitle' => 'What listeners are playing now', 'kind' => 'ranked_episodes'],
             ['key' => 'new_from_following', 'title' => 'New from shows you follow', 'subtitle' => 'Fresh episodes from your subscriptions', 'kind' => 'episodes'],
-            ['key' => 'african_voices', 'title' => 'African voices', 'subtitle' => 'Shows published across the continent', 'kind' => 'episodes'],
+            ['key' => 'african_voices', 'title' => 'African voices', 'subtitle' => 'Podcasts from across the continent', 'kind' => 'shows'],
             ['key' => 'try_something_new', 'title' => 'Try something new', 'subtitle' => 'Topics outside your listening history', 'kind' => 'categories'],
             ['key' => 'explore_by_topic', 'title' => 'Explore by topic', 'subtitle' => 'Browse the Pelevo catalog', 'kind' => 'categories'],
         ];

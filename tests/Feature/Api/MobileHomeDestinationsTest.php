@@ -107,7 +107,8 @@ final class MobileHomeDestinationsTest extends TestCase
             ->assertJsonPath('data.rail.items.0.title', 'Short NG');
         $this->assertSame(['Short NG'], collect($this->actingAs($user, 'sanctum')->getJson('/api/v1/home/rails/quick_listen?min_duration=300&max_duration=600')->json('data.rail.items'))->pluck('title')->all());
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/home/rails/african_voices?country=GH')->assertOk()
-            ->assertJsonPath('data.rail.items.0.title', 'GH episode');
+            ->assertJsonPath('data.rail.items.0.title', 'GH Show')
+            ->assertJsonPath('data.rail.items.0.type', 'show');
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/home/rails/african_voices?country=XX')->assertUnprocessable();
     }
 }

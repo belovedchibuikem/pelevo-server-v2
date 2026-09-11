@@ -26,7 +26,11 @@ final class HomeContractTest extends TestCase
         $response = $this->actingAs($user, 'sanctum')->getJson('/api/v1/home/feed')->assertOk()->assertJsonPath('data.schema_version', 2);
         $keys = collect($response->json('data.rails'))->pluck('key')->all();
 
-        $this->assertSame(['moods', 'pick_for_today', 'continue_listening', 'made_for_you', 'quick_listen', 'because_you_listened', 'trending', 'new_from_following', 'african_voices', 'try_something_new', 'explore_by_topic'], $keys);
+        $this->assertSame(['moods', 'pick_for_today', 'continue_listening', 'shows_you_follow', 'made_for_you', 'quick_listen', 'because_you_listened', 'trending', 'new_from_following', 'african_voices', 'try_something_new', 'explore_by_topic'], $keys);
+        $response->assertJsonPath('data.rails.3.items.0.title', 'Africa Daily');
+        $response->assertJsonPath('data.rails.3.items.0.type', 'show');
+        $response->assertJsonPath('data.rails.9.items.0.title', 'Africa Daily');
+        $response->assertJsonPath('data.rails.9.items.0.type', 'show');
         $response->assertJsonPath('data.rails.8.items.0.title', 'A local episode');
         Http::assertNothingSent();
     }
