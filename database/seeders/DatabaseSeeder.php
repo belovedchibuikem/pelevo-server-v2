@@ -41,17 +41,20 @@ class DatabaseSeeder extends Seeder
         }
 
         $homeModules = [
-            ['moods', 'What are you in the mood for?', 'Browse topics that match this moment', 'categories', 'moods'],
-            ['pick_for_today', 'Your pick for today', 'One episode selected from Pelevo recommendations', 'hero_episode', 'made_for_you'],
-            ['continue_listening', 'Continue listening', 'Pick up where you left off', 'episode_progress', 'playback_progress'],
-            ['made_for_you', 'Made for you', 'Personalized episode picks', 'episodes', 'recommendations'],
-            ['quick_listen', 'Quick listen', 'Short episodes that fit your time', 'episodes', 'duration'],
-            ['because_you_listened', 'Because you listened', 'More from topics you already enjoy', 'episodes', 'listening_affinity'],
-            ['trending', 'Trending on Pelevo', 'What listeners are playing now', 'ranked_episodes', 'engagement'],
-            ['new_from_following', 'New from shows you follow', 'Fresh episodes from your subscriptions', 'episodes', 'following'],
-            ['african_voices', 'African voices', 'Shows published across the continent', 'episodes', 'country'],
-            ['try_something_new', 'Try something new', 'Topics outside your listening history', 'categories', 'unexplored_categories'],
-            ['explore_by_topic', 'Explore by topic', 'Browse the Pelevo catalog', 'categories', 'categories'],
+            ['moods', 'What are you in the mood for?', 'Browse topics that match this moment', 'moods', 'moods'],
+            ['pick_for_today', 'Your Pick for Today', 'One episode selected from Pelevo recommendations', 'hero_episode', 'made_for_you'],
+            ['continue_listening', 'Continue Listening', 'Pick up where you left off', 'episode_progress', 'playback_progress'],
+            ['made_for_you', 'Made For You', 'Personalized episode picks', 'episode_list', 'recommendations'],
+            ['quick_listen', 'Quick Listen', 'Short episodes that fit your time', 'quick_listen', 'duration'],
+            ['because_you_listened', 'Because You Listened', 'More from topics you already enjoy', 'because', 'listening_affinity'],
+            ['trending', 'Trending on Pelevo', 'What listeners are playing now', 'ranked_shows', 'engagement'],
+            ['new_from_following', 'New From People You Follow', 'Fresh episodes from your subscriptions', 'episode_list', 'following'],
+            ['african_voices', 'African Voices', 'Podcasts from across the continent', 'shows', 'country'],
+            ['try_something_new', 'Try Something New', 'Topics outside your listening history', 'try_new', 'unexplored_categories'],
+            ['explore_by_topic', 'Explore by Topic', 'Browse the Pelevo catalog', 'topics', 'categories'],
+            ['trending_shorts', 'Trending Shorts', 'Shorts gaining momentum', 'shorts', 'reels_trending'],
+            ['shorts_for_you', 'Shorts You Might Like', 'Personalized short picks', 'shorts', 'reels_for_you'],
+            ['browse_categories', 'Browse Categories', 'Jump into a format', 'browse', 'browse'],
         ];
         foreach ($homeModules as $position => [$key, $title, $subtitle, $kind, $source]) {
             DB::table('home_modules')->insertOrIgnore(['id' => (string) Str::ulid(), 'key' => $key, 'title' => $title, 'subtitle' => $subtitle, 'kind' => $kind, 'source' => $source, 'position' => $position, 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
