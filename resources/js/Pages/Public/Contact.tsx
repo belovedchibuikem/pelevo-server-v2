@@ -3,12 +3,20 @@ import { Head, useForm, usePage } from '@inertiajs/react';
 type Flash = { status?: string };
 
 export default function Contact() {
-  const status = (usePage().props.flash as Flash | undefined)?.status;
+  const page = usePage<{ flash?: Flash }>();
+  const status = page.props.flash?.status;
+  const params = new URLSearchParams(page.url.includes('?') ? page.url.slice(page.url.indexOf('?')) : '');
+  const audienceParam = params.get('audience');
+  const subjectParam = params.get('subject');
+  const audience = audienceParam && ['listener', 'creator', 'press', 'privacy', 'other'].includes(audienceParam)
+    ? audienceParam
+    : 'listener';
+
   const form = useForm({
     name: '',
     email: '',
-    audience: 'listener',
-    subject: '',
+    audience,
+    subject: subjectParam ?? '',
     message: '',
     company_website: '',
   });

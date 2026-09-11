@@ -5,8 +5,9 @@ type Flash = { status?: string };
 type Stores = { ios?: string | null; android?: string | null };
 
 const links = [
+  { href: '/#discovery', label: 'Discover' },
+  { href: '/#creators', label: 'Creators' },
   { href: '/how-it-works', label: 'How it works' },
-  { href: '/how-it-works#creators', label: 'Creators' },
   { href: '/privacy', label: 'Privacy' },
   { href: '/contact', label: 'Contact' },
 ];
@@ -47,8 +48,8 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
               {item.label}
             </Link>
           ))}
-          <Link className="mkt-cta" href="/#download" onClick={() => setOpen(false)}>
-            Get the app
+          <Link className="mkt-cta" href="/#join" onClick={() => setOpen(false)}>
+            Get Pelevo
           </Link>
         </nav>
       </header>
@@ -59,16 +60,16 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
             <span className="mkt-mark" aria-hidden="true" />
             PELEVO
           </Link>
-          <p style={{ marginTop: 14, maxWidth: 320 }}>
-            Nigeria-first podcast listening, creator reels, Earn, gifts, and Premium — with server-authoritative money and privacy-aware design.
+          <p style={{ marginTop: 14, maxWidth: 360 }}>
+            Pelevo — built for Nigerian podcasts, and the people who make them worth listening to.
           </p>
         </div>
         <div>
           <h4>Product</h4>
           <ul>
-            <li><Link href="/how-it-works">For listeners</Link></li>
-            <li><Link href="/how-it-works#creators">For creators</Link></li>
-            <li><Link href="/#download">Download</Link></li>
+            <li><Link href="/#discovery">For listeners</Link></li>
+            <li><Link href="/#creators">For creators</Link></li>
+            <li><Link href="/#join">Join the first 500</Link></li>
           </ul>
         </div>
         <div>
