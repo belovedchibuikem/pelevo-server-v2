@@ -72,7 +72,29 @@ Database password = Laravel `DB_PASSWORD` (and Postgres user `forge`).
     curl -I https://api.your-domain.com/up
     ```
 
-## Flutter client
+## Admin dashboard access
+
+URL: `https://YOUR-DOMAIN/admin/login`  
+(Forge sites also accept `https://YOUR-DOMAIN/admin` → redirects to login.)
+
+Create or reset operators over SSH (site path may vary):
+
+```bash
+cd /home/forge/YOUR-SITE-PATH/current   # or the site directory Forge shows
+php artisan pelevo:ensure-admin johnchibuikem20@gmail.com --name="John" --password='…' --role=superadmin
+php artisan pelevo:ensure-admin info@pelevo.com --name="Pelevo Ops" --password='…' --role=superadmin
+```
+
+First login flow:
+
+1. Email + password
+2. Enrol an authenticator app (TOTP) — save the recovery codes
+3. Land on `/admin` dashboard
+
+Do **not** put admin passwords in the Forge Environment UI long-term; create them with the artisan command, then rotate if they were shared in chat.
+
+If roles were never seeded (fresh migrate without `db:seed`), `pelevo:ensure-admin` creates the RBAC matrix automatically.
+
 
 Point release builds at the Forge API:
 
