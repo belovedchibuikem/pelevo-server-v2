@@ -68,8 +68,7 @@ or systemd units.
 
 ## Production services
 
-- **Database:** `DB_CONNECTION=mysql` on Forge (recommended) or `pgsql` if you
-  keep Postgres. Local WAMP already uses MySQL.
+- **Database:** `DB_CONNECTION=pgsql` on Forge (PostgreSQL). Local WAMP may still use MySQL.
 - **Cache/queues:** `QUEUE_CONNECTION=redis` and `CACHE_STORE=redis`.
 - Horizon must consume every queue listed in `config/operations.php`.
 - `OPERATIONS_READINESS_TOKEN` must be a long random secret available only to

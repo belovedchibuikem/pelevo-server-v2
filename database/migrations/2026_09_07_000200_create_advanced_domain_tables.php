@@ -38,13 +38,17 @@ return new class extends Migration
             $t->ulid('id')->primary();
             $t->foreignUlid('user_id')->constrained()->cascadeOnDelete();
             $t->ulidMorphs('commentable');
-            $t->foreignUlid('parent_id')->nullable()->constrained('comments')->cascadeOnDelete();
+            // Defer self-FK: PostgreSQL rejects referencing comments(id) while CREATE is still open.
+            $t->ulid('parent_id')->nullable()->index();
             $t->string('body', 400);
             $t->boolean('is_pinned')->default(false);
             $t->timestampTz('hidden_at')->nullable();
             $t->timestampTz('edited_at')->nullable();
             $t->timestampsTz();
             $t->index(['commentable_type', 'commentable_id', 'created_at']);
+        });
+        Schema::table('comments', function (Blueprint $t): void {
+            $t->foreign('parent_id')->references('id')->on('comments')->cascadeOnDelete();
         });
         Schema::create('content_reports', function (Blueprint $t): void {
             $t->ulid('id')->primary();

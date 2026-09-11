@@ -3,6 +3,8 @@
 .env
 .env.backup
 .env.production
+/deploy/forge/.env.local
+/deploy/forge/secrets.env
 .phpactor.json
 .phpunit.result.cache
 /.codex
