@@ -264,6 +264,7 @@ final class CatalogController extends Controller
             'notifications_enabled' => (bool) ($follow->notifications_enabled ?? false),
             'feed_state' => $show->feedState?->state,
             'episodes_syncing' => $this->episodesSyncing($show),
+            'feed_error' => $show->feedState?->last_error,
             'claimed_by_viewer' => $userId !== null && DB::table('verified_show_claims')
                 ->join('show_claims', 'show_claims.id', '=', 'verified_show_claims.show_claim_id')
                 ->join('creator_profiles', 'creator_profiles.id', '=', 'show_claims.creator_profile_id')
@@ -304,8 +305,11 @@ final class CatalogController extends Controller
         }
 
         $state = $show->feedState?->state;
+        if (in_array($state, ['failed', 'stale'], true)) {
+            return false;
+        }
 
-        return in_array($state, [null, 'pending', 'running', 'failed'], true);
+        return in_array($state, [null, 'pending', 'running'], true);
     }
 
     private function ensureRssHydrationQueued(Show $show): void
