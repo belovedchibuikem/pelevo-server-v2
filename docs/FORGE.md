@@ -98,6 +98,29 @@ Do **not** put admin passwords in the Forge Environment UI long-term; create the
 
 If roles were never seeded (fresh migrate without `db:seed`), `pelevo:ensure-admin` creates the RBAC matrix automatically.
 
+## Podcast Index (search discovery)
+
+Search discovery needs live credentials on the **server**. Local `api/.env` is not used by Forge.
+
+1. Forge → Site → **Environment** — set (copy from local `api/.env`):
+   ```env
+   PODCAST_INDEX_ENABLED=true
+   PODCAST_INDEX_BASE_URL=https://api.podcastindex.org/api/1.0
+   PODCAST_INDEX_API_KEY=
+   PODCAST_INDEX_API_SECRET=
+   PODCAST_INDEX_USER_AGENT=Pelevo/1.3
+   ```
+2. **Deploy** (deploy script runs `config:cache`). Editing `.env` without redeploy leaves empty keys baked in the config cache.
+3. Or paste the same key/secret in **Admin → Integrations → Podcast Index** → Save → Test (DB override works at runtime).
+4. Verify over SSH:
+   ```bash
+   cd /home/forge/pelevo.com/current
+   php artisan pelevo:check-podcast-index
+   ```
+   You want `api_key loaded` / `api_secret loaded` = yes, and a sample feed list.
+
+Empty results with log `Podcast Index API key or secret is missing` means step 1–2 (or 3) was skipped.
+
 
 ## Flutter client
 
