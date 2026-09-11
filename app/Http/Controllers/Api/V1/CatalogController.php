@@ -15,6 +15,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 final class CatalogController extends Controller
@@ -30,26 +31,52 @@ final class CatalogController extends Controller
             $history = DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->first();
             $history ? DB::table('search_history')->where('id', $history->id)->update(['query' => $normalizedQuery, 'searched_at' => now(), 'updated_at' => now()]) : DB::table('search_history')->insert(['id' => (string) Str::ulid(), 'user_id' => $request->user()->id, 'query_hash' => $queryHash, 'query' => $normalizedQuery, 'searched_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
         }
-        $local = $this->matchingShows($normalizedQuery, $limit);
+        $shows = $this->matchingShows($normalizedQuery, $limit);
         $freshness = 'local';
         if (! $preview && config('services.podcast_index.enabled')) {
             try {
-                foreach ($client->searchByTerm($normalizedQuery, $limit, $data['language'] ?? null)['feeds'] ?? [] as $feed) {
-                    $persist->handle($feed);
+                $feeds = $client->searchByTerm($normalizedQuery, $limit, $data['language'] ?? null)['feeds'] ?? [];
+                $merged = collect();
+                $persisted = 0;
+                foreach ($feeds as $feed) {
+                    if ($show = $persist->handle(is_array($feed) ? $feed : [])) {
+                        $merged->put($show->id, $show);
+                        $persisted++;
+                    }
                 }
-                $local = $this->matchingShows($normalizedQuery, $limit);
+                // Prefer Podcast Index hits by id — do not re-filter with LIKE, which drops
+                // valid discoveries when the title does not contain the exact query string.
+                foreach ($shows as $show) {
+                    $merged->put($show->id, $show);
+                }
+                $shows = $merged->take($limit)->values();
                 $freshness = 'fresh';
-            } catch (PodcastIndexException) {
+                Log::info('catalog.search.podcast_index', [
+                    'query' => $normalizedQuery,
+                    'feeds' => count($feeds),
+                    'persisted' => $persisted,
+                    'returned' => $shows->count(),
+                ]);
+            } catch (PodcastIndexException $exception) {
                 $freshness = 'stale';
+                Log::warning('catalog.search.podcast_index_failed', [
+                    'query' => $normalizedQuery,
+                    'message' => $exception->getMessage(),
+                ]);
             }
+        } elseif (! $preview) {
+            Log::info('catalog.search.podcast_index_skipped', [
+                'query' => $normalizedQuery,
+                'reason' => 'disabled',
+            ]);
         }
         if (! $preview) {
-            DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->update(['result_count' => $local->count(), 'updated_at' => now()]);
+            DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->update(['result_count' => $shows->count(), 'updated_at' => now()]);
         }
 
         return ApiResponse::success([
             'query' => $normalizedQuery,
-            'shows' => $local->map(fn (Show $show): array => $this->presentShowCard($show))->values(),
+            'shows' => $shows->map(fn (Show $show): array => $this->presentShowCard($show))->values(),
             'episodes' => $this->matchingEpisodes($normalizedQuery, $limit),
             'playlists' => $this->matchingPlaylists($normalizedQuery, $limit),
         ], ['cursor' => null, 'has_more' => false, 'freshness' => $freshness]);

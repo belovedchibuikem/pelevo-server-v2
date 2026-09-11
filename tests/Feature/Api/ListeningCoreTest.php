@@ -57,10 +57,28 @@ final class ListeningCoreTest extends TestCase
 
         $response = $this->actingAs($user, 'sanctum')->getJson('/api/v1/search?q=Provider');
 
-        $response->assertOk()->assertJsonMissingPath('data.provider_candidates')->assertJsonMissing(['id' => 999])->assertJsonPath('data.shows.0.title', 'Provider Show');
+        $response->assertOk()->assertJsonMissingPath('data.provider_candidates')->assertJsonMissing(['id' => 999])->assertJsonPath('data.shows.0.title', 'Provider Show')->assertJsonPath('meta.freshness', 'fresh');
         $this->assertDatabaseHas('show_external_ids', ['provider' => 'podcast_index', 'external_id' => '999']);
         $this->assertDatabaseHas('show_feed_states', ['state' => 'pending']);
         Bus::assertDispatched(HydrateRssFeed::class);
         Http::assertSentCount(1);
+    }
+
+    public function test_search_returns_discovered_shows_even_when_title_does_not_like_match_query(): void
+    {
+        Bus::fake([HydrateRssFeed::class]);
+        config()->set('services.podcast_index.enabled', true);
+        config()->set('services.podcast_index.api_key', 'key');
+        config()->set('services.podcast_index.api_secret', 'secret');
+        Cache::flush();
+        Http::preventStrayRequests();
+        Http::fake(['api.podcastindex.org/api/1.0/search/byterm*' => Http::response(['feeds' => [['id' => 1001, 'url' => 'https://example.com/memo.xml', 'title' => 'Closet Chronicles', 'description' => 'Style notes']]])]);
+        $user = User::factory()->create();
+
+        $this->actingAs($user, 'sanctum')
+            ->getJson('/api/v1/search?q='.urlencode('wardrobe memo'))
+            ->assertOk()
+            ->assertJsonPath('data.shows.0.title', 'Closet Chronicles')
+            ->assertJsonPath('meta.freshness', 'fresh');
     }
 }

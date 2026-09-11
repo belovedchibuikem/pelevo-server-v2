@@ -12,9 +12,15 @@ final class PersistDiscoveredShow
     public function handle(array $feed, string $provider = 'podcast_index'): ?Show
     {
         $externalId = isset($feed['id']) ? trim((string) $feed['id']) : '';
-        $rssUrl = filter_var($feed['url'] ?? null, FILTER_VALIDATE_URL);
+        $rssUrl = filter_var($feed['url'] ?? $feed['originalUrl'] ?? null, FILTER_VALIDATE_URL);
 
-        if ($externalId === '' || ! $rssUrl || ! Str::startsWith($rssUrl, 'https://')) {
+        if ($externalId === '' || ! $rssUrl) {
+            return null;
+        }
+        if (Str::startsWith($rssUrl, 'http://')) {
+            $rssUrl = 'https://'.substr($rssUrl, strlen('http://'));
+        }
+        if (! Str::startsWith($rssUrl, 'https://')) {
             return null;
         }
 

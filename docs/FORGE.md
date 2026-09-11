@@ -40,13 +40,16 @@ Database password = Laravel `DB_PASSWORD` (and Postgres user `forge`).
    sudo apt-get install -y ffmpeg php8.3-pgsql php8.3-redis
    ```
 2. In Forge → Database, create database **`pelevo`** (user `forge` is fine).
-3. Create a site, e.g. `api.your-domain.com`.
+3. Create a site for **`pelevo.com`** (and `www` if you want).
 4. Set **Web Directory** to `public` when the Git root is the `api` folder  
    **or** point the site root at `…/api/public` if the repo root is `pelevo-v2`.
 5. Connect the Git repo. Prefer deploying from the `api/` directory as the site path.
 6. Paste `deploy/forge/deploy.sh` into the Forge deploy script (adjust `cd` if needed).
-7. Copy `deploy/forge/env.production.example` into Forge → Environment, then set:
+7. Copy `deploy/forge/env.production.example` into Forge → Environment, then set at minimum:
    ```env
+   APP_URL=https://pelevo.com
+   SESSION_DOMAIN=.pelevo.com
+   SANCTUM_STATEFUL_DOMAINS=pelevo.com,www.pelevo.com
    DB_CONNECTION=pgsql
    DB_HOST=127.0.0.1
    DB_PORT=5432
@@ -63,24 +66,24 @@ Database password = Laravel `DB_PASSWORD` (and Postgres user `forge`).
    - **Quick Deploy** (optional)
    - **Scheduler** → `php /home/forge/.../artisan schedule:run`
    - **Daemon** → `php /home/forge/.../artisan horizon` (directory = site path, user `forge`)
-10. Issue SSL in Forge.
+10. Issue SSL in Forge for `pelevo.com`.
 11. Deploy, then verify:
     ```bash
     php artisan migrate:status
     php artisan horizon:status
     php artisan about
-    curl -I https://api.your-domain.com/up
+    curl -I https://pelevo.com/up
     ```
 
 ## Admin dashboard access
 
-URL: `https://YOUR-DOMAIN/admin/login`  
-(Forge sites also accept `https://YOUR-DOMAIN/admin` → redirects to login.)
+URL: `https://pelevo.com/admin/login`  
+(Forge sites also accept `https://pelevo.com/admin` → redirects to login.)
 
 Create or reset operators over SSH (site path may vary):
 
 ```bash
-cd /home/forge/YOUR-SITE-PATH/current   # or the site directory Forge shows
+cd /home/forge/pelevo.com/current   # or the site directory Forge shows
 php artisan pelevo:ensure-admin johnchibuikem20@gmail.com --name="John" --password='…' --role=superadmin
 php artisan pelevo:ensure-admin info@pelevo.com --name="Pelevo Ops" --password='…' --role=superadmin
 ```
@@ -96,11 +99,15 @@ Do **not** put admin passwords in the Forge Environment UI long-term; create the
 If roles were never seeded (fresh migrate without `db:seed`), `pelevo:ensure-admin` creates the RBAC matrix automatically.
 
 
-Point release builds at the Forge API:
+## Flutter client
+
+Release builds default to the live API:
 
 ```bash
---dart-define=PELEVO_API_BASE_URL=https://api.your-domain.com/api/v1
+--dart-define=PELEVO_API_BASE_URL=https://pelevo.com/api/v1
 ```
+
+(`PELEVO_API_BASE_URL` may be omitted in release; the app falls back to that URL.)
 
 ## Storage notes
 
@@ -132,4 +139,4 @@ That is storage-only — not “hosted on Supabase”.
 - Never put the Forge **sudo** password in Laravel `.env`
 - Rotate any secrets that were pasted into chat before going live
 - Restrict Horizon to admin auth (`HORIZON_PATH=admin/horizon` already)
-- Confirm webhook URLs use `https://api.your-domain.com/webhooks/v1/...`
+- Confirm webhook URLs use `https://pelevo.com/webhooks/v1/...`

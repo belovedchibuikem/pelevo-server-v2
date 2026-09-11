@@ -36,7 +36,7 @@ return [
     ],
 
     'podcast_index' => [
-        'enabled' => (bool) env('PODCAST_INDEX_ENABLED', false),
+        'enabled' => filter_var(env('PODCAST_INDEX_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
         'base_url' => env('PODCAST_INDEX_BASE_URL', 'https://api.podcastindex.org/api/1.0'),
         'api_key' => env('PODCAST_INDEX_API_KEY'),
         'api_secret' => env('PODCAST_INDEX_API_SECRET'),
