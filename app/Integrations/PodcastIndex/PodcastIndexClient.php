@@ -5,6 +5,7 @@ namespace App\Integrations\PodcastIndex;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 final class PodcastIndexClient
 {
@@ -26,9 +27,22 @@ final class PodcastIndexClient
 
         try {
             return Cache::remember($cacheKey, now()->addMinutes(5)->addSeconds(random_int(0, 30)), function () use ($path, $query): array {
-                $response = Http::baseUrl(rtrim((string) config('services.podcast_index.base_url'), '/'))->withHeaders($this->authenticator->headers())->acceptJson()->connectTimeout(2)->timeout((int) config('services.podcast_index.timeout', 5))->retry([100, 300], throw: false)->get($path, $query);
+                $response = Http::baseUrl(rtrim((string) config('services.podcast_index.base_url'), '/'))
+                    ->withHeaders($this->authenticator->headers())
+                    ->acceptJson()
+                    ->connectTimeout(2)
+                    ->timeout((int) config('services.podcast_index.timeout', 5))
+                    ->retry(2, 100, function ($exception, $request): bool {
+                        return $exception instanceof ConnectionException;
+                    }, throw: false)
+                    ->get($path, $query);
+
                 if (! $response->successful()) {
-                    throw new PodcastIndexException('Podcast Index request failed with status '.$response->status());
+                    $detail = trim(Str::limit(strip_tags((string) $response->body()), 180, ''));
+                    throw new PodcastIndexException(
+                        'Podcast Index request failed with status '.$response->status()
+                        .($detail !== '' ? ': '.$detail : '')
+                    );
                 }
 
                 return $response->json() ?? throw new PodcastIndexException('Podcast Index returned malformed JSON.');
