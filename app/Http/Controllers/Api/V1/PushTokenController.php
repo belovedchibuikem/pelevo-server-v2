@@ -1,0 +1,66 @@
+<?php
+
+namespace App\Http\Controllers\Api\V1;
+
+use App\Http\Controllers\Controller;
+use App\Models\Device;
+use App\Support\ApiResponse;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+final class PushTokenController extends Controller
+{
+    public function store(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'provider' => ['required', 'in:fcm,apns'],
+            'token' => ['required', 'string', 'min:16', 'max:4096'],
+        ]);
+        $device = Device::where('user_id', $request->user()->id)
+            ->where('device_identifier', $request->header('X-Device-Id'))
+            ->whereNull('revoked_at')
+            ->first();
+        if (! $device) {
+            return ApiResponse::error('FORBIDDEN', 'A registered active device is required.', 403);
+        }
+        $hash = hash('sha256', $data['provider'].'|'.$data['token']);
+        $id = (string) Str::ulid();
+        DB::table('push_tokens')->updateOrInsert(
+            ['token_hash' => $hash],
+            [
+                'id' => $id,
+                'user_id' => $request->user()->id,
+                'device_id' => $device->id,
+                'provider' => $data['provider'],
+                'token_encrypted' => Crypt::encryptString($data['token']),
+                'revoked_at' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
+
+        return ApiResponse::success([
+            'registered' => true,
+            'provider' => $data['provider'],
+            'device_id' => $device->id,
+        ], status: 201);
+    }
+
+    public function destroy(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'provider' => ['required', 'in:fcm,apns'],
+            'token' => ['required', 'string', 'min:16', 'max:4096'],
+        ]);
+        $hash = hash('sha256', $data['provider'].'|'.$data['token']);
+        DB::table('push_tokens')
+            ->where('user_id', $request->user()->id)
+            ->where('token_hash', $hash)
+            ->update(['revoked_at' => now(), 'updated_at' => now()]);
+
+        return ApiResponse::success(['revoked' => true]);
+    }
+}

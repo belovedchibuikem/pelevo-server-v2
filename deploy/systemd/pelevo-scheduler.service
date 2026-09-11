@@ -1,0 +1,10 @@
+[Unit]
+Description=Pelevo Laravel scheduler tick
+After=network.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/pelevo/api
+ExecStart=/usr/bin/php artisan schedule:run --no-interaction

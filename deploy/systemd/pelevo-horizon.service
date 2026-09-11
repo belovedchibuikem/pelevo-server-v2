@@ -1,0 +1,18 @@
+[Unit]
+Description=Pelevo Laravel Horizon
+After=network.target redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+Restart=always
+RestartSec=5
+WorkingDirectory=/var/www/pelevo/api
+ExecStart=/usr/bin/php artisan horizon
+ExecStop=/usr/bin/php artisan horizon:terminate
+TimeoutStopSec=3600
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

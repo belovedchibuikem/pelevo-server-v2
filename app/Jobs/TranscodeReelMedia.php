@@ -1,0 +1,123 @@
+<?php
+
+namespace App\Jobs;
+
+use App\Contracts\MediaTranscoder;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use RuntimeException;
+use Throwable;
+
+final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
+{
+    use Queueable;
+
+    public int $tries = 3;
+
+    public int $timeout = 360;
+
+    public array $backoff = [60, 300];
+
+    public function __construct(public readonly string $reelId)
+    {
+        $this->onQueue('media');
+    }
+
+    public function uniqueId(): string
+    {
+        return $this->reelId;
+    }
+
+    public function handle(MediaTranscoder $transcoder): void
+    {
+        $media = DB::table('reel_media')->join('media_uploads', 'media_uploads.id', '=', 'reel_media.media_upload_id')->where('reel_media.reel_id', $this->reelId)->select('reel_media.*', 'media_uploads.disk', 'media_uploads.path')->first();
+        if (! $media || $media->processing_state === 'ready') {
+            return;
+        }
+        $disk = Storage::disk($media->disk);
+        $temporaryDirectory = null;
+        if ($media->disk === 'local') {
+            $inputPath = $disk->path($media->path);
+            $outputDirectory = Storage::disk('local')->path('reels/'.$this->reelId);
+        } else {
+            $temporaryDirectory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pelevo-transcode-'.$this->reelId.'-'.bin2hex(random_bytes(4));
+            $outputDirectory = $temporaryDirectory.DIRECTORY_SEPARATOR.'output';
+            if (! mkdir($outputDirectory, 0700, true) && ! is_dir($outputDirectory)) {
+                throw new RuntimeException('Unable to create the media staging directory.');
+            }
+            $inputPath = $temporaryDirectory.DIRECTORY_SEPARATOR.'source';
+            $this->copyStreamToPath($disk->readStream($media->path), $inputPath);
+        }
+        try {
+            $result = $transcoder->transcode($inputPath, $outputDirectory);
+            if ($media->disk !== 'local') {
+                foreach (['video.mp4', 'thumbnail.jpg'] as $filename) {
+                    $stream = fopen($outputDirectory.DIRECTORY_SEPARATOR.$filename, 'rb');
+                    if (! is_resource($stream)) {
+                        throw new RuntimeException('Unable to store transcoded media.');
+                    }
+                    try {
+                        if (! $disk->writeStream('reels/'.$this->reelId.'/'.$filename, $stream)) {
+                            throw new RuntimeException('Unable to store transcoded media.');
+                        }
+                    } finally {
+                        fclose($stream);
+                    }
+                }
+            }
+        } finally {
+            if ($temporaryDirectory !== null) {
+                $this->removeDirectory($temporaryDirectory);
+            }
+        }
+        DB::transaction(function () use ($media, $result): void {
+            DB::table('reel_media')->where('id', $media->id)->update(['processing_state' => 'ready', 'transcoded_path' => 'reels/'.$this->reelId.'/video.mp4', 'thumbnail_path' => 'reels/'.$this->reelId.'/thumbnail.jpg', 'safety_results' => json_encode($result['safety'], JSON_THROW_ON_ERROR), 'updated_at' => now()]);
+            DB::table('reels')->where('id', $this->reelId)->where('state', 'processing')->update(['state' => 'pending_review', 'updated_at' => now()]);
+            $this->event('pending_review', $result['safety']);
+        });
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        DB::table('reel_media')->where('reel_id', $this->reelId)->update(['processing_state' => 'failed', 'updated_at' => now()]);
+        DB::table('reels')->where('id', $this->reelId)->where('state', 'processing')->update(['state' => 'failed', 'updated_at' => now()]);
+        $this->event('failed', ['reason' => mb_substr((string) $exception?->getMessage(), 0, 500)]);
+    }
+
+    private function event(string $state, array $details): void
+    {
+        DB::table('reel_processing_events')->insert(['id' => (string) Str::ulid(), 'reel_id' => $this->reelId, 'state' => $state, 'details' => json_encode($details, JSON_THROW_ON_ERROR), 'created_at' => now()]);
+    }
+
+    private function copyStreamToPath(mixed $source, string $path): void
+    {
+        $destination = fopen($path, 'wb');
+        if (! is_resource($source) || ! is_resource($destination)) {
+            if (is_resource($source)) {
+                fclose($source);
+            }
+            if (is_resource($destination)) {
+                fclose($destination);
+            }
+            throw new RuntimeException('Media could not be staged for transcoding.');
+        }
+        stream_copy_to_stream($source, $destination);
+        fclose($source);
+        fclose($destination);
+    }
+
+    private function removeDirectory(string $directory): void
+    {
+        if (! is_dir($directory)) {
+            return;
+        }
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST) as $item) {
+            $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+        }
+        rmdir($directory);
+    }
+}

@@ -1,0 +1,719 @@
+openapi: 3.1.0
+info:
+  title: Pelevo API
+  version: 1.0.0
+servers:
+  - url: /api/v1
+paths:
+  /notification-preferences:
+    get:
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 'Typed data: user_id, version, new_episodes, push_enabled, nullable HH:mm quiet_hours_start/end, IANA timezone, options and delivery_status (in_app_policy_enabled when notifications are enabled, otherwise preferences_only). Options include in_app_enabled/email_enabled/badge_enabled/high_priority_only booleans; types; nullable HH:mm summary_time; summary_days (0=Sunday through 6=Saturday); summary_include. Email defaults false and no summary days are assumed. Existing in-app producers enforce channel, priority and quiet hours; new episodes also enforce category and follow preferences. Deferred delivery requires the database notifications queue worker. This status does not attest worker health or enable push, email, badges or summary generation.' }
+        '401': { description: Authentication required }
+    patch:
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, new_episodes, push_enabled, timezone]
+              properties:
+                version: { type: integer, minimum: 0 }
+                new_episodes: { type: boolean }
+                push_enabled: { type: boolean }
+                timezone: { type: string, description: Valid IANA timezone }
+                quiet_hours_start: { type: [string, 'null'], description: 'HH:mm; both ends required together; overnight allowed' }
+                quiet_hours_end: { type: [string, 'null'], description: 'HH:mm; must differ from start; both null disables quiet hours' }
+                options:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    in_app_enabled: { type: boolean }
+                    email_enabled: { type: boolean }
+                    badge_enabled: { type: boolean }
+                    high_priority_only: { type: boolean }
+                    types: { type: array, maxItems: 6, uniqueItems: true, items: { type: string, enum: [new_episodes, downloads, reminders, mentions, promotions, achievements] } }
+                    summary_time: { type: [string, 'null'], description: 'HH:mm; required if any summary days are selected' }
+                    summary_days: { type: array, maxItems: 7, uniqueItems: true, items: { type: integer, minimum: 0, maximum: 6 } }
+                    summary_include: { type: array, maxItems: 4, uniqueItems: true, items: { type: string, enum: [new_episodes, downloads, mentions, promotions] } }
+      responses:
+        '200': { description: Confirmed preferences with incremented version; omitted options preserved }
+        '401': { description: Authentication required }
+        '409': { description: VERSION_CONFLICT; reload before choosing whether to resubmit }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { description: Rate limited }
+    put:
+      security: [{ bearerAuth: [] }]
+      description: Legacy update with the same validated fields as PATCH but an optional version. Mobile clients use PATCH with the observed version.
+      responses:
+        '200': { description: Preferences updated; increments the shared version }
+        '401': { description: Authentication required }
+        '409': { description: Supplied version is stale }
+        '422': { $ref: '#/components/responses/Validation' }
+  /me/following:
+    get:
+      security: [{ bearerAuth: [] }]
+      description: 'Account-scoped followed shows. Each item has id, title, nullable author/artwork_url, notifications_enabled and followed_at. No seeded fallback.'
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { in: query, name: cursor, schema: { type: string, maxLength: 2048 } }
+      responses:
+        '200': { description: Array envelope with meta.cursor and meta.has_more }
+        '401': { description: Authentication required }
+        '422': { $ref: '#/components/responses/Validation' }
+  /notifications:
+    get:
+      security: [{ bearerAuth: [] }]
+      description: 'Account-scoped records with id/type/title/body and ISO-8601 created_at/read_at/dismissed_at. Inbox excludes dismissed records; history retains them. Meta includes cursor, has_more and total unread_count for the active inbox.'
+      parameters:
+        - { in: query, name: view, schema: { type: string, enum: [all, unread, mentions, history, new_episode, broadcast], default: all } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { in: query, name: cursor, schema: { type: string, maxLength: 2048 } }
+      responses:
+        '200': { description: Paginated array envelope; mentions includes mention/follow/reply types }
+        '401': { description: Authentication required }
+        '403': { description: Notifications feature disabled }
+        '422': { $ref: '#/components/responses/Validation' }
+  /notifications/{notification}/read:
+    put:
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: notification, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'data.read=true; retries preserve the original read timestamp' }
+        '401': { description: Authentication required }
+        '403': { description: Feature disabled }
+        '404': { description: Notification unavailable to this account }
+  /notifications/bulk:
+    post:
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, ids]
+              properties:
+                action: { type: string, enum: [read, dismiss] }
+                ids: { type: array, minItems: 1, maxItems: 100, uniqueItems: true, items: { type: string, description: ULID } }
+      responses:
+        '200': { description: Confirms action and exact IDs; dismiss archives instead of deleting records }
+        '401': { description: Authentication required }
+        '403': { description: Feature disabled }
+        '404': { description: Any unavailable ID rejects the whole batch without partial writes }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { description: Rate limited }
+  /notifications/clear:
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Archives all current inbox notifications owned by this account at execution time. New arrivals after this operation remain visible; an explicit later retry is a new clear operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmed]
+              properties:
+                confirmed: { type: boolean, const: true }
+      responses:
+        '200': { description: data.cleared=true and count of archived rows }
+        '401': { description: Authentication required }
+        '403': { description: Feature disabled }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { description: Rate limited }
+  /auth/register:
+    post:
+      operationId: register
+      description: Creates a listener and device session. An optional unique handle (3–30 ASCII letters, digits, underscores or dashes) saves the mobile username field.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, password_confirmation, device_name]
+              properties:
+                name: { type: string, maxLength: 100 }
+                handle: { type: [string, 'null'], minLength: 3, maxLength: 30, pattern: '^[A-Za-z0-9_-]+$' }
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, format: password }
+                password_confirmation: { type: string, format: password }
+                device_name: { type: string, maxLength: 100 }
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '201': { description: Device session created }
+        '422': { $ref: '#/components/responses/Validation' }
+  /auth/login:
+    post:
+      operationId: login
+      responses:
+        '200': { description: Authenticated }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /auth/social:
+    post:
+      operationId: socialLogin
+      description: Verifies an Apple or Google identity server-to-server, links the unique provider subject, and issues a device session.
+      responses: { '200': { description: Authenticated }, '401': { description: Provider token invalid }, '409': { description: Provider identity already linked }, '422': { $ref: '#/components/responses/Validation' } }
+  /auth/otp/send:
+    post:
+      operationId: sendLoginOtp
+      responses: { '200': { description: Request accepted without account enumeration }, '422': { $ref: '#/components/responses/Validation' } }
+  /auth/otp/verify:
+    post:
+      operationId: verifyLoginOtp
+      responses: { '200': { description: Device session created }, '401': { $ref: '#/components/responses/Unauthenticated' } }
+  /auth/password/forgot:
+    post:
+      operationId: forgotPassword
+      responses: { '200': { description: Request accepted without account enumeration } }
+  /auth/password/reset:
+    post:
+      operationId: resetPassword
+      responses: { '200': { description: Password reset and sessions revoked }, '401': { description: Code invalid or expired } }
+  /auth/refresh:
+    post:
+      operationId: refreshToken
+      responses:
+        '200': { description: Tokens rotated }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /auth/logout:
+    post:
+      security: [{ bearerAuth: [] }]
+      responses: { '200': { description: Session revoked } }
+  /me:
+    get:
+      security: [{ bearerAuth: [] }]
+      responses: { '200': { description: 'Current user with onboarded boolean, interests array, nullable profile (bio, avatar_url, locale, timezone), capabilities.creator_access, stats (following shows, creator followers, verified podcasts, owned playlists), and unread_notifications. Counts are nonnegative integers.' } }
+    patch:
+      security: [{ bearerAuth: [] }]
+      responses: { '200': { description: Profile updated }, '422': { $ref: '#/components/responses/Validation' } }
+  /me/avatar:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Upload and re-encode the authenticated user's profile photo
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [avatar]
+              properties:
+                avatar: { type: string, format: binary, description: 'JPEG, PNG or WebP; at most 5 MiB and 2048 by 2048 pixels.' }
+      responses:
+        '200': { description: 'Envelope data.avatar_url is a server-relative public image URL. The public storage link must be installed in development. Original image metadata is discarded.' }
+        '401': { description: Authentication required }
+        '422': { $ref: '#/components/responses/Validation' }
+        '503': { description: Image processing or storage unavailable }
+  /me/password:
+    patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Password updated and other sessions revoked }, '422': { $ref: '#/components/responses/Validation' } } }
+  /me/onboarding:
+    put:
+      security: [{ bearerAuth: [] }]
+      summary: Save onboarding interests and optional listening locale
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [interests]
+              properties:
+                interests:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items: { type: string }
+                locale: { type: string, enum: [en, fr, yo, sw, ha] }
+      responses:
+        '200': { description: 'Envelope data contains user_id, onboarded true, normalized interests and locale. Locale is omitted from the profile write when not sent. Interests must match the client catalog.' }
+        '401': { description: Authentication required }
+        '422': { $ref: '#/components/responses/Validation' }
+  /me/preferences:
+    get:
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 'Envelope data contains user_id, integer version, audio_quality and boolean explicit_content/autoplay/download_wifi_only/data_saver/email_product/email_episodes/email_marketing. Absent rows return server defaults with version 0. Optional email defaults are false; security mail is unaffected.' }
+        '401': { description: Authentication required }
+    patch:
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: integer, minimum: 0 }
+                explicit_content: { type: boolean }
+                autoplay: { type: boolean }
+                download_wifi_only: { type: boolean }
+                data_saver: { type: boolean }
+                audio_quality: { type: string, enum: [low, normal, high, very_high] }
+                email_product: { type: boolean }
+                email_episodes: { type: boolean }
+                email_marketing: { type: boolean }
+      responses:
+        '200': { description: 'Confirmed preferences with incremented version and native JSON booleans. Omitted fields are preserved. Saved playback preferences do not imply player support; optional email delivery is not yet implemented.' }
+        '401': { description: Authentication required }
+        '409': { description: VERSION_CONFLICT; reload current preferences before choosing whether to resubmit }
+        '422': { $ref: '#/components/responses/Validation' }
+  /me/connected-accounts:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner-scoped linked identities: id, provider, email, created_at. meta.user_id matches the caller. provider_subject is omitted. provider is apple or google.' } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Verified apple or google identity linked. Public fields match GET. Facebook is not accepted. token must verify with the provider.' }, '401': { description: SOCIAL_TOKEN_INVALID }, '409': { description: Provider identity already owned } } }
+  /me/connected-accounts/{account}:
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'disconnected=true for an account owned by the caller' }, '404': { description: Account not owned by caller } } }
+  /me/invite:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner-scoped invite: user_id, code, expires_at, redemptions and max_redemptions. code is null when none is active.' } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Invitation created or returned. rotate=true revokes the current code first. Public fields match GET /me/invite.' } } }
+  /referrals/redeem:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Invitation redeemed pending qualification }, '409': { description: User already redeemed }, '422': { description: Invitation invalid } } }
+  /me/data-export:
+    post: { security: [{ bearerAuth: [] }], responses: { '202': { description: Private export queued } } }
+  /me/delete:
+    post: { security: [{ bearerAuth: [] }], responses: { '202': { description: Delayed anonymization scheduled } } }
+  /me/config:
+    get:
+      security: [{ bearerAuth: [] }]
+      responses: { '200': { description: Versioned product configuration }, '304': { description: Not modified } }
+  /uploads:
+    post:
+      operationId: createReelUpload
+      security: [{ bearerAuth: [] }]
+      description: Creates an expiring, signed direct-upload URL for reel media.
+      responses:
+        '201': { description: Upload reservation and signed URL created }
+        '422': { $ref: '#/components/responses/Validation' }
+  /uploads/{upload}:
+    get:
+      operationId: getReelUpload
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UploadId' }]
+      responses:
+        '200': { description: Upload processing state and trusted probe result }
+        '404': { description: Upload does not exist or belongs to another user }
+  /uploads/{upload}/complete:
+    post:
+      operationId: completeReelUpload
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UploadId' }]
+      responses:
+        '202': { description: Upload queued for media probing }
+        '409': { description: Upload has not been received or cannot transition }
+        '422': { $ref: '#/components/responses/Validation' }
+  /uploads/{upload}/content:
+    put:
+      operationId: putReelUploadContent
+      description: Signed, expiring direct upload. The signature is supplied in the query string.
+      parameters: [{ $ref: '#/components/parameters/UploadId' }]
+      responses:
+        '200': { description: Media bytes stored and size verified }
+        '410': { description: Signed upload reservation expired }
+        '422': { $ref: '#/components/responses/Validation' }
+  /reels:
+    post:
+      operationId: createReel
+      security: [{ bearerAuth: [] }]
+      description: Consumes one processed upload and creates a reel in pending_review.
+      responses:
+        '201': { description: Reel created for moderation }
+        '409': { description: 'Upload is unavailable, unprocessed, or already consumed' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /reels/drafts:
+    get: { security: [{ bearerAuth: [] }], description: Cursor-paginated creator drafts as id, caption, state, show_id, episode_id, duration_ms and timestamps. CLAIM_REQUIRED without a creator profile., responses: { '200': { description: Creator reel drafts } } }
+    post: { security: [{ bearerAuth: [] }], description: Creates a caption draft for a claimed show or episode. Does not publish media., responses: { '201': { description: Draft created }, '422': { $ref: '#/components/responses/Validation' } } }
+  /reels/drafts/{draft}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator-owned draft }, '404': { description: Draft not found } } }
+    patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Draft updated } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Draft deleted } } }
+  /reels/following:
+    get: { security: [{ bearerAuth: [] }], description: Published reels from followed shows. Each item includes creator name/handle, counts, viewer liked/saved/following and optional episode title. Not-interested reels are omitted., responses: { '200': { description: Published reels from followed shows } } }
+  /reels/trending:
+    get: { security: [{ bearerAuth: [] }], description: Reels ranked by qualified views with the same public feed fields as for-you., responses: { '200': { description: Reels ranked by qualified views } } }
+  /reels/{reel}/view-heartbeat:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: View evidence accepted and capped-count result returned } } }
+  /reels/{reel}/episode-links:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator linked episode } } }
+  /comments/{comment}/pin:
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator pinned the top-level comment }, '404': { description: Comment unavailable or not creator-owned } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator removed the pin } } }
+  /comments/{comment}/hide:
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator hid a comment } } }
+  /comments:
+    get: { security: [{ bearerAuth: [] }], description: Visible comments for an episode or reel. Optional parent_id filters replies. sort is newest, top, or creator; invalid sort is 422. Presented fields include author, likes, replies_count and is_mine/is_creator. Hidden comments are omitted., responses: { '200': { description: Visible comment thread }, '422': { description: Invalid type, id or sort } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Comment created }, '403': { description: User is sanctioned } } }
+  /comments/{comment}:
+    patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owned comment updated }, '403': { description: Edit window expired } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owned comment removed } } }
+  /comments/{comment}/like:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Comment liked } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Comment unliked } } }
+  /reports:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Content report opened }, '409': { description: Duplicate report } } }
+  /appeals:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Caller appeal history } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Moderation appeal opened }, '409': { description: Duplicate appeal } } }
+  /creators/{creator}/follow:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Creator followed } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator unfollowed } } }
+  /shows/{show}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Public show: id, title, author, artwork_url, description, language, country_code, explicit, episodes_count, follower_count, rating_average, rating_count, following, notifications_enabled, claimed_by_viewer, categories. RSS URLs stay off the client.' }, '308': { description: Canonical show redirect } } }
+  /shows/{show}/episodes:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Available episodes as id, show_id, title, description, artwork_url, duration_seconds, published_at, show_title, show_author. audio_url and guid stay off the list.' } } }
+  /shows/{show}/related:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Related shows as id, title, author, artwork_url' } } }
+  /shows/{show}/reviews:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Published reviews as id, rating, body, reviewer_name, created_at' } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Review published } } }
+  /shows/{show}/notifications:
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: notifications_enabled }, '409': { description: NOT_FOLLOWING } } }
+  /shows/{show}/rating:
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Saved 1-5 rating } } }
+  /episodes/{episode}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Available episode including audio_url and show title/author. guid stays off the client.' }, '404': { description: Episode unavailable } } }
+  /episodes/{episode}/chapters:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Chapters as id, title, starts_at_seconds' } } }
+  /episodes/{episode}/transcript:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Available transcript language, format and content. source_url omitted.' }, '404': { description: Transcript not available } } }
+  /episodes/{episode}/notes:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner note body, position_seconds and version. Empty is version 0.' } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Saved note }, '409': { description: VERSION_CONFLICT } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: deleted=true } } }
+  /episodes/{episode}/queue:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Episode appended; version incremented' }, '409': { description: VERSION_CONFLICT } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Episode removed from the owner queue; version incremented' }, '404': { description: Episode is not in the queue }, '409': { description: VERSION_CONFLICT } } }
+  /episodes/{episode}/downloads:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'episode_id, url, expires_at, authorization. Local file save is a client concern.' }, '403': { description: Active device required } } }
+  /playback/{episode}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner progress: user_id, episode_id, position_seconds, completed, version' } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Saved progress }, '409': { description: VERSION_CONFLICT } } }
+  /player/session:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'episode_id, playing, playback_rate, version. user_id and device_id omitted.' } } }
+    patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Confirmed player session }, '409': { description: VERSION_CONFLICT } } }
+  /queue:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'version and items as queue_item_id, position, id, show_id, title, show_title, duration_seconds, artwork_url' } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Replaced owner queue; version and count. Same contract as PUT /queue/reorder.' }, '409': { description: VERSION_CONFLICT } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Cleared owner queue; version incremented and count=0' }, '409': { description: VERSION_CONFLICT } } }
+  /queue/items:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Episode appended; version incremented' }, '409': { description: VERSION_CONFLICT } } }
+  /queue/items/{item}:
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Removed queue_item_id; version incremented' }, '404': { description: Queue item not found }, '409': { description: VERSION_CONFLICT } } }
+  /queue/reorder:
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Replaced owner queue from episode_ids plus version; version and count' }, '409': { description: VERSION_CONFLICT } } }
+  /library:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Overview counts plus compact owner playlists and collections. RSS, GUIDs and audio URLs stay off the client.' } } }
+  /library/saved:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Cursor page of saved episodes as id, show_id, title, show_title, artwork_url, duration_seconds, saved_at' } } }
+  /library/liked:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Cursor page of liked episodes as id, show_id, title, show_title, artwork_url, duration_seconds, reaction, reacted_at' } } }
+  /library/shows:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Cursor page of followed shows as id, title, author, artwork_url, notifications_enabled, followed_at' } } }
+  /library/recent:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Cursor page of recently played episodes as id, show_id, title, show_title, artwork_url, duration_seconds, position_seconds, completed, played_at. RSS, GUID and audio_url stay off the client.' } } }
+  /library/settings:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'hide_completed, sort (recent|title|oldest), version' } } }
+    patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Confirmed library settings }, '409': { description: VERSION_CONFLICT } } }
+  /playlists:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner playlists as id, name, description, is_public, version, item_count' } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Created owner playlist } } }
+  /playlists/{playlist}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owned playlist plus items as id, show_id, title, show_title, artwork_url, duration_seconds, position' }, '404': { description: Playlist outside caller account } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Updated owner playlist }, '409': { description: VERSION_CONFLICT } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'deleted=true' }, '404': { description: Playlist not found } } }
+  /collections:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner collections as id, name, version, item_count' } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Created owner collection } } }
+  /collections/{collection}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owned collection plus items. Description is not a collection field.' }, '404': { description: Collection outside caller account } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Updated owner collection }, '409': { description: VERSION_CONFLICT } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'deleted=true' }, '404': { description: Collection not found } } }
+  /home/recommendations:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'version, items[{id,show_id,title,reason}]. Empty items when no snapshot. Ranks stay off the client.' }, '403': { description: Recommendations disabled } } }
+  /downloads:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Authorized downloads as download_id, authorized_until, id, show_id, title, show_title, artwork_url. File byte sizes and local progress are client concerns.' } } }
+  /downloads/{download}:
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'deleted=true for an owner download authorization' }, '404': { description: Download outside caller account } } }
+  /downloads/settings:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'wifi_only, auto_delete_completed, max_storage_mb, version. Queue auto-download is not a setting.' } } }
+    patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Confirmed download settings }, '409': { description: VERSION_CONFLICT } } }
+  /shows/{show}/follow:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Show followed } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Show unfollowed } } }
+  /reels/for-you:
+    get: { security: [{ bearerAuth: [] }], description: Cursor-paginated published reel feed with creator, media, counts and viewer engagement. Compact view counts are not invented., responses: { '200': { description: Cursor-paginated published reel feed } } }
+  /reels/{reel}:
+    get: { security: [{ bearerAuth: [] }], description: Published reel public fields plus episode_links., responses: { '200': { description: Published reel and episode links }, '404': { description: Reel unavailable } } }
+  /reels/{reel}/related-show:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Related available show }, '404': { description: Related show unavailable } } }
+  /reels/{reel}/like:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Reel liked } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Reel unliked } } }
+  /reels/{reel}/save:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Reel saved } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Reel unsaved } } }
+  /reels/{reel}/not-interested:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Reel hidden from personalization } } }
+  /reels/monetization:
+    get: { security: [{ bearerAuth: [] }], description: Creator eligibility with followers, qualified_views, eligible, opted_in and config min_followers/min_views. No earnings currency is implied. CLAIM_REQUIRED without a creator profile., responses: { '200': { description: Config-versioned creator reel eligibility } } }
+  /reels/monetization/opt-in:
+    post: { security: [{ bearerAuth: [] }], description: Eligible creator opted in. Returns the same presented profile fields. 409 NOT_ELIGIBLE when thresholds are unmet., responses: { '200': { description: Eligible creator opted in }, '409': { description: Requirements not met } } }
+  /live-sessions:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Scheduled and active sessions } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Verified creator scheduled a live session } } }
+  /live-sessions/{session}/state:
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator live state transitioned }, '409': { description: Invalid transition } } }
+  /live-sessions/{session}/health:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Live health telemetry recorded } } }
+  /iap/verify:
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Verifies an Apple or Google receipt server-to-server and credits the gift wallet exactly once.
+      responses: { '201': { description: Receipt verified and balanced credit posted }, '409': { description: Receipt replayed by another user }, '422': { description: Receipt or product is unverified }, '503': { description: Awaiting finance sign-off } }
+  /gifts/wallet:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Spend-only gift wallet unit PCN and integer balance. Reading does not create an account. } } }
+  /gifts/wallet/activity:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Caller gift-wallet ledger entries with id, event_type, signed amount, unit and created_at. Empty when no wallet exists. } } }
+  /gifts/packs:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Active Apple and Google coin products as id, store, product_id, coins and unit. No store price is implied. } } }
+  /gifts/catalog:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Active versioned gift catalog as id, slug, name, coins and version } } }
+  /gifts/{gift}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Sender-owned gift receipt }, '404': { description: Gift missing or not owned by the caller } } }
+  /gifts/send:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Replay-safe balanced gift receipt with type name, creator display name, coins and remaining balance. Ledger ids stay off the client. }, '409': { description: Insufficient gift coins or idempotency conflict }, '503': { description: Awaiting finance sign-off } } }
+  /earn/wallet:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Account-owned user_id, unit ECN, decimal-string balance and minimum_withdrawal, and boolean withdrawals_enabled. Threshold follows the latest effective finance configuration. No account is created by reading. No FX rate, payout date or provider capability is implied.' }, '401': { description: Authentication required } } }
+  /earn/shows:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Earn-eligible shows as id, title, author, artwork_url and eligible episodes_count. Meta contains cursor and has_more. RSS URLs stay off the client.' } } }
+  /earn/episodes:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Earn-eligible episodes as id, show_id, show_title, show_author, title, artwork_url, duration_seconds and audio_url. Optional show_id filter. Meta contains cursor and has_more. GUIDs stay off the client.' } } }
+  /earn/episodes/{episode}/sessions:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Server-authoritative eligibility snapshot and expiring session nonce created }, '409': { description: 'Parallel session, lock, or daily cap' } } }
+  /earn/sessions/{session}/heartbeat:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Nonce-, session-, sequence-, device-bound attested monotonic evidence persisted' }, '409': { description: Evidence moved to fraud review } } }
+  /earn/sessions/{session}/complete:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Balanced Earn award posted exactly once }, '409': { description: Locked or held for review } } }
+  /payout-methods:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Masked payout methods } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Encrypted externally verified payout destination }, '422': { $ref: '#/components/responses/Validation' } } }
+  /withdrawals:
+    get: { security: [{ bearerAuth: [] }], parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }, { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }], responses: { '200': { description: 'Owner-scoped withdrawal rows: id, decimal-string coins, state, ISO created_at. Meta contains user_id, cursor and has_more. Stable descending created_at/id pagination. Does not expose payout destinations, request hashes or idempotency keys.' }, '401': { description: Authentication required }, '422': { description: Invalid pagination input } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Earn balance reserved. Public receipt is id, decimal-string coins, state and ISO created_at. Idempotency-Key is required. Destinations, request hashes and keys stay off the client.' }, '409': { description: Insufficient balance, unverified method or idempotency conflict }, '503': { description: Awaiting finance sign-off } } }
+  /premium/plans:
+    get: { responses: { '200': { description: 'Active plans as id, slug, name, price_minor, currency, interval' } } }
+  /premium/me:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'entitlement {state, starts_at, ends_at, plan_id} and subscription {id, state, provider, current_period_start, current_period_end, plan_id, cancel_at}. Provider references stay off the client.' } } }
+  /premium/invoices:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Private cursor-paginated invoices as id, provider_invoice_id, subtotal_minor, tax_minor, total_minor, currency, state, receipt_url, paid_at, created_at' } } }
+  /premium/exclusive:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Exclusive episodes as id, show_id, title, show_title, artwork_url, duration_seconds, published_at. GUID and audio_url stay off the client.' }, '403': { description: Active Premium entitlement required } } }
+  /premium/checkout:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'id, state, checkout_url, expires_at, amount_minor, currency, provider. Does not grant entitlement. request_hash, idempotency_key and provider_reference stay off the client.' }, '409': { description: Idempotency conflict }, '503': { description: Awaiting payment sign-off } } }
+  /premium/change-plan:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Provider checkout initialized for plan change with the same public checkout fields } } }
+  /premium/restore:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Verified restore returns invoice id, totals, currency, state, receipt_url and paid_at' }, '422': { description: Payment unverified } } }
+  /devices:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Private device activity and trust inventory } } }
+  /devices/pairing-code:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Expiring one-use pairing code } } }
+  /devices/pair:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Device paired after code validation }, '422': { description: Invalid or expired code } } }
+  /devices/{device}:
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owned device and refresh credentials revoked }, '404': { description: Device outside caller account } } }
+  /devices/sign-out-all:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: All devices and sessions revoked } } }
+  /sync/push:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Versioned supported-resource changes accepted }, '207': { description: Some changes produced durable conflicts } } }
+  /sync/pull:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Cursor page of id, resource_type, resource_id, operation, version. Payloads stay off the client.' } } }
+  /sync/conflicts:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Open conflicts as id, created_at, state, resource_type. Payloads stay off the client.' } } }
+  /sync/conflicts/{conflict}:
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Client or server version selected }, '404': { description: Conflict outside caller account } } }
+  /backups:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Encrypted checksummed account backup created } } }
+  /backups/{backup}/restore:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owned unexpired backup restored }, '409': { description: Checksum mismatch } } }
+  /storage:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'backup_bytes and offline_items count. Episode file byte sizes are not reported.' } } }
+  /storage/cache:
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Caller offline cache authorizations cleared } } }
+  /share-card-templates:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Active templates as id, name, version. Schema JSON is omitted.' } } }
+  /share-cards:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Caller cards as id, template_id, template_name, subject_type, subject_id, state, created_at, scheduled_at, url and optional variant/quote/layout. user_id, public_token and raw payload are omitted.' } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Presented share card and deep link. subject_type is episode, reel or show. Playlist is not a subject type.' }, '403': { description: Share cards disabled }, '422': { $ref: '#/components/responses/Validation' } } }
+  /share-cards/{card}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owned presented card plus events[{event, channel, created_at}] without invented totals' }, '404': { description: Card outside caller account } } }
+  /notification-lock-rules:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Lock-screen privacy as show_title, show_body and sensitive_hidden booleans. user_id and timestamps are omitted.' } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Updated show_title, show_body and sensitive_hidden booleans only.' }, '422': { $ref: '#/components/responses/Validation' } } }
+  /me/push-tokens:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Registers an FCM or APNs token for the caller device identified by X-Device-Id. Returns registered, provider and device_id. Requires an active device row.' }, '403': { description: Active device required }, '422': { $ref: '#/components/responses/Validation' } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Revokes the matching provider token for the caller.' }, '422': { $ref: '#/components/responses/Validation' } } }
+  /ai/jobs:
+    post: { security: [{ bearerAuth: [] }], responses: { '202': { description: Versioned quota-bound AI job queued }, '403': { description: AI kill switch closed }, '429': { description: Quota exceeded } } }
+  /ai/jobs/{job}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owned AI job result and state }, '404': { description: Job outside caller account } } }
+  /stats/me:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner totals listening_seconds, episodes_started, episodes_completed, shows_followed, episodes_saved, reviews, downloads_count; daily[{date,listening_seconds,episodes_started,episodes_completed}] up to 30 days; streak {current_days,longest_days,last_qualified_date} or null; achievements[{slug,name,description,earned_at}] without evidence; shows[{id,title,artwork_url,listening_seconds,episodes_completed}]; categories[{id,name,slug,listening_seconds}]. Device split, hour-of-day heatmap, storage bytes and period deltas are omitted.' } } }
+  /search:
+    get:
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: q, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { in: query, name: language, schema: { type: string, maxLength: 35 } }
+        - { in: query, name: preview, schema: { type: boolean, default: false }, description: When true, suggestions skip search-history writes and remote provider import. }
+      responses:
+        '200': { description: 'query plus shows[{id,title,author,artwork_url,description}], episodes[{id,title,show_id,show_title,artwork_url,published_at,duration_seconds}] and playlists[{id,title,description,artwork_url,item_count}]. RSS URLs, GUIDs and audio URLs stay off the client. People search is not offered.' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /search/recent:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Recent queries as id, query and searched_at. Empty is a zero-length list.' } } }
+    post:
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [query], properties: { query: { type: string, minLength: 2, maxLength: 100 } } } } } }
+      responses: { '201': { description: Query saved }, '422': { $ref: '#/components/responses/Validation' } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'cleared=true after deleting the caller history' } } }
+  /search/voice:
+    post:
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [transcript], properties: { transcript: { type: string, minLength: 2, maxLength: 100 }, language: { type: string, maxLength: 35 } } } } } }
+      responses: { '200': { description: Same presented catalog as GET /search using transcript as q }, '422': { $ref: '#/components/responses/Validation' } }
+  /browse:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Active categories as id, name and slug' } } }
+  /browse/categories:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Same presented category list as GET /browse } } }
+  /browse/{slug}:
+    get:
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: slug, required: true, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200': { description: 'category {id,name,slug} and shows[{id,title,author,artwork_url}]. Meta contains cursor and has_more. RSS URLs stay off the client.' }
+        '404': { description: Category missing or inactive }
+  /cms/help:
+    get: { responses: { '200': { description: 'Published help content: id, slug, title, body, version, published_at, updated_at, body_format=plain_text, intro and sections[{title,body}]. CMS body lines starting with ## delimit sections; text is never executable HTML.' }, '404': { description: No currently published content } } }
+  /cms/about:
+    get: { responses: { '200': { description: Published about content with the same normalized CMS shape as help }, '404': { description: No currently published content } } }
+  /cms/terms:
+    get: { responses: { '200': { description: Published Terms of Service with the normalized CMS shape }, '404': { description: No currently published content; no fallback policy } } }
+  /cms/privacy:
+    get: { responses: { '200': { description: Published Privacy Policy with the normalized CMS shape }, '404': { description: No currently published content; no fallback policy } } }
+  /cms/guidelines:
+    get: { responses: { '200': { description: Published share-card guidelines with the normalized CMS shape }, '404': { description: No currently published content; no client-side tip fallback } } }
+  /support/tickets:
+    post:
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, message]
+              properties:
+                subject: { type: string, minLength: 1, maxLength: 191 }
+                message: { type: string, minLength: 1, maxLength: 5000 }
+                priority: { type: string, enum: [normal, high], default: normal }
+                client_request_id: { type: string, format: uuid, description: 'Mobile sends one identifier per draft payload, retained for retries. Scoped by user and endpoint; legacy clients may omit it.' }
+      responses:
+        '201': { description: 'Envelope data contains id and state. An identical retry returns the original receipt without another submission.' }
+        '401': { description: Authentication required }
+        '409': { description: IDEMPOTENCY_CONFLICT for a reused identifier with different content }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { description: Submission rate limit }
+  /support/feedback:
+    post:
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, message]
+              properties:
+                type: { type: string, enum: [bug, idea, rating] }
+                message: { type: string, minLength: 1, maxLength: 5000 }
+                rating: { type: integer, minimum: 1, maximum: 5, description: Required when type is rating }
+                client_request_id: { type: string, format: uuid, description: Same retry semantics as support tickets }
+      responses:
+        '201': { description: Envelope data contains the persisted id and state }
+        '401': { description: Authentication required }
+        '409': { description: IDEMPOTENCY_CONFLICT }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { description: Submission rate limit }
+  /live:
+    get: { responses: { '200': { description: Public scheduled and active sessions } } }
+  /live/{session}:
+    get: { responses: { '200': { description: Public live status and event timeline }, '404': { description: Live session unavailable } } }
+  /shows/{show}/claims:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Expiring email or description ownership challenge created }, '422': { $ref: '#/components/responses/Validation' } } }
+  /claims/{claim}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Private claim status with masked challenge details }, '404': { description: Claim not owned by caller } } }
+  /claims/{claim}/verify:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Email claim verified }, '409': { description: Expired challenge or competing verified claim }, '422': { $ref: '#/components/responses/Validation' } } }
+  /claims/{claim}/challenge:
+    post: { security: [{ bearerAuth: [] }], responses: { '202': { description: Prior challenge consumed and a new limited code mailed }, '404': { description: Claim not owned by caller } } }
+  /claims/{claim}/description/confirm:
+    post: { security: [{ bearerAuth: [] }], responses: { '202': { description: Live RSS verification queued for manual review } } }
+  /studio:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Verified creator profile }, '403': { description: Verified claim required } } }
+  /studio/shows:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated claimed shows accessible through creator or studio membership } } }
+  /studio/episodes:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated claimed-show episodes } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Claimed-show episode draft without audio }, '403': { description: Verified claim required }, '422': { description: Show is not in the caller studio } } }
+  /studio/reels:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated creator reels } } }
+  /studio/reels/{reel}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Member-accessible creator reel }, '404': { description: Reel outside caller studios } } }
+  /studio/audience:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator and claimed-show audience rollup } } }
+  /studio/audience/followers:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated creator followers } } }
+  /studio/audience/supporters:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Gift supporters ranked by coins received } } }
+  /studio/monetization:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator balances and masked tax readiness } } }
+  /studio/payout-settings:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator payout schedule and compliance status } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Partial payout currency, schedule, or encrypted tax settings submitted for review }, '409': { description: Payout destination unverified }, '422': { description: Empty update or invalid schedule } } }
+  /studio/transactions:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated creator ledger transactions }, '422': { description: Invalid kind filter } } }
+  /studio/transactions/{transaction}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator-owned transaction }, '404': { description: Transaction outside caller studios } } }
+  /studio/live:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Verified creator scheduled a live session } } }
+  /studio/live/{session}:
+    patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator live session transitioned }, '409': { description: Invalid transition } } }
+  /studio/live/{session}/health:
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Creator stream health recorded } } }
+  /studios:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Studios visible to the caller } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Creator studio created } } }
+  /studios/{studio}:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Studio and members } } }
+    put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owner updated studio } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owner deleted studio } } }
+  /studios/{studio}/members:
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Owner added or updated a member role } } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    DeviceId: { name: X-Device-Id, in: header, required: true, schema: { type: string } }
+    UploadId: { name: upload, in: path, required: true, schema: { type: string, minLength: 26, maxLength: 26 } }
+  responses:
+    Validation: { description: Validation error }
+    Unauthenticated: { description: Invalid credentials or token }
