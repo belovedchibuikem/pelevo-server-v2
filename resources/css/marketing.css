@@ -89,6 +89,33 @@ html.marketing body {
     font-size: 0.92rem;
 }
 
+.mkt-logo-img {
+    display: block;
+    width: auto;
+    object-fit: contain;
+}
+
+.mkt-logo-img-nav {
+    height: 40px;
+    width: auto;
+}
+
+.mkt-logo-footer {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px 16px 10px;
+    border-radius: 22px;
+    background: #050505;
+    box-shadow: 0 12px 32px rgba(18, 21, 17, .18);
+}
+
+.mkt-logo-img-footer {
+    height: 120px;
+    width: auto;
+    max-width: 168px;
+}
+
 .mkt-mark {
     width: 28px;
     height: 28px;

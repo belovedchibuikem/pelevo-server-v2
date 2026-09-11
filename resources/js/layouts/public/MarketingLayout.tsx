@@ -30,9 +30,8 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
       <div className="mkt-aurora" aria-hidden="true" />
       <div className="mkt-grain" aria-hidden="true" />
       <header className="mkt-nav">
-        <Link className="mkt-logo" href="/" aria-label="Pelevo home">
-          <span className="mkt-mark" aria-hidden="true" />
-          PELEVO
+        <Link className="mkt-logo mkt-logo-nav" href="/" aria-label="Pelevo home">
+          <img className="mkt-logo-img mkt-logo-img-nav" src="/images/brand/logo-nav.png" alt="Pelevo" width={40} height={48} />
         </Link>
         <button className="mkt-menu" type="button" aria-expanded={open} aria-controls="mkt-nav" onClick={() => setOpen((value) => !value)}>
           {open ? 'Close' : 'Menu'}
@@ -56,9 +55,8 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
       {children}
       <footer className="mkt-footer">
         <div>
-          <Link className="mkt-logo" href="/">
-            <span className="mkt-mark" aria-hidden="true" />
-            PELEVO
+          <Link className="mkt-logo mkt-logo-footer" href="/" aria-label="Pelevo home">
+            <img className="mkt-logo-img mkt-logo-img-footer" src="/images/brand/logo-footer.png" alt="Pelevo" width={148} height={148} />
           </Link>
           <p style={{ marginTop: 14, maxWidth: 360 }}>
             Pelevo — built for Nigerian podcasts, and the people who make them worth listening to.
