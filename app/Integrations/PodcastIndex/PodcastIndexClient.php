@@ -11,9 +11,23 @@ final class PodcastIndexClient
 {
     public function __construct(private readonly PodcastIndexAuthenticator $authenticator) {}
 
-    public function searchByTerm(string $query, int $limit, ?string $language = null): array
+    public function searchByTerm(string $query, int $limit, ?string $language = null, ?string $category = null): array
     {
-        return $this->get('search/byterm', ['q' => $query, 'max' => min($limit, 100), 'lang' => $language]);
+        return $this->get('search/byterm', [
+            'q' => $query,
+            'max' => min($limit, 100),
+            'lang' => $language,
+            'cat' => $category,
+        ]);
+    }
+
+    public function trending(?string $category = null, int $limit = 20, ?string $language = null): array
+    {
+        return $this->get('podcasts/trending', [
+            'max' => min($limit, 100),
+            'lang' => $language,
+            'cat' => $category,
+        ]);
     }
 
     private function get(string $path, array $query): array

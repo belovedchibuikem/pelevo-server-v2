@@ -22,11 +22,19 @@ final class CatalogController extends Controller
 {
     public function search(Request $request, PodcastIndexClient $client, PersistDiscoveredShow $persist): JsonResponse
     {
-        $data = $request->validate(['q' => ['required', 'string', 'min:2', 'max:100'], 'limit' => ['nullable', 'integer', 'between:1,50'], 'language' => ['nullable', 'string', 'max:35'], 'preview' => ['nullable', 'boolean']]);
+        $data = $request->validate([
+            'q' => ['required', 'string', 'min:2', 'max:100'],
+            'limit' => ['nullable', 'integer', 'between:1,50'],
+            'language' => ['nullable', 'string', 'max:35'],
+            'category' => ['nullable', 'string', 'max:60'],
+            'preview' => ['nullable', 'boolean'],
+        ]);
         $normalizedQuery = trim($data['q']);
         $limit = $data['limit'] ?? 20;
         $preview = $request->boolean('preview');
-        $queryHash = hash('sha256', Str::lower($normalizedQuery));
+        $category = isset($data['category']) ? trim((string) $data['category']) : null;
+        $category = $category === '' ? null : $category;
+        $queryHash = hash('sha256', Str::lower($normalizedQuery.'|'.($category ?? '')));
         if (! $preview) {
             $history = DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->first();
             $history ? DB::table('search_history')->where('id', $history->id)->update(['query' => $normalizedQuery, 'searched_at' => now(), 'updated_at' => now()]) : DB::table('search_history')->insert(['id' => (string) Str::ulid(), 'user_id' => $request->user()->id, 'query_hash' => $queryHash, 'query' => $normalizedQuery, 'searched_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
@@ -35,7 +43,10 @@ final class CatalogController extends Controller
         $freshness = 'local';
         if (! $preview && config('services.podcast_index.enabled')) {
             try {
-                $feeds = $client->searchByTerm($normalizedQuery, $limit, $data['language'] ?? null)['feeds'] ?? [];
+                $feeds = $client->searchByTerm($normalizedQuery, $limit, $data['language'] ?? null, $category)['feeds'] ?? [];
+                if ($feeds === [] && $category !== null) {
+                    $feeds = $client->trending($category, $limit, $data['language'] ?? null)['feeds'] ?? [];
+                }
                 $merged = collect();
                 $persisted = 0;
                 foreach ($feeds as $feed) {
