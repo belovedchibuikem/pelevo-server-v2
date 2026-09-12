@@ -255,6 +255,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('playlists/{playlist}', [LibraryController::class, 'showPlaylist']);
         Route::put('playlists/{playlist}', [LibraryController::class, 'updatePlaylist']);
         Route::delete('playlists/{playlist}', [LibraryController::class, 'deletePlaylist']);
+        Route::post('playlists/{playlist}/items', [LibraryController::class, 'addPlaylistItem']);
         Route::get('collections', [LibraryController::class, 'collections']);
         Route::post('collections', [LibraryController::class, 'storeCollection']);
         Route::get('collections/{collection}', [LibraryController::class, 'showCollection']);

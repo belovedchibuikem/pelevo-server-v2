@@ -49,6 +49,14 @@ final class LibraryAndQueueTest extends TestCase
         $detail = $this->actingAs($user, 'sanctum')->getJson('/api/v1/playlists/'.$playlist['id'])->assertOk()->json('data');
         $this->assertSame('Mindset & Growth', $detail['name']);
         $this->assertSame([], $detail['items']);
+        $this->actingAs($user, 'sanctum')->postJson('/api/v1/playlists/'.$playlist['id'].'/items', [
+            'episode_id' => $episode->id,
+            'version' => $playlist['version'],
+        ])->assertOk()->assertJsonPath('data.item_count', 1)->assertJsonPath('data.version', 2);
+        $this->actingAs($other, 'sanctum')->postJson('/api/v1/playlists/'.$playlist['id'].'/items', [
+            'episode_id' => $episode->id,
+            'version' => 1,
+        ])->assertNotFound();
         $this->actingAs($other, 'sanctum')->getJson('/api/v1/playlists/'.$playlist['id'])->assertNotFound();
         $collection = $this->actingAs($user, 'sanctum')->postJson('/api/v1/collections', ['name' => 'Sunday Reset'])->assertCreated()->json('data');
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/collections/'.$collection['id'])->assertOk()->assertJsonPath('data.name', 'Sunday Reset')->assertJsonPath('data.items', []);

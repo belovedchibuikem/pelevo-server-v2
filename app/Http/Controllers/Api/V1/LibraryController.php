@@ -241,6 +241,47 @@ final class LibraryController extends Controller
         return $deleted ? ApiResponse::success(['deleted' => true]) : ApiResponse::error('NOT_FOUND', 'Playlist not found.', 404);
     }
 
+    public function addPlaylistItem(string $playlist, Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'episode_id' => ['required', 'string', 'exists:episodes,id'],
+            'version' => ['required', 'integer', 'min:1'],
+        ]);
+
+        return DB::transaction(function () use ($playlist, $request, $data): JsonResponse {
+            $row = DB::table('playlists')->where('id', $playlist)->where('user_id', $request->user()->id)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'Playlist not found.', 404);
+            }
+            if ((int) $row->version !== (int) $data['version']) {
+                return ApiResponse::error('VERSION_CONFLICT', 'Playlist changed on another device.', 409);
+            }
+            $exists = DB::table('playlist_items')
+                ->where('playlist_id', $row->id)
+                ->where('episode_id', $data['episode_id'])
+                ->exists();
+            if ($exists) {
+                return ApiResponse::success($this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0));
+            }
+            $position = (int) (DB::table('playlist_items')->where('playlist_id', $row->id)->max('position') ?? -1) + 1;
+            DB::table('playlist_items')->insert([
+                'id' => (string) Str::ulid(),
+                'playlist_id' => $row->id,
+                'episode_id' => $data['episode_id'],
+                'position' => $position,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            DB::table('playlists')->where('id', $row->id)->update([
+                'version' => $row->version + 1,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('playlists')->find($row->id);
+
+            return ApiResponse::success($this->presentedPlaylist($updated, $this->playlistCounts([$row->id])[$row->id] ?? 0));
+        });
+    }
+
     public function collections(Request $request): JsonResponse
     {
         return $this->page(
