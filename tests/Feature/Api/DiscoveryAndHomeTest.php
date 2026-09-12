@@ -58,7 +58,7 @@ final class DiscoveryAndHomeTest extends TestCase
         Show::create(['rss_url' => 'https://example.com/voice.xml', 'title' => 'Voice Technology']);
         $client = $this->actingAs($listener, 'sanctum');
 
-        $client->getJson('/api/v1/search?q=zz&preview=1')->assertOk()->assertJsonPath('data.query', 'zz')->assertJsonPath('data.shows', [])->assertJsonPath('data.episodes', [])->assertJsonPath('data.playlists', []);
+        $client->getJson('/api/v1/search?q=zzz&preview=1')->assertOk()->assertJsonPath('data.query', 'zzz')->assertJsonPath('data.shows', [])->assertJsonPath('data.episodes', [])->assertJsonPath('data.playlists', []);
         $this->assertSame(0, DB::table('search_history')->where('user_id', $listener->id)->count());
         $client->getJson('/api/v1/search?q=Technology')->assertOk()->assertJsonMissingPath('data.shows.0.rss_url')->assertJsonPath('data.query', 'Technology')->assertJsonPath('data.shows.0.title', 'Voice Technology')->assertJsonPath('data.episodes', [])->assertJsonPath('data.playlists', []);
         $client->postJson('/api/v1/search/voice', ['transcript' => 'Technology'])->assertOk()->assertJsonPath('data.shows.0.title', 'Voice Technology');

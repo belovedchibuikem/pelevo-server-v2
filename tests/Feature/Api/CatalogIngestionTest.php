@@ -17,7 +17,7 @@ final class CatalogIngestionTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_discovered_show_is_persisted_idempotently_and_queued_for_rss_hydration(): void
+    public function test_discovered_show_is_persisted_idempotently_without_eager_hydration(): void
     {
         Bus::fake([HydrateRssFeed::class]);
         $feed = ['id' => 101, 'url' => 'https://example.com/show.xml', 'title' => 'A New Voice', 'description' => '<b>Clean</b>'];
@@ -29,7 +29,7 @@ final class CatalogIngestionTest extends TestCase
         $this->assertDatabaseCount('shows', 1);
         $this->assertDatabaseHas('show_feed_states', ['show_id' => $first?->id, 'state' => 'pending']);
         $this->assertDatabaseHas('show_external_ids', ['show_id' => $first?->id, 'provider' => 'podcast_index', 'external_id' => '101']);
-        Bus::assertDispatchedTimes(HydrateRssFeed::class, 1);
+        Bus::assertNotDispatched(HydrateRssFeed::class);
     }
 
     public function test_rss_hydration_records_the_run_and_normalizes_episode_duration(): void
@@ -55,7 +55,11 @@ final class CatalogIngestionTest extends TestCase
             </rss>
             XML, 200, ['ETag' => '"feed-v1"'])]);
 
-        (new HydrateRssFeed($show->id))->handle(app(RssFeedFetcher::class), app(InvalidateDiscoveryCache::class));
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
 
         $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'episode-1', 'duration_seconds' => 3723]);
         $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'healthy', 'consecutive_failures' => 0]);

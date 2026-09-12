@@ -2,7 +2,6 @@
 
 namespace App\Actions\Catalog;
 
-use App\Jobs\HydrateRssFeed;
 use App\Models\Show;
 use App\Support\ArtworkUrl;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +24,9 @@ final class PersistDiscoveredShow
             return null;
         }
 
-        $show = DB::transaction(function () use ($feed, $provider, $externalId, $rssUrl): Show {
+        // Persist catalog metadata only. Episode RSS hydration is queued on
+        // demand when the listener opens the show (CatalogController).
+        return DB::transaction(function () use ($feed, $provider, $externalId, $rssUrl): Show {
             $showId = DB::table('show_external_ids')
                 ->where('provider', $provider)
                 ->where('external_id', $externalId)
@@ -65,9 +66,5 @@ final class PersistDiscoveredShow
 
             return $show;
         }, 3);
-
-        HydrateRssFeed::dispatch($show->id)->afterCommit();
-
-        return $show;
     }
 }

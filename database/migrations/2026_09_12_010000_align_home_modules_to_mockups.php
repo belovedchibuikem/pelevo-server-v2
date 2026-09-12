@@ -21,7 +21,7 @@ return new class extends Migration
             'quick_listen' => ['title' => 'Quick Listen', 'subtitle' => 'Short episodes that fit your time', 'kind' => 'quick_listen'],
             'because_you_listened' => ['title' => 'Because You Listened', 'subtitle' => 'More from topics you already enjoy', 'kind' => 'because'],
             'trending' => ['title' => 'Trending on Pelevo', 'subtitle' => 'What listeners are playing now', 'kind' => 'ranked_shows'],
-            'new_from_following' => ['title' => 'New From People You Follow', 'subtitle' => 'Fresh episodes from your subscriptions', 'kind' => 'episode_list'],
+            'new_from_following' => ['title' => 'New From Shows You Follow', 'subtitle' => 'Fresh episodes from your subscriptions', 'kind' => 'episode_list'],
             'african_voices' => ['title' => 'African Voices', 'subtitle' => 'Podcasts from across the continent', 'kind' => 'shows'],
             'try_something_new' => ['title' => 'Try Something New', 'subtitle' => 'Topics outside your listening history', 'kind' => 'try_new'],
             'explore_by_topic' => ['title' => 'Explore by Topic', 'subtitle' => 'Browse the Pelevo catalog', 'kind' => 'topics'],

@@ -23,7 +23,7 @@ final class CatalogController extends Controller
     public function search(Request $request, PodcastIndexClient $client, PersistDiscoveredShow $persist): JsonResponse
     {
         $data = $request->validate([
-            'q' => ['required', 'string', 'min:2', 'max:100'],
+            'q' => ['required', 'string', 'min:3', 'max:100'],
             'limit' => ['nullable', 'integer', 'between:1,50'],
             'language' => ['nullable', 'string', 'max:35'],
             'category' => ['nullable', 'string', 'max:60'],
@@ -41,7 +41,9 @@ final class CatalogController extends Controller
         }
         $shows = $this->matchingShows($normalizedQuery, $limit);
         $freshness = 'local';
-        if (! $preview && config('services.podcast_index.enabled')) {
+        // Preview (typeahead) also hits Podcast Index so typing finds shows, but
+        // skips search_history writes.
+        if (config('services.podcast_index.enabled')) {
             try {
                 $feeds = $client->searchByTerm($normalizedQuery, $limit, $data['language'] ?? null, $category)['feeds'] ?? [];
                 if ($feeds === [] && $category !== null) {
@@ -64,6 +66,7 @@ final class CatalogController extends Controller
                 $freshness = 'fresh';
                 Log::info('catalog.search.podcast_index', [
                     'query' => $normalizedQuery,
+                    'preview' => $preview,
                     'feeds' => count($feeds),
                     'persisted' => $persisted,
                     'returned' => $shows->count(),
@@ -72,10 +75,11 @@ final class CatalogController extends Controller
                 $freshness = 'stale';
                 Log::warning('catalog.search.podcast_index_failed', [
                     'query' => $normalizedQuery,
+                    'preview' => $preview,
                     'message' => $exception->getMessage(),
                 ]);
             }
-        } elseif (! $preview) {
+        } else {
             Log::info('catalog.search.podcast_index_skipped', [
                 'query' => $normalizedQuery,
                 'reason' => 'disabled',
@@ -100,6 +104,7 @@ final class CatalogController extends Controller
         }
 
         $this->ensureRssHydrationQueued($show);
+        $show->load('feedState');
         $payload = $this->presentShowDetail($show, $request);
 
         return ApiResponse::success($payload);
@@ -107,8 +112,10 @@ final class CatalogController extends Controller
 
     public function episodes(Show $show, Request $request): JsonResponse
     {
+        $request->validate(['limit' => ['sometimes', 'integer', 'between:1,50'], 'cursor' => ['sometimes', 'string', 'max:2048']]);
         $this->ensureRssHydrationQueued($show);
-        $items = $show->episodes()->where('availability', 'available')->orderByDesc('published_at')->orderByDesc('id')->cursorPaginate(min($request->integer('limit', 20), 50));
+        $show->loadMissing('feedState');
+        $items = $show->episodes()->where('availability', 'available')->orderByDesc('published_at')->orderByDesc('id')->cursorPaginate($request->integer('limit', 20));
 
         return ApiResponse::success(collect($items->items())->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show))->values(), [
             'cursor' => $items->nextCursor()?->encode(),
@@ -128,7 +135,7 @@ final class CatalogController extends Controller
 
     public function voiceSearch(Request $request, PodcastIndexClient $client, PersistDiscoveredShow $persist): JsonResponse
     {
-        $data = $request->validate(['transcript' => ['required', 'string', 'min:2', 'max:100'], 'language' => ['nullable', 'string', 'max:35']]);
+        $data = $request->validate(['transcript' => ['required', 'string', 'min:3', 'max:100'], 'language' => ['nullable', 'string', 'max:35']]);
         $request->merge(['q' => $data['transcript']]);
 
         return $this->search($request, $client, $persist);
@@ -200,32 +207,117 @@ final class CatalogController extends Controller
         if (! Cache::add($key, true, now()->addMinutes(5))) {
             return ApiResponse::error('RATE_LIMITED', 'This show was refreshed recently.', 429);
         }
+        $show->feedState()->updateOrCreate([], [
+            'state' => 'pending',
+            'next_poll_at' => now(),
+            'last_error' => null,
+        ]);
         HydrateRssFeed::dispatch($show->id);
 
-        return ApiResponse::success(['queued' => true], status: 202);
+        return ApiResponse::success([
+            'queued' => true,
+            'episodes_syncing' => true,
+        ], status: 202);
     }
 
     private function matchingShows(string $query, int $limit)
     {
-        return Show::query()->where('status', 'active')->where(fn ($builder) => $builder->where('title', 'like', '%'.$query.'%')->orWhere('description', 'like', '%'.$query.'%')->orWhere('rss_url', $query))->limit($limit)->get();
+        $boolean = $this->toBooleanFulltextQuery($query);
+        $like = '%'.$query.'%';
+
+        return Show::query()
+            ->where('status', 'active')
+            ->where(function ($builder) use ($query, $boolean, $like): void {
+                if ($boolean !== null) {
+                    $builder->whereRaw(
+                        'MATCH(title, description, author) AGAINST(? IN BOOLEAN MODE)',
+                        [$boolean]
+                    );
+                }
+                $builder->orWhere('title', 'like', $like)
+                    ->orWhere('description', 'like', $like)
+                    ->orWhere('author', 'like', $like)
+                    ->orWhere('rss_url', $query);
+            })
+            ->when(
+                $boolean !== null,
+                fn ($builder) => $builder->orderByRaw(
+                    'MATCH(title, description, author) AGAINST(? IN BOOLEAN MODE) DESC',
+                    [$boolean]
+                )
+            )
+            ->orderBy('title')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get();
     }
 
     private function matchingEpisodes(string $query, int $limit): array
     {
-        return Episode::query()->where('availability', 'available')->where(fn ($builder) => $builder->where('title', 'like', '%'.$query.'%')->orWhere('description', 'like', '%'.$query.'%'))->whereHas('show', fn ($builder) => $builder->where('status', 'active'))->with('show:id,title,artwork_url,status')->orderByDesc('published_at')->orderByDesc('id')->limit($limit)->get()->map(fn (Episode $episode): array => [
-            'id' => $episode->id,
-            'title' => $episode->title,
-            'show_id' => $episode->show_id,
-            'show_title' => $episode->show?->title,
-            'artwork_url' => $episode->show?->artwork_url,
-            'published_at' => optional($episode->published_at)?->toIso8601String(),
-            'duration_seconds' => $episode->duration_seconds,
-        ])->values()->all();
+        $boolean = $this->toBooleanFulltextQuery($query);
+        $like = '%'.$query.'%';
+
+        return Episode::query()
+            ->where('availability', 'available')
+            ->where(function ($builder) use ($boolean, $like): void {
+                if ($boolean !== null) {
+                    $builder->whereRaw(
+                        'MATCH(title, description) AGAINST(? IN BOOLEAN MODE)',
+                        [$boolean]
+                    );
+                }
+                $builder->orWhere('title', 'like', $like)
+                    ->orWhere('description', 'like', $like);
+            })
+            ->whereHas('show', fn ($builder) => $builder->where('status', 'active'))
+            ->with('show:id,title,artwork_url,status')
+            ->when(
+                $boolean !== null,
+                fn ($builder) => $builder->orderByRaw(
+                    'MATCH(title, description) AGAINST(? IN BOOLEAN MODE) DESC',
+                    [$boolean]
+                )
+            )
+            ->orderByDesc('published_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get()
+            ->map(fn (Episode $episode): array => [
+                'id' => $episode->id,
+                'title' => $episode->title,
+                'show_id' => $episode->show_id,
+                'show_title' => $episode->show?->title,
+                'artwork_url' => $episode->show?->artwork_url,
+                'published_at' => optional($episode->published_at)?->toIso8601String(),
+                'duration_seconds' => $episode->duration_seconds,
+            ])->values()->all();
     }
 
     private function matchingPlaylists(string $query, int $limit): array
     {
-        $playlists = DB::table('editorial_playlists')->where('published', true)->where('title', 'like', '%'.$query.'%')->orderBy('position')->orderBy('id')->limit($limit)->get(['id', 'title', 'description', 'artwork_url']);
+        $boolean = $this->toBooleanFulltextQuery($query);
+        $like = '%'.$query.'%';
+        $playlistsQuery = DB::table('editorial_playlists')
+            ->where('published', true)
+            ->where(function ($builder) use ($boolean, $like): void {
+                if ($boolean !== null) {
+                    $builder->whereRaw(
+                        'MATCH(title, description) AGAINST(? IN BOOLEAN MODE)',
+                        [$boolean]
+                    );
+                }
+                $builder->orWhere('title', 'like', $like)
+                    ->orWhere('description', 'like', $like);
+            });
+
+        if ($boolean !== null) {
+            $playlistsQuery->orderByRaw(
+                'MATCH(title, description) AGAINST(? IN BOOLEAN MODE) DESC',
+                [$boolean]
+            );
+        }
+
+        $playlists = $playlistsQuery->orderBy('position')->orderBy('id')->limit($limit)->get(['id', 'title', 'description', 'artwork_url']);
         $counts = $playlists->isEmpty() ? collect() : DB::table('editorial_playlist_items')->whereIn('editorial_playlist_id', $playlists->pluck('id'))->selectRaw('editorial_playlist_id, count(*) as item_count')->groupBy('editorial_playlist_id')->pluck('item_count', 'editorial_playlist_id');
 
         return $playlists->map(fn (object $playlist): array => [
@@ -235,6 +327,29 @@ final class CatalogController extends Controller
             'artwork_url' => $playlist->artwork_url,
             'item_count' => (int) ($counts[$playlist->id] ?? 0),
         ])->values()->all();
+    }
+
+    /**
+     * Build a MySQL BOOLEAN MODE query with prefix matching (+term*).
+     */
+    private function toBooleanFulltextQuery(string $query): ?string
+    {
+        $terms = preg_split('/\s+/u', trim($query), -1, PREG_SPLIT_NO_EMPTY);
+        if ($terms === false || $terms === []) {
+            return null;
+        }
+
+        $parts = [];
+        foreach ($terms as $term) {
+            $clean = preg_replace('/[+\-><()~*"@]+/u', '', $term) ?? '';
+            $clean = trim($clean);
+            if ($clean === '' || mb_strlen($clean) < 2) {
+                continue;
+            }
+            $parts[] = '+'.$clean.'*';
+        }
+
+        return $parts === [] ? null : implode(' ', $parts);
     }
 
     private function presentShowCard(Show $show): array
@@ -311,21 +426,24 @@ final class CatalogController extends Controller
 
     private function episodesSyncing(Show $show): bool
     {
-        if ($show->episodes()->exists()) {
-            return false;
-        }
-
         $state = $show->feedState?->state;
-        if (in_array($state, ['failed', 'stale'], true)) {
-            return false;
-        }
 
+        // Stay "syncing" while the worker is pending/running even after a Podcast
+        // Index seed page lands — the detail screen keeps polling until healthy.
         return in_array($state, [null, 'pending', 'running'], true);
     }
 
     private function ensureRssHydrationQueued(Show $show): void
     {
-        if (! $this->episodesSyncing($show)) {
+        $state = $show->feedState?->state;
+        $hasEpisodes = $show->episodes()->exists();
+
+        // pending = explicit hydrate request (discovery / refresh).
+        // Otherwise only auto-queue when the catalog still has no episodes.
+        $needsHydration = $state === 'pending'
+            || (! $hasEpisodes && ! in_array($state, ['failed', 'stale', 'running'], true));
+
+        if (! $needsHydration) {
             return;
         }
 
@@ -334,9 +452,9 @@ final class CatalogController extends Controller
             return;
         }
 
-        $show->feedState()->firstOrCreate([], [
+        $show->feedState()->updateOrCreate([], [
             'state' => 'pending',
-            'consecutive_failures' => 0,
+            'consecutive_failures' => $show->feedState?->consecutive_failures ?? 0,
             'next_poll_at' => now(),
         ]);
 

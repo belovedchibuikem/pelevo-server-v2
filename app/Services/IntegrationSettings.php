@@ -18,7 +18,7 @@ final class IntegrationSettings
     public function catalog(): array
     {
         return [
-            'podcast_index' => ['group' => 'Catalog', 'title' => 'Podcast Index', 'description' => 'Discovery-only show search. Pelevo persists discovered shows and owns all RSS hydration, episodes, rankings, recommendations, and Home rails.', 'fields' => [
+            'podcast_index' => ['group' => 'Catalog', 'title' => 'Podcast Index', 'description' => 'Show discovery plus capped episode seeding (paged max≤1000). Pelevo owns RSS hydration for full archives, rankings, recommendations, and Home rails.', 'fields' => [
                 ['name' => 'enabled', 'label' => 'Enabled', 'type' => 'select', 'options' => ['1', '0']],
                 ['name' => 'base_url', 'label' => 'API base URL', 'type' => 'text'],
                 ['name' => 'api_key', 'label' => 'API key', 'type' => 'password', 'secret' => true],

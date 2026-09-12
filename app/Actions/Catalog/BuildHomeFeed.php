@@ -622,7 +622,7 @@ final class BuildHomeFeed
             ['key' => 'quick_listen', 'title' => 'Quick Listen', 'subtitle' => 'Short episodes that fit your time', 'kind' => 'quick_listen'],
             ['key' => 'because_you_listened', 'title' => 'Because You Listened', 'subtitle' => 'More from topics you already enjoy', 'kind' => 'because'],
             ['key' => 'trending', 'title' => 'Trending on Pelevo', 'subtitle' => 'What listeners are playing now', 'kind' => 'ranked_shows'],
-            ['key' => 'new_from_following', 'title' => 'New From People You Follow', 'subtitle' => 'Fresh episodes from your subscriptions', 'kind' => 'episode_list'],
+            ['key' => 'new_from_following', 'title' => 'New From Shows You Follow', 'subtitle' => 'Fresh episodes from your subscriptions', 'kind' => 'episode_list'],
             ['key' => 'african_voices', 'title' => 'African Voices', 'subtitle' => 'Podcasts from across the continent', 'kind' => 'shows'],
             ['key' => 'try_something_new', 'title' => 'Try Something New', 'subtitle' => 'Topics outside your listening history', 'kind' => 'try_new'],
             ['key' => 'explore_by_topic', 'title' => 'Explore by Topic', 'subtitle' => 'Browse the Pelevo catalog', 'kind' => 'topics'],

@@ -30,7 +30,24 @@ final class PodcastIndexClient
         ]);
     }
 
-    private function get(string $path, array $query): array
+    /**
+     * Fetch one page of episodes for a Podcast Index feed id.
+     *
+     * Best practice: keep max modest (default 100, hard cap 1000), use `since`
+     * for incremental sync instead of refetching the whole window, cache when
+     * safe, and back off on HTTP 429. PI has no older-than cursor, so full
+     * archives beyond the newest window still come from RSS.
+     */
+    public function episodesByFeedId(string $feedId, int $max = 100, ?int $since = null, bool $useCache = true): array
+    {
+        return $this->get('episodes/byfeedid', [
+            'id' => $feedId,
+            'max' => max(1, min($max, 1000)),
+            'since' => $since,
+        ], $useCache);
+    }
+
+    private function get(string $path, array $query, bool $useCache = true): array
     {
         if (! config('services.podcast_index.enabled')) {
             throw new PodcastIndexException('Podcast Index is disabled.');
@@ -38,31 +55,43 @@ final class PodcastIndexClient
         $query = array_filter($query, fn (mixed $value): bool => $value !== null && $value !== '');
         ksort($query);
         $cacheKey = 'podcast-index:'.hash('sha256', $path.'?'.http_build_query($query));
+        $resolver = fn (): array => $this->request($path, $query);
 
         try {
-            return Cache::remember($cacheKey, now()->addMinutes(5)->addSeconds(random_int(0, 30)), function () use ($path, $query): array {
-                $response = Http::baseUrl(rtrim((string) config('services.podcast_index.base_url'), '/'))
-                    ->withHeaders($this->authenticator->headers())
-                    ->acceptJson()
-                    ->connectTimeout(2)
-                    ->timeout((int) config('services.podcast_index.timeout', 5))
-                    ->retry(2, 100, function ($exception, $request): bool {
-                        return $exception instanceof ConnectionException;
-                    }, throw: false)
-                    ->get($path, $query);
+            if (! $useCache) {
+                return $resolver();
+            }
 
-                if (! $response->successful()) {
-                    $detail = trim(Str::limit(strip_tags((string) $response->body()), 180, ''));
-                    throw new PodcastIndexException(
-                        'Podcast Index request failed with status '.$response->status()
-                        .($detail !== '' ? ': '.$detail : '')
-                    );
-                }
-
-                return $response->json() ?? throw new PodcastIndexException('Podcast Index returned malformed JSON.');
-            });
+            return Cache::remember($cacheKey, now()->addMinutes(5)->addSeconds(random_int(0, 30)), $resolver);
         } catch (ConnectionException $exception) {
             throw new PodcastIndexException('Podcast Index is unavailable.', previous: $exception);
         }
+    }
+
+    private function request(string $path, array $query): array
+    {
+        $response = Http::baseUrl(rtrim((string) config('services.podcast_index.base_url'), '/'))
+            ->withHeaders($this->authenticator->headers())
+            ->acceptJson()
+            ->connectTimeout(2)
+            ->timeout((int) config('services.podcast_index.timeout', 5))
+            ->retry(2, 100, function ($exception, $request): bool {
+                return $exception instanceof ConnectionException;
+            }, throw: false)
+            ->get($path, $query);
+
+        if ($response->status() === 429) {
+            throw new PodcastIndexException('Podcast Index rate limited (429).');
+        }
+
+        if (! $response->successful()) {
+            $detail = trim(Str::limit(strip_tags((string) $response->body()), 180, ''));
+            throw new PodcastIndexException(
+                'Podcast Index request failed with status '.$response->status()
+                .($detail !== '' ? ': '.$detail : '')
+            );
+        }
+
+        return $response->json() ?? throw new PodcastIndexException('Podcast Index returned malformed JSON.');
     }
 }

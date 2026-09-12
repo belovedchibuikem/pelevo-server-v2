@@ -42,6 +42,10 @@ return [
         'api_secret' => env('PODCAST_INDEX_API_SECRET'),
         'user_agent' => env('PODCAST_INDEX_USER_AGENT', 'Pelevo/1.3'),
         'timeout' => (int) env('PODCAST_INDEX_TIMEOUT', 5),
+        // Episode pages stay modest (PI hard-caps at 1000). Prefer RSS for full archives.
+        'episode_page_size' => (int) env('PODCAST_INDEX_EPISODE_PAGE_SIZE', 100),
+        'episode_page_delay_ms' => (int) env('PODCAST_INDEX_EPISODE_PAGE_DELAY_MS', 350),
+        'episode_max_pages' => (int) env('PODCAST_INDEX_EPISODE_MAX_PAGES', 10),
     ],
 
     'paystack' => ['webhook_secret' => env('PAYSTACK_WEBHOOK_SECRET'), 'payout_verification_url' => env('PAYSTACK_PAYOUT_VERIFICATION_URL'), 'payout_verification_token' => env('PAYSTACK_SECRET_KEY'), 'payout_url' => env('PAYSTACK_PAYOUT_URL'), 'payout_token' => env('PAYSTACK_SECRET_KEY'), 'checkout_url' => env('PAYSTACK_CHECKOUT_URL'), 'checkout_token' => env('PAYSTACK_SECRET_KEY'), 'restore_url' => env('PAYSTACK_VERIFY_URL')],

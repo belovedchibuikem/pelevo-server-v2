@@ -22,7 +22,7 @@ final class SearchHistoryController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $data = $request->validate(['query' => ['required', 'string', 'min:2', 'max:100']]);
+        $data = $request->validate(['query' => ['required', 'string', 'min:3', 'max:100']]);
         $query = trim($data['query']);
         $hash = hash('sha256', Str::lower($query));
         $existing = DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $hash)->first();
