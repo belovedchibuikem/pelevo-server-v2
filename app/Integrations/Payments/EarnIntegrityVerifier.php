@@ -7,6 +7,9 @@ use Throwable;
 
 final class EarnIntegrityVerifier
 {
+    /** Shared with Flutter debug HMAC (`EarnIntegrity` debug secret). */
+    private const LOCAL_DEBUG_SECRET = 'pelevo-dev-earn-integrity';
+
     public function valid(string $token, string $deviceIdentifier, string $sessionId, int $sequence, string $nonce): bool
     {
         if ($nonce === '' || $token === '') {
@@ -32,6 +35,10 @@ final class EarnIntegrityVerifier
         }
 
         $secret = (string) config('services.earn_integrity.token');
+        if ($secret === '' && app()->environment(['local', 'testing'])) {
+            $secret = self::LOCAL_DEBUG_SECRET;
+        }
+
         if ($secret !== '' && str_starts_with($token, 'v1.')) {
             $expected = 'v1.'.hash_hmac('sha256', implode('|', [$deviceIdentifier, $sessionId, (string) $sequence, $nonce]), $secret);
 

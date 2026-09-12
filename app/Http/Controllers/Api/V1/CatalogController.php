@@ -112,16 +112,35 @@ final class CatalogController extends Controller
 
     public function episodes(Show $show, Request $request): JsonResponse
     {
-        $request->validate(['limit' => ['sometimes', 'integer', 'between:1,50'], 'cursor' => ['sometimes', 'string', 'max:2048']]);
+        $data = $request->validate([
+            'limit' => ['sometimes', 'integer', 'between:1,50'],
+            'cursor' => ['sometimes', 'string', 'max:2048'],
+            'q' => ['sometimes', 'string', 'min:1', 'max:100'],
+        ]);
         $this->ensureRssHydrationQueued($show);
         $show->loadMissing('feedState');
-        $items = $show->episodes()->where('availability', 'available')->orderByDesc('published_at')->orderByDesc('id')->cursorPaginate($request->integer('limit', 20));
+
+        $query = $show->episodes()->where('availability', 'available');
+        $search = isset($data['q']) ? trim((string) $data['q']) : '';
+        if ($search !== '') {
+            $like = '%'.$search.'%';
+            $fulltext = $this->fullTextClause(['title', 'description'], $search);
+            $query->where(function ($builder) use ($like, $fulltext): void {
+                if ($fulltext !== null) {
+                    $builder->whereRaw($fulltext['match'], $fulltext['bindings']);
+                }
+                $this->applyLikeFallback($builder, ['title', 'description'], $like);
+            });
+        }
+
+        $items = $query->orderByDesc('published_at')->orderByDesc('id')->cursorPaginate($data['limit'] ?? 20);
 
         return ApiResponse::success(collect($items->items())->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show))->values(), [
             'cursor' => $items->nextCursor()?->encode(),
             'has_more' => $items->hasMorePages(),
             'feed_state' => $show->feedState?->state,
             'episodes_syncing' => $this->episodesSyncing($show),
+            'q' => $search !== '' ? $search : null,
         ]);
     }
 
@@ -204,15 +223,18 @@ final class CatalogController extends Controller
     public function refresh(Show $show, Request $request): JsonResponse
     {
         $key = 'show-refresh:'.$request->user()->id.':'.$show->id;
-        if (! Cache::add($key, true, now()->addMinutes(5))) {
+        $emptyShow = ! $show->episodes()->exists();
+        // Empty / still-syncing shows should always be allowed to retry.
+        if (! $emptyShow && ! Cache::add($key, true, now()->addMinutes(5))) {
             return ApiResponse::error('RATE_LIMITED', 'This show was refreshed recently.', 429);
         }
+        Cache::forget('show-hydrate:'.$show->id);
         $show->feedState()->updateOrCreate([], [
             'state' => 'pending',
             'next_poll_at' => now(),
             'last_error' => null,
         ]);
-        HydrateRssFeed::dispatch($show->id);
+        $this->dispatchShowHydration($show, preferInline: $emptyShow);
 
         return ApiResponse::success([
             'queued' => true,
@@ -491,33 +513,68 @@ final class CatalogController extends Controller
 
     private function ensureRssHydrationQueued(Show $show): void
     {
-        $state = $show->feedState?->state;
+        $feedState = $show->feedState;
+        $state = $feedState?->state;
         $hasEpisodes = $show->episodes()->exists();
+        $stuckSince = now()->subMinutes(5);
+        $updatedAt = $feedState?->updated_at;
+        $isStuck = in_array($state, ['pending', 'running'], true)
+            && ($updatedAt === null || $updatedAt->lte($stuckSince));
 
         // pending = explicit hydrate request (discovery / refresh).
-        // Otherwise only auto-queue when the catalog still has no episodes.
+        // Re-queue stuck pending/running so a dead worker can't strand the UI.
+        // Empty failed/stale shows retry when the user opens or follows again.
         $needsHydration = $state === 'pending'
-            || (! $hasEpisodes && ! in_array($state, ['failed', 'stale', 'running'], true));
+            || $isStuck
+            || (! $hasEpisodes && ! in_array($state, ['running'], true));
 
         if (! $needsHydration) {
             return;
         }
 
         $key = 'show-hydrate:'.$show->id;
+        if ($isStuck || (! $hasEpisodes && in_array($state, ['failed', 'stale'], true))) {
+            Cache::forget($key);
+        }
         if (! Cache::add($key, true, now()->addMinutes(2))) {
             return;
         }
 
         $show->feedState()->updateOrCreate([], [
             'state' => 'pending',
-            'consecutive_failures' => $show->feedState?->consecutive_failures ?? 0,
+            'consecutive_failures' => $feedState?->consecutive_failures ?? 0,
             'next_poll_at' => now(),
+            'last_error' => $isStuck ? null : $feedState?->last_error,
         ]);
 
+        try {
+            $this->dispatchShowHydration($show, preferInline: ! $hasEpisodes);
+            Log::info('catalog.show.hydrate_queued', [
+                'show_id' => $show->id,
+                'feed_state' => $show->feedState?->fresh()?->state,
+                'inline' => ! $hasEpisodes,
+            ]);
+        } catch (\Throwable $exception) {
+            Cache::forget($key);
+            Log::warning('catalog.show.hydrate_dispatch_failed', [
+                'show_id' => $show->id,
+                'message' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Empty shows hydrate after the HTTP response so local/dev works without a
+     * queue worker. Shows that already have episodes stay on the rss queue.
+     */
+    private function dispatchShowHydration(Show $show, bool $preferInline): void
+    {
+        if ($preferInline) {
+            HydrateRssFeed::dispatchAfterResponse($show->id);
+
+            return;
+        }
+
         HydrateRssFeed::dispatch($show->id);
-        Log::info('catalog.show.hydrate_queued', [
-            'show_id' => $show->id,
-            'feed_state' => $show->feedState?->fresh()?->state,
-        ]);
     }
 }

@@ -111,6 +111,36 @@ final class ListeningCoreTest extends TestCase
             ->assertJsonCount(1, 'data');
     }
 
+    public function test_show_episodes_can_be_searched_with_q(): void
+    {
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/searchable.xml', 'title' => 'Searchable Show']);
+        $show->feedState()->create(['state' => 'healthy', 'consecutive_failures' => 0, 'next_poll_at' => now()->addHour()]);
+        Episode::create([
+            'show_id' => $show->id,
+            'guid' => 'hot-takes',
+            'title' => 'Nintendo Direct HOT TAKES',
+            'description' => 'Game news roundup',
+            'audio_url' => 'https://example.com/hot.mp3',
+            'published_at' => now(),
+        ]);
+        Episode::create([
+            'show_id' => $show->id,
+            'guid' => 'other',
+            'title' => 'Weekly recap',
+            'description' => 'Something else',
+            'audio_url' => 'https://example.com/other.mp3',
+            'published_at' => now()->subDay(),
+        ]);
+
+        $this->actingAs($user, 'sanctum')
+            ->getJson('/api/v1/shows/'.$show->id.'/episodes?q='.urlencode('Nintendo'))
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.title', 'Nintendo Direct HOT TAKES')
+            ->assertJsonPath('meta.q', 'Nintendo');
+    }
+
     public function test_episodes_remain_syncing_while_feed_is_running_even_with_rows(): void
     {
         $user = User::factory()->create();

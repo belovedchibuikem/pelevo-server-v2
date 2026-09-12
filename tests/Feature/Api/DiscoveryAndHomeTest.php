@@ -64,6 +64,10 @@ final class DiscoveryAndHomeTest extends TestCase
         $client->postJson('/api/v1/search/voice', ['transcript' => 'Technology'])->assertOk()->assertJsonPath('data.shows.0.title', 'Voice Technology');
         $client->getJson('/api/v1/search/recent')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.query', 'Technology');
         $this->assertSame(1, DB::table('search_history')->where('user_id', $listener->id)->count());
+        $recentId = $client->getJson('/api/v1/search/recent')->json('data.0.id');
+        $client->deleteJson("/api/v1/search/recent/{$recentId}")->assertOk()->assertJsonPath('data.deleted', true);
+        $this->assertSame(0, DB::table('search_history')->where('user_id', $listener->id)->count());
+        $client->getJson('/api/v1/search?q=Technology')->assertOk();
         $client->deleteJson('/api/v1/search/recent')->assertOk();
         $this->assertDatabaseMissing('search_history', ['user_id' => $listener->id]);
     }

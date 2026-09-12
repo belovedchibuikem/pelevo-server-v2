@@ -41,4 +41,14 @@ final class SearchHistoryController extends Controller
 
         return ApiResponse::success(['cleared' => true]);
     }
+
+    public function destroyOne(Request $request, string $id): JsonResponse
+    {
+        $deleted = DB::table('search_history')
+            ->where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->delete();
+
+        return ApiResponse::success(['deleted' => $deleted > 0]);
+    }
 }

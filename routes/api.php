@@ -99,6 +99,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('search', [CatalogController::class, 'search']);
         Route::get('search/recent', [SearchHistoryController::class, 'index']);
         Route::post('search/recent', [SearchHistoryController::class, 'store']);
+        Route::delete('search/recent/{id}', [SearchHistoryController::class, 'destroyOne']);
         Route::delete('search/recent', [SearchHistoryController::class, 'destroy']);
         Route::post('search/voice', [CatalogController::class, 'voiceSearch']);
         Route::get('browse', [BrowseController::class, 'index']);

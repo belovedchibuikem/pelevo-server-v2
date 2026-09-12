@@ -26,6 +26,7 @@ final class PhaseFourFinancialGateTest extends TestCase
 
     public function test_financial_writes_are_closed_until_finance_signoff(): void
     {
+        config()->set('finance.public_enabled', false);
         $user = User::factory()->create();
         $this->actingAs($user, 'sanctum')->postJson('/api/v1/iap/verify', ['store' => 'apple', 'receipt' => 'receipt'])->assertServiceUnavailable()->assertJsonPath('error.code', 'SERVICE_DEGRADED');
     }
