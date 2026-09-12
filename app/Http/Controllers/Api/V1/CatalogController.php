@@ -222,29 +222,21 @@ final class CatalogController extends Controller
 
     private function matchingShows(string $query, int $limit)
     {
-        $boolean = $this->toBooleanFulltextQuery($query);
         $like = '%'.$query.'%';
+        $fulltext = $this->fullTextClause(['title', 'description', 'author'], $query);
 
         return Show::query()
             ->where('status', 'active')
-            ->where(function ($builder) use ($query, $boolean, $like): void {
-                if ($boolean !== null) {
-                    $builder->whereRaw(
-                        'MATCH(title, description, author) AGAINST(? IN BOOLEAN MODE)',
-                        [$boolean]
-                    );
+            ->where(function ($builder) use ($query, $like, $fulltext): void {
+                if ($fulltext !== null) {
+                    $builder->whereRaw($fulltext['match'], $fulltext['bindings']);
                 }
-                $builder->orWhere('title', 'like', $like)
-                    ->orWhere('description', 'like', $like)
-                    ->orWhere('author', 'like', $like)
-                    ->orWhere('rss_url', $query);
+                $this->applyLikeFallback($builder, ['title', 'description', 'author'], $like);
+                $builder->orWhere('rss_url', $query);
             })
             ->when(
-                $boolean !== null,
-                fn ($builder) => $builder->orderByRaw(
-                    'MATCH(title, description, author) AGAINST(? IN BOOLEAN MODE) DESC',
-                    [$boolean]
-                )
+                $fulltext !== null,
+                fn ($builder) => $builder->orderByRaw($fulltext['rank'], $fulltext['bindings'])
             )
             ->orderBy('title')
             ->orderBy('id')
@@ -254,29 +246,22 @@ final class CatalogController extends Controller
 
     private function matchingEpisodes(string $query, int $limit): array
     {
-        $boolean = $this->toBooleanFulltextQuery($query);
         $like = '%'.$query.'%';
+        $fulltext = $this->fullTextClause(['title', 'description'], $query);
 
         return Episode::query()
             ->where('availability', 'available')
-            ->where(function ($builder) use ($boolean, $like): void {
-                if ($boolean !== null) {
-                    $builder->whereRaw(
-                        'MATCH(title, description) AGAINST(? IN BOOLEAN MODE)',
-                        [$boolean]
-                    );
+            ->where(function ($builder) use ($like, $fulltext): void {
+                if ($fulltext !== null) {
+                    $builder->whereRaw($fulltext['match'], $fulltext['bindings']);
                 }
-                $builder->orWhere('title', 'like', $like)
-                    ->orWhere('description', 'like', $like);
+                $this->applyLikeFallback($builder, ['title', 'description'], $like);
             })
             ->whereHas('show', fn ($builder) => $builder->where('status', 'active'))
             ->with('show:id,title,artwork_url,status')
             ->when(
-                $boolean !== null,
-                fn ($builder) => $builder->orderByRaw(
-                    'MATCH(title, description) AGAINST(? IN BOOLEAN MODE) DESC',
-                    [$boolean]
-                )
+                $fulltext !== null,
+                fn ($builder) => $builder->orderByRaw($fulltext['rank'], $fulltext['bindings'])
             )
             ->orderByDesc('published_at')
             ->orderByDesc('id')
@@ -295,26 +280,19 @@ final class CatalogController extends Controller
 
     private function matchingPlaylists(string $query, int $limit): array
     {
-        $boolean = $this->toBooleanFulltextQuery($query);
         $like = '%'.$query.'%';
+        $fulltext = $this->fullTextClause(['title', 'description'], $query);
         $playlistsQuery = DB::table('editorial_playlists')
             ->where('published', true)
-            ->where(function ($builder) use ($boolean, $like): void {
-                if ($boolean !== null) {
-                    $builder->whereRaw(
-                        'MATCH(title, description) AGAINST(? IN BOOLEAN MODE)',
-                        [$boolean]
-                    );
+            ->where(function ($builder) use ($like, $fulltext): void {
+                if ($fulltext !== null) {
+                    $builder->whereRaw($fulltext['match'], $fulltext['bindings']);
                 }
-                $builder->orWhere('title', 'like', $like)
-                    ->orWhere('description', 'like', $like);
+                $this->applyLikeFallback($builder, ['title', 'description'], $like);
             });
 
-        if ($boolean !== null) {
-            $playlistsQuery->orderByRaw(
-                'MATCH(title, description) AGAINST(? IN BOOLEAN MODE) DESC',
-                [$boolean]
-            );
+        if ($fulltext !== null) {
+            $playlistsQuery->orderByRaw($fulltext['rank'], $fulltext['bindings']);
         }
 
         $playlists = $playlistsQuery->orderBy('position')->orderBy('id')->limit($limit)->get(['id', 'title', 'description', 'artwork_url']);
@@ -330,26 +308,104 @@ final class CatalogController extends Controller
     }
 
     /**
+     * @param  list<string>  $columns
+     * @return array{match: string, rank: string, bindings: list<string>}|null
+     */
+    private function fullTextClause(array $columns, string $query): ?array
+    {
+        $driver = DB::connection()->getDriverName();
+
+        if ($driver === 'mysql') {
+            $boolean = $this->toBooleanFulltextQuery($query);
+            if ($boolean === null) {
+                return null;
+            }
+            $columnList = implode(', ', $columns);
+
+            return [
+                'match' => "MATCH({$columnList}) AGAINST(? IN BOOLEAN MODE)",
+                'rank' => "MATCH({$columnList}) AGAINST(? IN BOOLEAN MODE) DESC",
+                'bindings' => [$boolean],
+            ];
+        }
+
+        if ($driver === 'pgsql') {
+            $tsQuery = $this->toPostgresTsQuery($query);
+            if ($tsQuery === null) {
+                return null;
+            }
+            $document = collect($columns)
+                ->map(fn (string $column): string => "coalesce({$column}, '')")
+                ->implode(" || ' ' || ");
+
+            return [
+                'match' => "to_tsvector('english', {$document}) @@ to_tsquery('english', ?)",
+                'rank' => "ts_rank(to_tsvector('english', {$document}), to_tsquery('english', ?)) DESC",
+                'bindings' => [$tsQuery],
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  list<string>  $columns
+     */
+    private function applyLikeFallback($builder, array $columns, string $like): void
+    {
+        $operator = DB::connection()->getDriverName() === 'pgsql' ? 'ilike' : 'like';
+        foreach ($columns as $column) {
+            $builder->orWhere($column, $operator, $like);
+        }
+    }
+
+    /**
      * Build a MySQL BOOLEAN MODE query with prefix matching (+term*).
      */
     private function toBooleanFulltextQuery(string $query): ?string
     {
+        $parts = $this->searchTerms($query);
+        if ($parts === []) {
+            return null;
+        }
+
+        return implode(' ', array_map(fn (string $term): string => '+'.$term.'*', $parts));
+    }
+
+    /**
+     * Build a PostgreSQL tsquery with prefix matching (term:* & term:*).
+     */
+    private function toPostgresTsQuery(string $query): ?string
+    {
+        $parts = $this->searchTerms($query);
+        if ($parts === []) {
+            return null;
+        }
+
+        return implode(' & ', array_map(fn (string $term): string => $term.':*', $parts));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function searchTerms(string $query): array
+    {
         $terms = preg_split('/\s+/u', trim($query), -1, PREG_SPLIT_NO_EMPTY);
         if ($terms === false || $terms === []) {
-            return null;
+            return [];
         }
 
         $parts = [];
         foreach ($terms as $term) {
-            $clean = preg_replace('/[+\-><()~*"@]+/u', '', $term) ?? '';
+            $clean = preg_replace('/[^\p{L}\p{N}_-]+/u', '', $term) ?? '';
             $clean = trim($clean);
             if ($clean === '' || mb_strlen($clean) < 2) {
                 continue;
             }
-            $parts[] = '+'.$clean.'*';
+            $parts[] = $clean;
         }
 
-        return $parts === [] ? null : implode(' ', $parts);
+        return $parts;
     }
 
     private function presentShowCard(Show $show): array
