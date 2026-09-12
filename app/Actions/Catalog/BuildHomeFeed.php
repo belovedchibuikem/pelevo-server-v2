@@ -4,6 +4,7 @@ namespace App\Actions\Catalog;
 
 use App\Integrations\PodcastIndex\PodcastIndexClient;
 use App\Integrations\PodcastIndex\PodcastIndexException;
+use App\Support\ArtworkUrl;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
@@ -96,7 +97,7 @@ final class BuildHomeFeed
                 'type' => 'show',
                 'title' => $item->title,
                 'subtitle' => $item->subtitle ?? $item->author ?? null,
-                'artwork_url' => $item->artwork_url ?? null,
+                'artwork_url' => ArtworkUrl::sanitize($item->artwork_url ?? null),
                 'author' => $item->author ?? null,
                 'country_code' => $item->country_code ?? null,
                 'rank' => isset($item->rank) ? (int) $item->rank : ($railKey === 'trending' ? $index + 1 : null),
@@ -108,7 +109,7 @@ final class BuildHomeFeed
                 'type' => 'reel',
                 'title' => $item->title,
                 'subtitle' => $item->subtitle ?? null,
-                'artwork_url' => $item->artwork_url ?? null,
+                'artwork_url' => ArtworkUrl::sanitize($item->artwork_url ?? null),
                 'badge' => $item->badge ?? null,
                 'badge_color' => $item->badge_color ?? null,
                 'viewer_count' => isset($item->viewer_count) ? (int) $item->viewer_count : null,
@@ -134,7 +135,7 @@ final class BuildHomeFeed
             'show_title' => $item->show_title ?? null,
             'subtitle' => $item->show_title ?? null,
             'description' => $description !== '' ? $description : null,
-            'artwork_url' => $item->artwork_url ?? null,
+            'artwork_url' => ArtworkUrl::sanitize($item->artwork_url ?? null),
             'duration_seconds' => $duration,
             'duration_label' => $duration !== null ? $this->formatDuration($duration) : null,
             'position_seconds' => isset($item->position_seconds) ? (int) $item->position_seconds : null,
@@ -493,7 +494,7 @@ final class BuildHomeFeed
                 'type' => 'reel',
                 'title' => $caption !== '' ? $caption : (string) ($row->show_title ?: 'Short'),
                 'subtitle' => $row->display_name ?? $row->author ?? 'Pelevo',
-                'artwork_url' => $row->artwork_url ?? $thumbnails->get($row->id)?->thumbnail_path,
+                'artwork_url' => ArtworkUrl::sanitize($row->artwork_url ?? $thumbnails->get($row->id)?->thumbnail_path),
                 'viewer_count' => $count,
                 'badge' => $trending
                     ? ($count > 0 ? $this->formatCount($count).' plays' : 'Trending')

@@ -4,6 +4,7 @@ namespace App\Actions\Catalog;
 
 use App\Jobs\HydrateRssFeed;
 use App\Models\Show;
+use App\Support\ArtworkUrl;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -37,7 +38,7 @@ final class PersistDiscoveredShow
             $show->fill([
                 'title' => strip_tags((string) ($feed['title'] ?? 'Untitled podcast')),
                 'description' => strip_tags((string) ($feed['description'] ?? '')),
-                'artwork_url' => filter_var($feed['image'] ?? $feed['artwork'] ?? null, FILTER_VALIDATE_URL) ?: null,
+                'artwork_url' => ArtworkUrl::sanitize($feed['image'] ?? $feed['artwork'] ?? null),
                 'author' => strip_tags((string) ($feed['author'] ?? '')),
                 'language' => substr((string) ($feed['language'] ?? ''), 0, 35),
                 'country_code' => preg_match('/^[A-Za-z]{2}$/', (string) ($feed['country'] ?? '')) ? strtoupper((string) $feed['country']) : null,
