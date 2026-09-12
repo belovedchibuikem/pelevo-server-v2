@@ -11,6 +11,7 @@ use App\Jobs\HydrateRssFeed;
 use App\Models\Episode;
 use App\Models\Show;
 use App\Support\ApiResponse;
+use App\Support\ArtworkUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -52,9 +53,17 @@ final class CatalogController extends Controller
                 $merged = collect();
                 $persisted = 0;
                 foreach ($feeds as $feed) {
-                    if ($show = $persist->handle(is_array($feed) ? $feed : [])) {
-                        $merged->put($show->id, $show);
-                        $persisted++;
+                    try {
+                        if ($show = $persist->handle(is_array($feed) ? $feed : [])) {
+                            $merged->put($show->id, $show);
+                            $persisted++;
+                        }
+                    } catch (\Throwable $exception) {
+                        Log::warning('catalog.search.persist_failed', [
+                            'query' => $normalizedQuery,
+                            'feed_id' => is_array($feed) ? ($feed['id'] ?? null) : null,
+                            'message' => $exception->getMessage(),
+                        ]);
                     }
                 }
                 // Prefer Podcast Index hits by id — do not re-filter with LIKE, which drops
@@ -72,6 +81,13 @@ final class CatalogController extends Controller
                     'returned' => $shows->count(),
                 ]);
             } catch (PodcastIndexException $exception) {
+                $freshness = 'stale';
+                Log::warning('catalog.search.podcast_index_failed', [
+                    'query' => $normalizedQuery,
+                    'preview' => $preview,
+                    'message' => $exception->getMessage(),
+                ]);
+            } catch (\Throwable $exception) {
                 $freshness = 'stale';
                 Log::warning('catalog.search.podcast_index_failed', [
                     'query' => $normalizedQuery,
@@ -291,12 +307,14 @@ final class CatalogController extends Controller
             ->get()
             ->map(fn (Episode $episode): array => [
                 'id' => $episode->id,
-                'title' => $episode->title,
+                'title' => $this->nonEmptyText($episode->title, 'Untitled episode'),
                 'show_id' => $episode->show_id,
-                'show_title' => $episode->show?->title,
-                'artwork_url' => $episode->show?->artwork_url,
+                'show_title' => $this->nullableText($episode->show?->title),
+                'artwork_url' => ArtworkUrl::sanitize($episode->show?->artwork_url),
                 'published_at' => optional($episode->published_at)?->toIso8601String(),
-                'duration_seconds' => $episode->duration_seconds,
+                'duration_seconds' => is_numeric($episode->duration_seconds)
+                    ? max(0, (int) $episode->duration_seconds)
+                    : null,
             ])->values()->all();
     }
 
@@ -322,9 +340,9 @@ final class CatalogController extends Controller
 
         return $playlists->map(fn (object $playlist): array => [
             'id' => $playlist->id,
-            'title' => $playlist->title,
-            'description' => $playlist->description,
-            'artwork_url' => $playlist->artwork_url,
+            'title' => $this->nonEmptyText($playlist->title, 'Untitled playlist'),
+            'description' => $this->nullableText($playlist->description),
+            'artwork_url' => ArtworkUrl::sanitize($playlist->artwork_url),
             'item_count' => (int) ($counts[$playlist->id] ?? 0),
         ])->values()->all();
     }
@@ -436,10 +454,10 @@ final class CatalogController extends Controller
 
         return [
             'id' => $show->id,
-            'title' => $show->title,
-            'author' => $show->author,
-            'artwork_url' => $show->artwork_url,
-            'description' => $show->description,
+            'title' => $this->nonEmptyText($show->title, 'Untitled podcast'),
+            'author' => $this->nullableText($show->author),
+            'artwork_url' => ArtworkUrl::sanitize($show->artwork_url),
+            'description' => $this->nullableText($show->description),
             'following' => $userId !== null && DB::table('follows')->where('user_id', $userId)->where('show_id', $show->id)->exists(),
         ];
     }
@@ -576,5 +594,22 @@ final class CatalogController extends Controller
         }
 
         HydrateRssFeed::dispatch($show->id);
+    }
+
+    private function nonEmptyText(mixed $value, string $fallback): string
+    {
+        $text = trim(strip_tags((string) ($value ?? '')));
+
+        return $text !== '' ? $text : $fallback;
+    }
+
+    private function nullableText(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        $text = trim(strip_tags((string) $value));
+
+        return $text !== '' ? $text : null;
     }
 }

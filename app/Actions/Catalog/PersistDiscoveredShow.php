@@ -37,10 +37,10 @@ final class PersistDiscoveredShow
             $show ??= new Show(['rss_url' => $rssUrl]);
 
             $show->fill([
-                'title' => strip_tags((string) ($feed['title'] ?? 'Untitled podcast')),
+                'title' => $this->nonEmptyTitle($feed['title'] ?? null),
                 'description' => strip_tags((string) ($feed['description'] ?? '')),
                 'artwork_url' => ArtworkUrl::sanitize($feed['image'] ?? $feed['artwork'] ?? null),
-                'author' => strip_tags((string) ($feed['author'] ?? '')),
+                'author' => $this->nullableAuthor($feed['author'] ?? null),
                 'language' => substr((string) ($feed['language'] ?? ''), 0, 35),
                 'country_code' => preg_match('/^[A-Za-z]{2}$/', (string) ($feed['country'] ?? '')) ? strtoupper((string) $feed['country']) : null,
                 'explicit' => filter_var($feed['explicit'] ?? false, FILTER_VALIDATE_BOOL) ? 'explicit' : 'clean',
@@ -66,5 +66,19 @@ final class PersistDiscoveredShow
 
             return $show;
         }, 3);
+    }
+
+    private function nonEmptyTitle(mixed $value): string
+    {
+        $title = trim(strip_tags((string) ($value ?? '')));
+
+        return $title !== '' ? $title : 'Untitled podcast';
+    }
+
+    private function nullableAuthor(mixed $value): ?string
+    {
+        $author = trim(strip_tags((string) ($value ?? '')));
+
+        return $author !== '' ? $author : null;
     }
 }
