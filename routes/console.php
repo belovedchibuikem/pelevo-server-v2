@@ -39,6 +39,12 @@ Schedule::call(function (): void {
 
 Schedule::command('catalog:poll-feeds')->name('rss-poll-due-feeds')->everyFiveMinutes()->onOneServer()->withoutOverlapping(10);
 
+Schedule::command('podcast-index:sync-categories')
+    ->name('podcast-index-sync-categories')
+    ->dailyAt('03:15')
+    ->onOneServer()
+    ->withoutOverlapping(30);
+
 Schedule::job(new ExpireClaims, 'claims')
     ->name('expire-creator-claims')
     ->hourly()

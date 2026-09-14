@@ -31,6 +31,14 @@ final class PodcastIndexClient
     }
 
     /**
+     * @return array{status?: string, feeds?: list<array{id?: int|string, name?: string}>, count?: int}
+     */
+    public function categoriesList(): array
+    {
+        return $this->get('categories/list', []);
+    }
+
+    /**
      * Fetch one page of episodes for a Podcast Index feed id.
      *
      * Best practice: keep max modest (default 100, hard cap 1000), use `since`

@@ -16,7 +16,17 @@ final class InvalidateDiscoveryCache
 
     public function public(): void
     {
-        foreach (['home:discover:v1', 'home:charts:v1', 'home:playlists:v1', 'browse:index:v1'] as $key) {
+        foreach ([
+            'home:discover:v1',
+            'home:discover:v2',
+            'home:charts:v1',
+            'home:charts:v2',
+            'home:playlists:v1',
+            'home:playlists:v2',
+            'browse:index:v1',
+            'browse:index:v2',
+            'browse:index:v3',
+        ] as $key) {
             Cache::forget($key);
         }
     }
