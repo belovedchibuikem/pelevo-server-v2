@@ -59,6 +59,9 @@ Route::prefix('v1')->group(function (): void {
     Route::get('cms/about', [SupportController::class, 'about']);
     Route::get('cms/guidelines', [SupportController::class, 'guidelines']);
     Route::get('cms/{slug}', [SupportController::class, 'cms'])->whereIn('slug', ['terms', 'privacy']);
+    Route::get('s/{token}', [\App\Http\Controllers\ShareRedirectController::class, 'resolve'])
+        ->where('token', '[A-Za-z0-9]{16,64}')
+        ->middleware('throttle:60,1');
     Route::middleware('throttle:auth')->group(function (): void {
         Route::post('auth/register', [AuthController::class, 'register']);
         Route::post('auth/login', [AuthController::class, 'login']);

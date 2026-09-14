@@ -26,6 +26,7 @@ use App\Http\Controllers\Admin\SupportWorkspaceController;
 use App\Http\Controllers\Admin\UserOperationsController;
 use App\Http\Controllers\Admin\WorkspaceToolsController;
 use App\Http\Controllers\MarketingController;
+use App\Http\Controllers\ShareRedirectController;
 use App\Http\Controllers\WebhookController;
 use Illuminate\Support\Facades\Route;
 
@@ -36,6 +37,24 @@ Route::get('/terms', [MarketingController::class, 'terms'])->name('terms');
 Route::get('/contact', [MarketingController::class, 'contact'])->name('contact');
 Route::post('/contact', [MarketingController::class, 'submitContact'])->middleware('throttle:contact')->name('contact.store');
 Route::get('/operations/health', [OperationsController::class, 'readiness'])->middleware('throttle:60,1')->name('operations.health');
+
+Route::get('/s/{token}', [ShareRedirectController::class, 'show'])
+    ->where('token', '[A-Za-z0-9]{16,64}')
+    ->middleware('throttle:60,1')
+    ->name('share.open');
+
+Route::get('/episodes/{episode}', [ShareRedirectController::class, 'episode'])
+    ->whereUlid('episode')
+    ->middleware('throttle:60,1')
+    ->name('share.episode');
+Route::get('/shows/{show}', [ShareRedirectController::class, 'showSubject'])
+    ->whereUlid('show')
+    ->middleware('throttle:60,1')
+    ->name('share.show');
+Route::get('/reels/{reel}', [ShareRedirectController::class, 'reel'])
+    ->whereUlid('reel')
+    ->middleware('throttle:60,1')
+    ->name('share.reel');
 
 Route::post('/webhooks/v1/{provider}', WebhookController::class)->whereIn('provider', ['paystack', 'flutterwave', 'apple', 'google']);
 

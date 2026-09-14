@@ -1,0 +1,21 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "TEAMID.com.Podemeraldltd.pelevo",
+        "paths": [
+          "/s/*",
+          "/episodes/*",
+          "/shows/*",
+          "/reels/*"
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": [
+      "TEAMID.com.Podemeraldltd.pelevo"
+    ]
+  }
+}

@@ -59,7 +59,10 @@ final class EarnController extends Controller
         if (! config('finance.public_enabled')) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Earn is awaiting finance sign-off.', 503);
         }
-        $device = Device::where('user_id', $request->user()->id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->firstOrFail();
+        $device = Device::where('user_id', $request->user()->id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->first();
+        if (! $device) {
+            return ApiResponse::error('FORBIDDEN', 'A registered active device is required for Earn.', 403);
+        }
         if (DB::table('earn_awards')->where('user_id', $request->user()->id)->where('episode_id', $episode->id)->where('locked_until', '>', now())->exists()) {
             return ApiResponse::error('EPISODE_LOCKED', 'This episode remains locked for Earn.', 409);
         }
