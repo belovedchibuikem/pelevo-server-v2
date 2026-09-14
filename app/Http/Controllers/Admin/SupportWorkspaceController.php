@@ -128,7 +128,7 @@ class SupportWorkspaceController extends Controller
 
     private function allowedLinks(Request $request): array
     {
-        $permissions = DB::table('admin_role')->join('permission_role', 'permission_role.role_id', '=', 'admin_role.role_id')->join('permissions', 'permissions.id', '=', 'permission_role.permission_id')->where('admin_role.admin_id', $request->user('admin')->id)->pluck('permissions.name');
+        $permissions = \App\Support\AdminAccess::permissions($request->user('admin'));
 
         return array_filter(self::LINK_TYPES, fn (array $type): bool => $permissions->contains($type[2]));
     }

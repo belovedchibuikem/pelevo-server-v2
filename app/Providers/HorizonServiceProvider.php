@@ -2,7 +2,6 @@
 
 namespace App\Providers;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Laravel\Horizon\Horizon;
 use Laravel\Horizon\HorizonApplicationServiceProvider;
@@ -31,12 +30,7 @@ class HorizonServiceProvider extends HorizonApplicationServiceProvider
         Gate::define('viewHorizon', function (): bool {
             $admin = auth('admin')->user();
 
-            return $admin !== null && DB::table('admin_role')
-                ->join('permission_role', 'permission_role.role_id', '=', 'admin_role.role_id')
-                ->join('permissions', 'permissions.id', '=', 'permission_role.permission_id')
-                ->where('admin_role.admin_id', $admin->id)
-                ->where('permissions.name', 'audit.view')
-                ->exists();
+            return \App\Support\AdminAccess::allows($admin, 'audit.view');
         });
     }
 }

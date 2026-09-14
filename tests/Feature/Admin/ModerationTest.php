@@ -28,7 +28,7 @@ final class ModerationTest extends TestCase
 
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->putJson("/api/admin/v1/reels/{$reelId}/moderation", $payload)->assertForbidden();
         $role = DB::table('roles')->insertGetId(['name' => 'moderator-test', 'created_at' => now(), 'updated_at' => now()]);
-        $permission = DB::table('permissions')->insertGetId(['name' => 'moderation.act', 'created_at' => now(), 'updated_at' => now()]);
+        $permission = DB::table('permissions')->where('name', 'moderation.act')->value('id') ?: DB::table('permissions')->insertGetId(['name' => 'moderation.act', 'created_at' => now(), 'updated_at' => now()]);
         DB::table('admin_role')->insert(['admin_id' => $admin->id, 'role_id' => $role]);
         DB::table('permission_role')->insert(['role_id' => $role, 'permission_id' => $permission]);
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->get('/admin/moderation')->assertOk();

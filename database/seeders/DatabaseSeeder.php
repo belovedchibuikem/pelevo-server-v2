@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\Admin;
 use App\Models\ConfigurationVersion;
 use App\Models\GiftType;
+use App\Support\AdminAccess;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
@@ -60,19 +61,7 @@ class DatabaseSeeder extends Seeder
             DB::table('home_modules')->insertOrIgnore(['id' => (string) Str::ulid(), 'key' => $key, 'title' => $title, 'subtitle' => $subtitle, 'kind' => $kind, 'source' => $source, 'position' => $position, 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
         }
 
-        foreach (['superadmin', 'support', 'moderator', 'finance', 'catalog_editor', 'analyst'] as $role) {
-            DB::table('roles')->insertOrIgnore(['name' => $role, 'created_at' => now(), 'updated_at' => now()]);
-        }
-        foreach (['users.view', 'users.suspend', 'catalog.write', 'claims.decide', 'moderation.act', 'finance.view', 'finance.adjust', 'payouts.approve', 'settings.write', 'broadcast.send', 'audit.view', 'ai.manage', 'operations.manage'] as $permission) {
-            DB::table('permissions')->insertOrIgnore(['name' => $permission, 'created_at' => now(), 'updated_at' => now()]);
-        }
-        $matrix = ['support' => ['users.view'], 'moderator' => ['moderation.act'], 'catalog_editor' => ['catalog.write', 'claims.decide'], 'finance' => ['finance.view', 'finance.adjust', 'payouts.approve'], 'analyst' => [], 'superadmin' => ['users.view', 'users.suspend', 'catalog.write', 'claims.decide', 'moderation.act', 'finance.view', 'finance.adjust', 'payouts.approve', 'settings.write', 'broadcast.send', 'audit.view', 'ai.manage', 'operations.manage']];
-        foreach ($matrix as $role => $permissions) {
-            $roleId = DB::table('roles')->where('name', $role)->value('id');
-            foreach ($permissions as $permission) {
-                DB::table('permission_role')->insertOrIgnore(['role_id' => $roleId, 'permission_id' => DB::table('permissions')->where('name', $permission)->value('id')]);
-            }
-        }
+        AdminAccess::ensureRbac();
 
         if (! app()->environment('testing')) {
             $this->seedLocalOperator();
@@ -87,12 +76,6 @@ class DatabaseSeeder extends Seeder
             ['email' => $email],
             ['name' => 'Pelevo Operator', 'password' => $password, 'status' => 'active'],
         );
-        $roleId = DB::table('roles')->where('name', 'superadmin')->value('id');
-        if ($roleId) {
-            DB::table('admin_role')->insertOrIgnore([
-                'admin_id' => $admin->id,
-                'role_id' => $roleId,
-            ]);
-        }
+        AdminAccess::attachRole($admin->id);
     }
 }

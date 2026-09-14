@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\GenerateAdminExport;
+use App\Support\AdminAccess;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,8 +19,7 @@ final class WorkspaceToolsController extends Controller
 
     public static function allowed(string $adminId, string $module): bool
     {
-        return isset(self::PERMISSIONS[$module]) && DB::table('admins')->where('id', $adminId)->where('status', 'active')->exists()
-            && DB::table('admin_role')->join('permission_role', 'permission_role.role_id', '=', 'admin_role.role_id')->join('permissions', 'permissions.id', '=', 'permission_role.permission_id')->where('admin_role.admin_id', $adminId)->where('permissions.name', self::PERMISSIONS[$module])->exists();
+        return isset(self::PERMISSIONS[$module]) && AdminAccess::allowsId($adminId, self::PERMISSIONS[$module]);
     }
 
     public function index(Request $request, string $module): JsonResponse

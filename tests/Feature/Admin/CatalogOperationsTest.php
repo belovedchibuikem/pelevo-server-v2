@@ -25,7 +25,7 @@ final class CatalogOperationsTest extends TestCase
 
         $this->actingAs($admin, 'admin')->withSession($session)->get('/admin/catalog')->assertForbidden();
         $role = DB::table('roles')->insertGetId(['name' => 'catalog-test', 'created_at' => now(), 'updated_at' => now()]);
-        $permission = DB::table('permissions')->insertGetId(['name' => 'catalog.write', 'created_at' => now(), 'updated_at' => now()]);
+        $permission = DB::table('permissions')->where('name', 'catalog.write')->value('id') ?: DB::table('permissions')->insertGetId(['name' => 'catalog.write', 'created_at' => now(), 'updated_at' => now()]);
         DB::table('admin_role')->insert(['admin_id' => $admin->id, 'role_id' => $role]);
         DB::table('permission_role')->insert(['role_id' => $role, 'permission_id' => $permission]);
 

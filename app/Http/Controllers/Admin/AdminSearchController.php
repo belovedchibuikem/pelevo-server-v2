@@ -18,8 +18,7 @@ class AdminSearchController extends Controller
     public function __invoke(Request $request): JsonResponse
     {
         $term = $request->validate(['q' => ['required', 'string', 'min:2', 'max:100']])['q'];
-        $adminId = $request->user('admin')->id;
-        $permissions = DB::table('admin_role')->join('permission_role', 'permission_role.role_id', '=', 'admin_role.role_id')->join('permissions', 'permissions.id', '=', 'permission_role.permission_id')->where('admin_role.admin_id', $adminId)->pluck('permissions.name');
+        $permissions = \App\Support\AdminAccess::permissions($request->user('admin'));
         $can = fn (string $permission): bool => $permissions->contains($permission);
         $groups = [];
 

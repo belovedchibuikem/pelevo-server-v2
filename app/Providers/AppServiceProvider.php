@@ -11,9 +11,9 @@ use App\Services\FfmpegMediaTranscoder;
 use App\Services\FfprobeMediaProbe;
 use App\Services\HttpSocialIdentityVerifier;
 use App\Services\IntegrationSettings;
+use App\Support\AdminAccess;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
@@ -66,14 +66,7 @@ class AppServiceProvider extends ServiceProvider
                 'name' => $admin->name,
                 'environment' => app()->environment(),
                 'email' => $admin->email,
-                'permissions' => DB::table('admin_role')
-                    ->join('permission_role', 'permission_role.role_id', '=', 'admin_role.role_id')
-                    ->join('permissions', 'permissions.id', '=', 'permission_role.permission_id')
-                    ->where('admin_role.admin_id', $admin->id)
-                    ->distinct()
-                    ->orderBy('permissions.name')
-                    ->pluck('permissions.name')
-                    ->all(),
+                'permissions' => AdminAccess::permissions($admin)->all(),
             ];
         });
     }

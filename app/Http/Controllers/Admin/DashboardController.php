@@ -32,7 +32,7 @@ final class DashboardController extends Controller
             'operations' => ['queued_jobs' => DB::table('jobs')->count(), 'failed_jobs' => DB::table('failed_jobs')->count(), 'pending_uploads' => DB::table('media_uploads')->whereIn('state', ['pending', 'uploaded', 'processing'])->count(), 'active_admins' => Admin::where('status', 'active')->count()],
         ]);
 
-        $permissions = DB::table('admin_role')->join('permission_role', 'permission_role.role_id', '=', 'admin_role.role_id')->join('permissions', 'permissions.id', '=', 'permission_role.permission_id')->where('admin_role.admin_id', $request->user('admin')->id)->pluck('permissions.name');
+        $permissions = \App\Support\AdminAccess::permissions($request->user('admin'));
         $charts = [];
         $definitions = [
             ['New accounts', 'users', null, 'users.view', '/admin/users?view=directory'],

@@ -29,6 +29,15 @@ final class EnsureAdminCommandTest extends TestCase
             ->where('admin_id', $admin->id)
             ->where('role_id', DB::table('roles')->where('name', 'superadmin')->value('id'))
             ->exists());
+        $this->assertEqualsCanonicalizing(
+            \App\Support\AdminAccess::PERMISSIONS,
+            DB::table('permission_role')
+                ->join('permissions', 'permissions.id', '=', 'permission_role.permission_id')
+                ->join('roles', 'roles.id', '=', 'permission_role.role_id')
+                ->where('roles.name', 'superadmin')
+                ->pluck('permissions.name')
+                ->all(),
+        );
     }
 
     public function test_updates_existing_password(): void
