@@ -17,9 +17,12 @@ export default function Profile({ admin, sessions, currentSessionId }: Props) {
     <Head title="Profile and security" />
     <div className="mx-auto max-w-4xl">
       <nav aria-label="Breadcrumb" className="text-xs font-semibold uppercase tracking-[.16em] text-teal-700">Platform / Account</nav>
-      <header className="mt-3">
-        <h1 className="text-3xl font-semibold tracking-tight">Profile and security</h1>
-        <p className="mt-2 text-sm text-slate-500">Signed in as {admin.email}. Password changes revoke nothing until you save a new password. Session revocation is immediate.</p>
+      <header className="mt-3 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Profile and security</h1>
+          <p className="mt-2 text-sm text-slate-500">Signed in as {admin.email}. Password changes revoke nothing until you save a new password. Session revocation is immediate.</p>
+        </div>
+        <button type="button" onClick={() => router.post('/admin/logout')} className="rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-800 hover:border-rose-400 hover:bg-rose-50">Sign out</button>
       </header>
       {success && <p role="status" className="mt-5 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">{success}</p>}
 

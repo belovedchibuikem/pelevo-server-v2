@@ -135,3 +135,9 @@ test('canonical show evidence and support replies work from their workspaces', a
   await expect(page.getByRole('status')).toContainText('Ticket updated. Audit reference:');
   await expect(page.getByText('Please reopen your library and resume the episode.', { exact: true }).first()).toBeVisible();
 });
+
+test('header sign out returns to the admin login screen', async ({ page }) => {
+  await page.locator('header').getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page).toHaveURL(/\/admin\/login/);
+  await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
+});

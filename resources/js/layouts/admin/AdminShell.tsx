@@ -89,6 +89,11 @@ export default function AdminShell({ children }: { children: ReactNode }) {
     localStorage.setItem('pelevo.admin.nav.collapsed', value ? '0' : '1');
     return !value;
   });
+  const signOut = () => {
+    setPaletteOpen(false);
+    setDrawerOpen(false);
+    router.post('/admin/logout');
+  };
 
   return <div className={`pelevo-admin min-h-screen bg-slate-50 text-slate-900 lg:grid ${collapsed ? 'lg:grid-cols-[84px_1fr]' : 'lg:grid-cols-[268px_1fr]'}`}>
     {drawerOpen && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" onClick={() => setDrawerOpen(false)} />}
@@ -106,6 +111,11 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           })}</div>
         </section>)}
       </nav>
+      <div className="border-t border-slate-200 p-3">
+        <button type="button" onClick={signOut} title="Sign out" className={`min-h-10 w-full rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-rose-50 hover:text-rose-800 ${collapsed ? 'text-center lg:px-1 lg:text-[10px]' : 'text-left'}`}>
+          Sign out
+        </button>
+      </div>
     </aside>
     <div className="min-w-0" inert={paletteOpen || (!desktop && drawerOpen)}>
       <header className="sticky top-0 z-20 flex h-18 items-center gap-3 border-b border-slate-200 bg-white/90 px-4 backdrop-blur sm:px-6">
@@ -114,6 +124,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
         <ThemeToggle />
         <span className="hidden rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold text-amber-800 sm:inline">{adminAuth?.environment?.toUpperCase() ?? 'UNKNOWN'}</span>
         <Link aria-label="Profile and security" title={adminAuth?.email} className="grid size-9 place-items-center rounded-full bg-teal-400 font-bold text-slate-950" href="/admin/profile">{adminAuth?.name?.charAt(0).toUpperCase() || 'A'}</Link>
+        <button type="button" onClick={signOut} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800">Sign out</button>
       </header>
       <div className="min-w-0">{children}</div>
     </div>
@@ -121,7 +132,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
       <section ref={paletteRef} className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl" onMouseDown={event => event.stopPropagation()}>
         <input aria-label="Search admin routes and records" autoFocus className="w-full border-0 border-b border-slate-200 bg-transparent px-5 py-4 text-base outline-none placeholder:text-slate-400" placeholder="Search admin routes…" value={query} onChange={event => setQuery(event.target.value)} />
         <div className="max-h-[55vh] overflow-y-auto p-2">{filtered.length > 0 && <p className="px-4 pb-1 pt-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Admin routes</p>}{filtered.map(item => <Link className="flex justify-between rounded-xl px-4 py-3 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900" href={item.href} key={item.label} onClick={() => setPaletteOpen(false)}><span>{item.label}</span><small className="text-slate-500">{item.group}</small></Link>)}{searching && <p className="px-4 py-3 text-sm text-slate-500">Searching authorized records…</p>}{searchGroups.map(group => <section key={group.label}><p className="px-4 pb-1 pt-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">{group.label}</p>{group.items.map(item => <Link className="flex items-center justify-between gap-4 rounded-xl px-4 py-3 text-sm hover:bg-slate-100" href={item.href} key={`${group.label}-${item.href}`} onClick={() => setPaletteOpen(false)}><span className="min-w-0 truncate">{item.title}</span><small className="shrink-0 text-slate-500">{item.subtitle}</small></Link>)}</section>)}{!searching && filtered.length === 0 && searchGroups.length === 0 && <p className="p-8 text-center text-sm text-slate-500">No authorized route or record matches this search.</p>}</div>
-        <div className="flex justify-between border-t border-slate-200 px-4 py-3 text-[11px] text-slate-500"><span>Permission-filtered route and entity search</span><button onClick={() => { setPaletteOpen(false); router.post('/admin/logout'); }}>Sign out</button></div>
+        <div className="flex justify-between border-t border-slate-200 px-4 py-3 text-[11px] text-slate-500"><span>Permission-filtered route and entity search</span><button type="button" onClick={signOut}>Sign out</button></div>
       </section>
     </div>}
   </div>;
