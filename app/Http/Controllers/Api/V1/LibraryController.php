@@ -24,6 +24,7 @@ final class LibraryController extends Controller
             'liked_count' => DB::table('episode_reactions')->where('user_id', $userId)->whereIn('reaction', ['like', 'love'])->count(),
             'shows_count' => DB::table('follows')->where('user_id', $userId)->count(),
             'downloads_count' => DB::table('downloads')->where('user_id', $userId)->count(),
+            'recent_count' => DB::table('playback_progress')->where('user_id', $userId)->count(),
             'playlists' => $this->presentedPlaylists($playlists),
             'collections' => $this->presentedCollections($collections),
         ]);

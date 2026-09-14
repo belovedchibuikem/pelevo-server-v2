@@ -14,10 +14,15 @@ use Illuminate\Support\Str;
 
 final class BuildHomeFeed
 {
+    /** @var array{title: string, subtitle: string}|null */
+    private ?array $becauseInspiration = null;
+
     public function handle(string $userId): array
     {
+        $datasets = $this->datasets($userId);
+
         return $this->activeModules()
-            ->map(fn (array $module): array => $this->present($module, $this->datasets($userId)[$module['key']] ?? collect(), $userId))
+            ->map(fn (array $module): array => $this->present($module, $datasets[$module['key']] ?? collect(), $userId))
             ->values()
             ->all();
     }
@@ -70,7 +75,7 @@ final class BuildHomeFeed
 
         return match ($type) {
             'mood' => [
-                'id' => $item->id,
+                'id' => (string) $item->id,
                 'type' => 'mood',
                 'title' => $item->title,
                 'slug' => $item->slug ?? null,
@@ -79,13 +84,13 @@ final class BuildHomeFeed
                 'color' => $item->color ?? null,
             ],
             'category' => [
-                'id' => $item->id,
+                'id' => (string) $item->id,
                 'type' => 'category',
                 'title' => $item->title,
                 'slug' => $item->slug ?? null,
             ],
             'browse' => [
-                'id' => $item->id,
+                'id' => (string) $item->id,
                 'type' => 'browse',
                 'title' => $item->title,
                 'slug' => $item->slug ?? null,
@@ -93,7 +98,7 @@ final class BuildHomeFeed
                 'color' => $item->color ?? null,
             ],
             'show' => [
-                'id' => $item->id,
+                'id' => (string) $item->id,
                 'type' => 'show',
                 'title' => $item->title,
                 'subtitle' => $item->subtitle ?? $item->author ?? null,
@@ -105,7 +110,7 @@ final class BuildHomeFeed
                 'play_count_label' => isset($item->play_count) ? $this->formatCount((int) $item->play_count) : null,
             ],
             'reel' => [
-                'id' => $item->id,
+                'id' => (string) $item->id,
                 'type' => 'reel',
                 'title' => $item->title,
                 'subtitle' => $item->subtitle ?? null,
@@ -128,7 +133,7 @@ final class BuildHomeFeed
         $description = isset($item->description) ? Str::limit(strip_tags((string) $item->description), 120, '') : null;
 
         return [
-            'id' => $item->id,
+            'id' => (string) $item->id,
             'type' => 'episode',
             'title' => $item->title,
             'show_id' => $item->show_id ?? null,
@@ -162,11 +167,11 @@ final class BuildHomeFeed
             'pick_for_today' => $this->withPickReason($userId, $madeForYou->take(1)),
             'continue_listening' => $this->continueListening($userId),
             'made_for_you' => $madeForYou,
-            'quick_listen' => $this->quickListen($filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
-            'because_you_listened' => $this->affinityEpisodes($userId, $this->trendingEpisodesFallback(), true),
+            'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
+            'because_you_listened' => $this->becauseYouListened($userId, $this->trendingEpisodesFallback()),
             'trending' => $trendingShows,
             'new_from_following' => $this->following($userId),
-            'african_voices' => $this->africanVoiceShows($filters['country'] ?? null),
+            'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
             'try_something_new' => $this->unexploredCategories($userId),
             'explore_by_topic' => $this->categories(30),
             'trending_shorts' => $this->trendingShorts(),
@@ -199,7 +204,7 @@ final class BuildHomeFeed
             ->get();
     }
 
-    private function quickListen(?int $minDuration = null, ?int $maxDuration = null): Collection
+    private function quickListen(string $userId, ?int $minDuration = null, ?int $maxDuration = null): Collection
     {
         $minimum = $minDuration ?? 300;
         $query = $this->episodes()->where('episodes.duration_seconds', '>=', $minimum);
@@ -209,14 +214,16 @@ final class BuildHomeFeed
             $query->where('episodes.duration_seconds', '<=', 1200);
         }
 
-        return $query
+        $pool = $query
             ->orderByDesc('episodes.published_at')
             ->orderByDesc('episodes.id')
-            ->limit(30)
+            ->limit(80)
             ->get();
+
+        return $this->rotateCollection($pool, $userId, 'quick_listen:'.$minimum.':'.($maxDuration ?? 'open'), 20);
     }
 
-    private function africanVoiceShows(?string $country = null): Collection
+    private function africanVoiceShows(string $userId, ?string $country = null): Collection
     {
         $countries = ['NG', 'GH', 'KE', 'ZA', 'UG', 'TZ', 'RW', 'ET', 'CM', 'SN', 'CI'];
         $selected = is_string($country) ? strtoupper($country) : null;
@@ -226,21 +233,30 @@ final class BuildHomeFeed
             ->whereIn('shows.country_code', $targetCountries)
             ->orderByDesc('shows.updated_at')
             ->orderByDesc('shows.id')
-            ->limit(30)
+            ->limit(80)
             ->get();
 
-        if ($shows->isNotEmpty()) {
-            return $shows;
+        if ($shows->isEmpty()) {
+            $query = match ($selected) {
+                'NG' => 'nigeria podcast',
+                'GH' => 'ghana podcast',
+                'KE' => 'kenya podcast',
+                default => 'africa podcast',
+            };
+
+            $shows = $this->discoverShows($query, 24, $selected);
         }
 
-        $query = match ($selected) {
-            'NG' => 'nigeria podcast',
-            'GH' => 'ghana podcast',
-            'KE' => 'kenya podcast',
-            default => 'africa podcast',
-        };
+        $withArtwork = $shows->filter(fn (object $show): bool => ArtworkUrl::sanitize($show->artwork_url ?? null) !== null)->values();
+        $withoutArtwork = $shows->filter(fn (object $show): bool => ArtworkUrl::sanitize($show->artwork_url ?? null) === null)->values();
+        $rotatedCovers = $this->rotateCollection($withArtwork, $userId, 'african_voices:'.($selected ?? 'all'), 16);
+        if ($rotatedCovers->count() >= 8 || $withoutArtwork->isEmpty()) {
+            return $rotatedCovers;
+        }
 
-        return $this->discoverShows($query, 12, $selected);
+        return $rotatedCovers
+            ->concat($this->rotateCollection($withoutArtwork, $userId, 'african_voices:plain:'.($selected ?? 'all'), 16 - $rotatedCovers->count()))
+            ->values();
     }
 
     private function trendingShows(): Collection
@@ -299,6 +315,244 @@ final class BuildHomeFeed
             ->get();
     }
 
+    private function becauseYouListened(string $userId, Collection $fallback): Collection
+    {
+        $profile = $this->listeningProfile($userId);
+        $this->becauseInspiration = [
+            'title' => $profile['seed_show_title'] !== null
+                ? 'Because You Listened to '.$profile['seed_show_title']
+                : 'Because You Listened',
+            'subtitle' => $profile['seed_topics'] !== []
+                ? 'Related episodes from other podcasts about '.implode(', ', $profile['seed_topics'])
+                : 'Similar episodes from other podcasts you have not finished',
+        ];
+
+        if ($profile['source_show_ids'] === []) {
+            return $fallback->take(20)->values();
+        }
+
+        $candidates = $this->episodes()
+            ->when($profile['listened_episode_ids'] !== [], fn (Builder $query) => $query->whereNotIn('episodes.id', $profile['listened_episode_ids']))
+            ->when($profile['source_show_ids'] !== [], fn (Builder $query) => $query->whereNotIn('episodes.show_id', $profile['source_show_ids']))
+            ->when($profile['category_ids'] !== [], function (Builder $query) use ($profile): void {
+                $query->whereExists(function (Builder $exists) use ($profile): void {
+                    $exists->selectRaw('1')
+                        ->from('category_show')
+                        ->whereColumn('category_show.show_id', 'shows.id')
+                        ->whereIn('category_show.category_id', $profile['category_ids']);
+                });
+            })
+            ->orderByDesc('episodes.published_at')
+            ->orderByDesc('episodes.id')
+            ->limit(150)
+            ->get();
+
+        if ($candidates->isEmpty() && $profile['tokens'] !== []) {
+            $candidates = $this->episodes()
+                ->when($profile['listened_episode_ids'] !== [], fn (Builder $query) => $query->whereNotIn('episodes.id', $profile['listened_episode_ids']))
+                ->when($profile['source_show_ids'] !== [], fn (Builder $query) => $query->whereNotIn('episodes.show_id', $profile['source_show_ids']))
+                ->where(function (Builder $query) use ($profile): void {
+                    foreach ($profile['tokens'] as $token) {
+                        $like = '%'.$token.'%';
+                        $query->orWhere('episodes.title', 'like', $like)
+                            ->orWhere('episodes.description', 'like', $like)
+                            ->orWhere('shows.title', 'like', $like)
+                            ->orWhere('shows.description', 'like', $like);
+                    }
+                })
+                ->orderByDesc('episodes.published_at')
+                ->limit(150)
+                ->get();
+        }
+
+        $ranked = $candidates
+            ->map(function (object $item) use ($profile): object {
+                $haystack = strtolower(trim(($item->title ?? '').' '.($item->description ?? '').' '.($item->show_title ?? '')));
+                $tokenHits = 0;
+                foreach ($profile['tokens'] as $token) {
+                    if ($token !== '' && str_contains($haystack, $token)) {
+                        $tokenHits++;
+                    }
+                }
+
+                $item->recommendation_score = ($profile['category_ids'] !== [] ? 40 : 0) + ($tokenHits * 14);
+                $item->reason = $profile['seed_show_title'] !== null
+                    ? 'Because you listened to '.$profile['seed_show_title']
+                    : 'Because of your recent listening';
+
+                return $item;
+            })
+            ->sortByDesc(fn (object $item): int => (int) $item->recommendation_score)
+            ->unique('show_id')
+            ->take(20)
+            ->values();
+
+        if ($ranked->isNotEmpty()) {
+            return $ranked;
+        }
+
+        return $fallback
+            ->reject(fn (object $item): bool => in_array($item->id, $profile['listened_episode_ids'], true) || in_array($item->show_id, $profile['source_show_ids'], true))
+            ->unique('show_id')
+            ->take(20)
+            ->values();
+    }
+
+    /**
+     * @return array{
+     *     source_show_ids: list<string>,
+     *     category_ids: list<int|string>,
+     *     listened_episode_ids: list<string>,
+     *     tokens: list<string>,
+     *     seed_show_title: string|null,
+     *     seed_topics: list<string>
+     * }
+     */
+    private function listeningProfile(string $userId): array
+    {
+        $plays = DB::table('playback_progress')
+            ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
+            ->join('shows', 'shows.id', '=', 'episodes.show_id')
+            ->where('playback_progress.user_id', $userId)
+            ->orderByDesc('playback_progress.updated_at')
+            ->get([
+                'episodes.id as episode_id',
+                'episodes.show_id',
+                'episodes.title as episode_title',
+                'episodes.description as episode_description',
+                'episodes.duration_seconds',
+                'shows.title as show_title',
+                'playback_progress.completed',
+                'playback_progress.position_seconds',
+                'playback_progress.updated_at',
+            ]);
+
+        $showScores = [];
+        $showTitles = [];
+        $texts = [];
+        foreach ($plays as $play) {
+            $showId = (string) $play->show_id;
+            $playedAt = \Illuminate\Support\Carbon::parse((string) $play->updated_at)->timestamp;
+            $days = max(0, (int) floor((now()->timestamp - $playedAt) / 86400));
+            $recency = (int) round(55 * max(0, 1 - ($days / 21)));
+            $completed = ((int) $play->completed) === 1 ? 32 : 0;
+            $duration = max(1, (int) ($play->duration_seconds ?: 1));
+            $depth = (int) min(18, round(((int) $play->position_seconds / $duration) * 18));
+            $showScores[$showId] = ($showScores[$showId] ?? 0) + $recency + $completed + $depth + 12;
+            $showTitles[$showId] = (string) $play->show_title;
+            $texts[] = (string) $play->episode_title;
+            $texts[] = (string) $play->episode_description;
+            $texts[] = (string) $play->show_title;
+        }
+
+        foreach (DB::table('follows')->where('user_id', $userId)->pluck('show_id') as $showId) {
+            $showScores[(string) $showId] = ($showScores[(string) $showId] ?? 0) + 40;
+        }
+
+        $savedShowIds = DB::table('episode_saves')
+            ->join('episodes', 'episodes.id', '=', 'episode_saves.episode_id')
+            ->where('episode_saves.user_id', $userId)
+            ->pluck('episodes.show_id');
+        foreach ($savedShowIds as $showId) {
+            $showScores[(string) $showId] = ($showScores[(string) $showId] ?? 0) + 36;
+        }
+
+        $shares = DB::table('share_cards')
+            ->where('user_id', $userId)
+            ->whereIn('subject_type', ['episode', 'show'])
+            ->get(['subject_type', 'subject_id']);
+        $sharedEpisodeIds = $shares->where('subject_type', 'episode')->pluck('subject_id');
+        $sharedShowIds = $shares->where('subject_type', 'show')->pluck('subject_id')->map(fn (mixed $id): string => (string) $id);
+        if ($sharedEpisodeIds->isNotEmpty()) {
+            $sharedShowIds = $sharedShowIds->merge(
+                DB::table('episodes')->whereIn('id', $sharedEpisodeIds)->pluck('show_id')->map(fn (mixed $id): string => (string) $id)
+            );
+        }
+        foreach ($sharedShowIds as $showId) {
+            $showScores[(string) $showId] = ($showScores[(string) $showId] ?? 0) + 42;
+        }
+
+        arsort($showScores);
+        $sourceShowIds = array_keys($showScores);
+        foreach ($sourceShowIds as $showId) {
+            if (! isset($showTitles[$showId])) {
+                $title = DB::table('shows')->where('id', $showId)->value('title');
+                if (is_string($title) && $title !== '') {
+                    $showTitles[$showId] = $title;
+                    $texts[] = $title;
+                }
+            }
+        }
+
+        $categoryRows = $sourceShowIds === []
+            ? collect()
+            : DB::table('category_show')
+                ->join('categories', 'categories.id', '=', 'category_show.category_id')
+                ->whereIn('category_show.show_id', $sourceShowIds)
+                ->where('categories.active', true)
+                ->orderBy('categories.position')
+                ->get(['categories.id', 'categories.name', 'category_show.show_id']);
+
+        $seedShowId = $sourceShowIds[0] ?? null;
+        $seedCategoryRows = $seedShowId !== null
+            ? $categoryRows->where('show_id', $seedShowId)
+            : collect();
+        $seedTopics = ($seedCategoryRows->isNotEmpty() ? $seedCategoryRows : $categoryRows)
+            ->pluck('name')
+            ->unique()
+            ->take(3)
+            ->values()
+            ->all();
+
+        return [
+            'source_show_ids' => $sourceShowIds,
+            'category_ids' => $categoryRows->pluck('id')->unique()->values()->all(),
+            'listened_episode_ids' => $plays->pluck('episode_id')->unique()->values()->all(),
+            'tokens' => $this->interestTokens($texts),
+            'seed_show_title' => $seedShowId !== null ? ($showTitles[$seedShowId] ?? null) : null,
+            'seed_topics' => array_values($seedTopics),
+        ];
+    }
+
+    /**
+     * @param  list<string>  $texts
+     * @return list<string>
+     */
+    private function interestTokens(array $texts): array
+    {
+        $stop = [
+            'this', 'that', 'with', 'from', 'your', 'about', 'into', 'have', 'been', 'will',
+            'podcast', 'episode', 'show', 'audio', 'interview', 'talk', 'conversation',
+        ];
+        $counts = [];
+        foreach ($texts as $text) {
+            if ($text === '') {
+                continue;
+            }
+            preg_match_all('/[a-zA-Z]{4,}/', strtolower($text), $matches);
+            foreach ($matches[0] as $word) {
+                if (in_array($word, $stop, true)) {
+                    continue;
+                }
+                $counts[$word] = ($counts[$word] ?? 0) + 1;
+            }
+        }
+        arsort($counts);
+
+        return array_slice(array_keys($counts), 0, 8);
+    }
+
+    private function rotateCollection(Collection $items, string $userId, string $railKey, int $limit): Collection
+    {
+        $seed = $userId.'|'.$railKey.'|'.now()->format('Y-m-d').'|'.intdiv((int) now()->format('G'), 4);
+
+        return $items
+            ->values()
+            ->sortBy(fn (object $item): string => sprintf('%010u', crc32($seed.'|'.$item->id)))
+            ->take($limit)
+            ->values();
+    }
+
     private function affinityEpisodes(string $userId, Collection $fallback, bool $excludePlayed = false): Collection
     {
         $playedEpisodeIds = DB::table('playback_progress')->where('user_id', $userId)->pluck('episode_id');
@@ -346,6 +600,10 @@ final class BuildHomeFeed
      */
     private function inspirationBanner(string $userId): array
     {
+        if ($this->becauseInspiration !== null) {
+            return $this->becauseInspiration;
+        }
+
         $showTitle = DB::table('playback_progress')
             ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
             ->join('shows', 'shows.id', '=', 'episodes.show_id')
@@ -355,37 +613,224 @@ final class BuildHomeFeed
 
         if (is_string($showTitle) && $showTitle !== '') {
             return [
-                'title' => 'Inspired by '.$showTitle,
-                'subtitle' => 'More thoughtful conversations about growth',
+                'title' => 'Because You Listened to '.$showTitle,
+                'subtitle' => 'Related episodes from other podcasts in the same lane',
             ];
         }
 
         return [
-            'title' => 'Inspired by your listening',
-            'subtitle' => 'More shows and episodes in a similar lane',
+            'title' => 'Because You Listened',
+            'subtitle' => 'Similar episodes from other podcasts you have not finished',
         ];
     }
 
     private function unexploredCategories(string $userId): Collection
     {
-        $explored = DB::table('category_show')
+        $this->ensurePodcastIndexCategories();
+
+        $categories = $this->categoryQuery()->get();
+        if ($categories->isEmpty()) {
+            return collect();
+        }
+
+        $exploredIds = $this->exploredCategoryIds($userId);
+        $exploredSlugs = $categories
+            ->filter(fn (object $category): bool => $exploredIds->contains($category->id))
+            ->pluck('slug')
+            ->merge($this->exploredSlugsFromSearch($userId, $categories))
+            ->map(fn (mixed $slug): string => Str::slug((string) $slug))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $blocked = $this->blockedDiscoverySlugs($exploredSlugs);
+        $heroes = $this->discoveryCategorySlugs();
+        $bySlug = $categories->keyBy(fn (object $category): string => (string) $category->slug);
+
+        $picks = collect();
+        foreach ($heroes as $slug) {
+            if (isset($blocked[$slug])) {
+                continue;
+            }
+            $row = $bySlug->get($slug);
+            if ($row !== null) {
+                $picks->push($row);
+            }
+        }
+
+        if ($picks->count() < 8) {
+            foreach ($categories as $row) {
+                if ($picks->count() >= 16) {
+                    break;
+                }
+                $slug = (string) $row->slug;
+                if (isset($blocked[$slug]) || $picks->contains(fn (object $picked): bool => $picked->id === $row->id)) {
+                    continue;
+                }
+                $picks->push($row);
+            }
+        }
+
+        if ($picks->isEmpty()) {
+            $picks = collect($heroes)
+                ->map(fn (string $slug): ?object => $bySlug->get($slug))
+                ->filter()
+                ->values();
+        }
+
+        if ($picks->isEmpty()) {
+            $picks = $categories->values();
+        }
+
+        $count = $picks->count();
+        $offset = $count > 1 ? abs(crc32($userId)) % $count : 0;
+
+        return $picks->slice($offset)->concat($picks->slice(0, $offset))->take(16)->values();
+    }
+
+    private function categories(int $limit): Collection
+    {
+        $this->ensurePodcastIndexCategories();
+
+        return $this->categoryQuery()->limit($limit)->get();
+    }
+
+    private function ensurePodcastIndexCategories(): void
+    {
+        if (DB::table('categories')->where('active', true)->exists()) {
+            return;
+        }
+
+        app(SyncPodcastIndexCategories::class)->handle(invalidateCache: false);
+    }
+
+    /**
+     * @return Collection<int, int|string>
+     */
+    private function exploredCategoryIds(string $userId): Collection
+    {
+        $fromPlayback = DB::table('category_show')
             ->join('episodes', 'episodes.show_id', '=', 'category_show.show_id')
             ->join('playback_progress', 'playback_progress.episode_id', '=', 'episodes.id')
             ->where('playback_progress.user_id', $userId)
             ->distinct()
             ->pluck('category_show.category_id');
 
-        $categories = $this->categoryQuery()
-            ->when($explored->isNotEmpty(), fn (Builder $query) => $query->whereNotIn('categories.id', $explored))
-            ->limit(8)
-            ->get();
+        $fromFollows = DB::table('category_show')
+            ->join('follows', 'follows.show_id', '=', 'category_show.show_id')
+            ->where('follows.user_id', $userId)
+            ->distinct()
+            ->pluck('category_show.category_id');
 
-        return $categories->isNotEmpty() ? $categories : $this->categoryQuery()->limit(8)->get();
+        $fromSaves = DB::table('category_show')
+            ->join('episodes', 'episodes.show_id', '=', 'category_show.show_id')
+            ->join('episode_saves', 'episode_saves.episode_id', '=', 'episodes.id')
+            ->where('episode_saves.user_id', $userId)
+            ->distinct()
+            ->pluck('category_show.category_id');
+
+        return $fromPlayback->merge($fromFollows)->merge($fromSaves)->unique()->values();
     }
 
-    private function categories(int $limit): Collection
+    /**
+     * @param  Collection<int, object>  $categories
+     * @return Collection<int, string>
+     */
+    private function exploredSlugsFromSearch(string $userId, Collection $categories): Collection
     {
-        return $this->categoryQuery()->limit($limit)->get();
+        $queries = DB::table('search_history')
+            ->where('user_id', $userId)
+            ->pluck('query')
+            ->map(fn (mixed $query): string => Str::lower(trim((string) $query)))
+            ->filter(fn (string $query): bool => $query !== '');
+
+        if ($queries->isEmpty()) {
+            return collect();
+        }
+
+        return $categories
+            ->filter(function (object $category) use ($queries): bool {
+                $slug = Str::lower((string) $category->slug);
+                $title = Str::lower((string) $category->title);
+                foreach ($queries as $query) {
+                    if ($query === $slug || $query === $title) {
+                        return true;
+                    }
+                    if (strlen($query) >= 4 && (str_contains($slug, $query) || str_contains($title, $query) || str_contains($query, $slug) || str_contains($query, $title))) {
+                        return true;
+                    }
+                }
+
+                return false;
+            })
+            ->pluck('slug');
+    }
+
+    /**
+     * @param  Collection<int, string>  $exploredSlugs
+     * @return array<string, true>
+     */
+    private function blockedDiscoverySlugs(Collection $exploredSlugs): array
+    {
+        $families = $this->podcastIndexFamilies();
+        $blocked = [];
+        foreach ($exploredSlugs as $slug) {
+            foreach ($families as $members) {
+                if (! in_array($slug, $members, true)) {
+                    continue;
+                }
+                foreach ($members as $member) {
+                    $blocked[$member] = true;
+                }
+            }
+            $blocked[$slug] = true;
+        }
+
+        return $blocked;
+    }
+
+    /**
+     * Top-level Podcast Index categories that make useful discovery tiles.
+     *
+     * @return list<string>
+     */
+    private function discoveryCategorySlugs(): array
+    {
+        return [
+            'science', 'comedy', 'sports', 'news', 'health', 'history', 'true-crime', 'kids',
+            'technology', 'business', 'education', 'music', 'fiction', 'religion', 'society',
+            'arts', 'leisure', 'tv', 'government', 'culture',
+        ];
+    }
+
+    /**
+     * Podcast Index parent/child families so listening to Soccer also counts as Sports.
+     *
+     * @return array<string, list<string>>
+     */
+    private function podcastIndexFamilies(): array
+    {
+        return [
+            'arts' => ['arts', 'books', 'design', 'fashion', 'beauty', 'food', 'performing', 'visual'],
+            'business' => ['business', 'careers', 'entrepreneurship', 'investing', 'management', 'marketing', 'non-profit', 'cryptocurrency'],
+            'comedy' => ['comedy', 'interviews', 'improv', 'stand-up'],
+            'education' => ['education', 'courses', 'how-to', 'language', 'learning', 'self-improvement'],
+            'fiction' => ['fiction', 'drama'],
+            'government' => ['government', 'politics'],
+            'health' => ['health', 'fitness', 'alternative', 'medicine', 'mental', 'nutrition', 'sexuality'],
+            'history' => ['history'],
+            'kids' => ['kids', 'family', 'parenting', 'pets', 'animals', 'stories'],
+            'leisure' => ['leisure', 'animation', 'manga', 'automotive', 'aviation', 'crafts', 'games', 'hobbies', 'home', 'garden', 'video-games', 'tabletop', 'role-playing'],
+            'music' => ['music', 'commentary'],
+            'news' => ['news', 'daily', 'entertainment'],
+            'religion' => ['religion', 'spirituality', 'buddhism', 'christianity', 'hinduism', 'islam', 'judaism'],
+            'science' => ['science', 'astronomy', 'chemistry', 'earth', 'life', 'mathematics', 'natural', 'nature', 'physics', 'social', 'climate', 'weather'],
+            'society' => ['society', 'culture', 'documentary', 'personal', 'journals', 'philosophy', 'places', 'travel', 'relationships'],
+            'sports' => ['sports', 'baseball', 'basketball', 'cricket', 'fantasy', 'football', 'golf', 'hockey', 'rugby', 'running', 'soccer', 'swimming', 'tennis', 'volleyball', 'wilderness', 'wrestling'],
+            'technology' => ['technology'],
+            'true-crime' => ['true-crime'],
+            'tv' => ['tv', 'film', 'after-shows', 'reviews'],
+        ];
     }
 
     private function categoryQuery(): Builder
@@ -620,7 +1065,7 @@ final class BuildHomeFeed
             ['key' => 'continue_listening', 'title' => 'Continue Listening', 'subtitle' => 'Pick up where you left off', 'kind' => 'episode_progress'],
             ['key' => 'made_for_you', 'title' => 'Made For You', 'subtitle' => 'Personalized episode picks', 'kind' => 'episode_list'],
             ['key' => 'quick_listen', 'title' => 'Quick Listen', 'subtitle' => 'Short episodes that fit your time', 'kind' => 'quick_listen'],
-            ['key' => 'because_you_listened', 'title' => 'Because You Listened', 'subtitle' => 'More from topics you already enjoy', 'kind' => 'because'],
+            ['key' => 'because_you_listened', 'title' => 'Because You Listened', 'subtitle' => 'Similar episodes from other podcasts you enjoy', 'kind' => 'because'],
             ['key' => 'trending', 'title' => 'Trending on Pelevo', 'subtitle' => 'What listeners are playing now', 'kind' => 'ranked_shows'],
             ['key' => 'new_from_following', 'title' => 'New From Shows You Follow', 'subtitle' => 'Fresh episodes from your subscriptions', 'kind' => 'episode_list'],
             ['key' => 'african_voices', 'title' => 'African Voices', 'subtitle' => 'Podcasts from across the continent', 'kind' => 'shows'],

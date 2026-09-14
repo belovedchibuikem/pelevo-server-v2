@@ -11,6 +11,7 @@ final class InvalidateDiscoveryCache
     {
         Cache::forget("home:feed:{$userId}:v1");
         Cache::forget("home:feed:{$userId}:v2");
+        Cache::forget("home:feed:{$userId}:v3");
         DB::table('home_feed_snapshots')->where('user_id', $userId)->delete();
     }
 

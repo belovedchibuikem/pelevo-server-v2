@@ -64,6 +64,8 @@ final class PersistDiscoveredShow
                 'next_poll_at' => now(),
             ]);
 
+            $this->linkPodcastIndexCategories($show->id, $feed['categories'] ?? null);
+
             return $show;
         }, 3);
     }
@@ -80,5 +82,27 @@ final class PersistDiscoveredShow
         $author = trim(strip_tags((string) ($value ?? '')));
 
         return $author !== '' ? $author : null;
+    }
+
+    private function linkPodcastIndexCategories(string $showId, mixed $categories): void
+    {
+        if (! is_array($categories) || $categories === []) {
+            return;
+        }
+
+        foreach ($categories as $piId => $name) {
+            $id = is_numeric($piId) ? (int) $piId : 0;
+            if ($id <= 0) {
+                continue;
+            }
+            $categoryId = DB::table('categories')->where('podcast_index_id', $id)->value('id');
+            if (! $categoryId) {
+                continue;
+            }
+            DB::table('category_show')->insertOrIgnore([
+                'category_id' => $categoryId,
+                'show_id' => $showId,
+            ]);
+        }
     }
 }

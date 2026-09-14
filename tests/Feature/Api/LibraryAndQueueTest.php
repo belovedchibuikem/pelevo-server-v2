@@ -6,6 +6,7 @@ use App\Models\Episode;
 use App\Models\Show;
 use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 final class LibraryAndQueueTest extends TestCase
@@ -45,6 +46,25 @@ final class LibraryAndQueueTest extends TestCase
         $playlist = $this->actingAs($user, 'sanctum')->postJson('/api/v1/playlists', ['name' => 'Mindset & Growth'])->assertCreated()->json('data');
         $this->assertSame(0, $playlist['item_count']);
         $this->assertArrayNotHasKey('rss_url', $this->actingAs($user, 'sanctum')->getJson('/api/v1/library')->assertOk()->json('data'));
+        $this->actingAs($user, 'sanctum')->getJson('/api/v1/library')->assertOk()->assertJsonPath('data.recent_count', 0);
+
+        DB::table('playback_progress')->insert([
+            'user_id' => $user->id,
+            'episode_id' => $episode->id,
+            'position_seconds' => 90,
+            'completed' => false,
+            'version' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->actingAs($user, 'sanctum')->getJson('/api/v1/library')->assertOk()->assertJsonPath('data.recent_count', 1);
+        $this->actingAs($user, 'sanctum')->getJson('/api/v1/library/recent')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $episode->id)
+            ->assertJsonPath('data.0.title', 'Mindset & Growth Ep')
+            ->assertJsonPath('data.0.position_seconds', 90)
+            ->assertJsonMissingPath('data.0.audio_url')
+            ->assertJsonMissingPath('data.0.guid');
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/library/saved')->assertOk()->assertJsonPath('data.0.title', 'Mindset & Growth Ep')->assertJsonMissingPath('data.0.audio_url')->assertJsonMissingPath('data.0.guid');
         $detail = $this->actingAs($user, 'sanctum')->getJson('/api/v1/playlists/'.$playlist['id'])->assertOk()->json('data');
         $this->assertSame('Mindset & Growth', $detail['name']);

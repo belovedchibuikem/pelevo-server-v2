@@ -101,4 +101,49 @@ final class DiscoveryAndHomeTest extends TestCase
         $client->putJson("/api/v1/playback/{$episode->id}", ['position_seconds' => 30, 'completed' => false, 'version' => 0])->assertOk();
         $this->assertDatabaseMissing('home_feed_snapshots', ['user_id' => $listener->id]);
     }
+
+    public function test_try_something_new_is_personal_and_outside_the_listeners_categories(): void
+    {
+        Cache::flush();
+        config()->set('services.podcast_index.enabled', false);
+
+        app(\App\Actions\Catalog\SyncPodcastIndexCategories::class)->handle(invalidateCache: false);
+
+        $comedyListener = User::factory()->create();
+        $scienceListener = User::factory()->create();
+        $comedyShow = Show::create(['rss_url' => 'https://example.com/comedy.xml', 'title' => 'Night Laughs']);
+        $scienceShow = Show::create(['rss_url' => 'https://example.com/science.xml', 'title' => 'Lab Notes']);
+        $comedyEpisode = Episode::create(['show_id' => $comedyShow->id, 'guid' => 'comedy-ep', 'title' => 'Set One', 'audio_url' => 'https://example.com/comedy.mp3', 'published_at' => now()]);
+        $scienceEpisode = Episode::create(['show_id' => $scienceShow->id, 'guid' => 'science-ep', 'title' => 'Atoms', 'audio_url' => 'https://example.com/science.mp3', 'published_at' => now()]);
+
+        $comedyId = DB::table('categories')->where('slug', 'comedy')->value('id');
+        $scienceId = DB::table('categories')->where('slug', 'science')->value('id');
+        $this->assertNotNull($comedyId);
+        $this->assertNotNull($scienceId);
+
+        DB::table('category_show')->insert([
+            ['category_id' => $comedyId, 'show_id' => $comedyShow->id],
+            ['category_id' => $scienceId, 'show_id' => $scienceShow->id],
+        ]);
+        DB::table('playback_progress')->insert([
+            ['user_id' => $comedyListener->id, 'episode_id' => $comedyEpisode->id, 'position_seconds' => 40, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+            ['user_id' => $scienceListener->id, 'episode_id' => $scienceEpisode->id, 'position_seconds' => 40, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $comedyItems = collect($this->actingAs($comedyListener, 'sanctum')->getJson('/api/v1/home/feed')->assertOk()->json('data.rails'))
+            ->firstWhere('key', 'try_something_new')['items'];
+        $scienceItems = collect($this->actingAs($scienceListener, 'sanctum')->getJson('/api/v1/home/feed')->assertOk()->json('data.rails'))
+            ->firstWhere('key', 'try_something_new')['items'];
+
+        $comedySlugs = collect($comedyItems)->pluck('slug')->all();
+        $scienceSlugs = collect($scienceItems)->pluck('slug')->all();
+
+        $this->assertNotEmpty($comedySlugs);
+        $this->assertNotEmpty($scienceSlugs);
+        $this->assertGreaterThanOrEqual(8, count($comedySlugs));
+        $this->assertNotContains('comedy', $comedySlugs);
+        $this->assertNotContains('improv', $comedySlugs);
+        $this->assertNotContains('science', $scienceSlugs);
+        $this->assertNotSame($comedySlugs, $scienceSlugs);
+    }
 }

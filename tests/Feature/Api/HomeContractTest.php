@@ -17,6 +17,7 @@ final class HomeContractTest extends TestCase
     public function test_home_contract_contains_system_owned_modules_without_provider_requests(): void
     {
         Http::preventStrayRequests();
+        config()->set('services.podcast_index.enabled', false);
         $user = User::factory()->create();
         $show = Show::create(['rss_url' => 'https://example.com/africa.xml', 'title' => 'Africa Daily', 'country_code' => 'NG']);
         $episode = Episode::create(['show_id' => $show->id, 'guid' => 'home-contract', 'title' => 'A local episode', 'audio_url' => 'https://example.com/audio.mp3', 'duration_seconds' => 600, 'published_at' => now()]);
@@ -49,6 +50,12 @@ final class HomeContractTest extends TestCase
         $response->assertJsonPath('data.rails.8.items.0.type', 'show');
         $response->assertJsonPath('data.rails.7.items.0.title', 'A local episode');
         $response->assertJsonPath('data.rails.13.items.0.title', 'Podcasts');
+        $tryNew = collect($response->json('data.rails'))->firstWhere('key', 'try_something_new');
+        $this->assertIsArray($tryNew['items']);
+        $this->assertNotEmpty($tryNew['items']);
+        $this->assertSame('category', $tryNew['items'][0]['type']);
+        $this->assertIsString($tryNew['items'][0]['id']);
+        $this->assertNotEmpty($tryNew['items'][0]['slug']);
         Http::assertNothingSent();
     }
 
