@@ -46,6 +46,20 @@ final class OperationsTest extends TestCase
         $this->assertDatabaseHas('audit_logs', ['action' => 'operations.schedule_run']);
     }
 
+    public function test_horizon_dashboard_allows_admin_session_without_web_user(): void
+    {
+        [$admin, $session] = $this->operator();
+
+        $this->actingAs($admin, 'admin')->withSession($session)
+            ->get('/admin/horizon')
+            ->assertOk();
+    }
+
+    public function test_horizon_dashboard_rejects_anonymous_visitors(): void
+    {
+        $this->get('/admin/horizon')->assertRedirect();
+    }
+
     public function test_readiness_is_token_protected(): void
     {
         config()->set('operations.readiness_token', 'test-readiness-token');
