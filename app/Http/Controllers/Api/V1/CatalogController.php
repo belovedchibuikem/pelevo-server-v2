@@ -151,7 +151,11 @@ final class CatalogController extends Controller
 
         $items = $query->orderByDesc('published_at')->orderByDesc('id')->cursorPaginate($data['limit'] ?? 20);
 
-        return ApiResponse::success(collect($items->items())->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show))->values(), [
+        $userId = $request->user()?->id;
+        $pageItems = collect($items->items());
+        $playback = $this->playbackByEpisodeIds($userId, $pageItems->pluck('id'));
+
+        return ApiResponse::success($pageItems->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show, playback: $playback[$episode->id] ?? null))->values(), [
             'cursor' => $items->nextCursor()?->encode(),
             'has_more' => $items->hasMorePages(),
             'feed_state' => $show->feedState?->state,
@@ -160,12 +164,16 @@ final class CatalogController extends Controller
         ]);
     }
 
-    public function episode(Episode $episode): JsonResponse
+    public function episode(Episode $episode, Request $request): JsonResponse
     {
         abort_unless($episode->availability === 'available', 404);
         $episode->load('show');
+        $userId = $request->user()?->id;
+        $playback = $userId
+            ? DB::table('playback_progress')->where('user_id', $userId)->where('episode_id', $episode->id)->first()
+            : null;
 
-        return ApiResponse::success($this->presentEpisode($episode, $episode->show, detailed: true));
+        return ApiResponse::success($this->presentEpisode($episode, $episode->show, detailed: true, playback: $playback));
     }
 
     public function voiceSearch(Request $request, PodcastIndexClient $client, PersistDiscoveredShow $persist): JsonResponse
@@ -500,8 +508,28 @@ final class CatalogController extends Controller
         ];
     }
 
-    private function presentEpisode(Episode $episode, ?Show $show = null, bool $detailed = false): array
+    /**
+     * @param  \Illuminate\Support\Collection<int, string>  $episodeIds
+     * @return array<string, object>
+     */
+    private function playbackByEpisodeIds(?string $userId, $episodeIds): array
     {
+        if ($userId === null || $episodeIds->isEmpty()) {
+            return [];
+        }
+
+        return DB::table('playback_progress')
+            ->where('user_id', $userId)
+            ->whereIn('episode_id', $episodeIds->all())
+            ->get(['episode_id', 'position_seconds', 'completed'])
+            ->keyBy('episode_id')
+            ->all();
+    }
+
+    private function presentEpisode(Episode $episode, ?Show $show = null, bool $detailed = false, mixed $playback = null): array
+    {
+        $position = is_object($playback) ? max(0, (int) ($playback->position_seconds ?? 0)) : 0;
+        $completed = is_object($playback) && (bool) ($playback->completed ?? false);
         $payload = [
             'id' => $episode->id,
             'show_id' => $episode->show_id,
@@ -512,6 +540,9 @@ final class CatalogController extends Controller
             'published_at' => optional($episode->published_at)?->toIso8601String(),
             'show_title' => $episode->show?->title ?? $show?->title,
             'show_author' => $episode->show?->author ?? $show?->author,
+            'position_seconds' => $position,
+            'completed' => $completed,
+            'played' => $completed || $position > 0,
         ];
         if ($detailed) {
             $payload['audio_url'] = $episode->audio_url;

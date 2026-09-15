@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -30,9 +31,32 @@ final class ListeningCoreTest extends TestCase
             ->assertJsonMissing(['rss_url']);
         $this->assertSame(['id', 'title', 'author', 'artwork_url', 'description', 'language', 'country_code', 'explicit', 'episodes_count', 'follower_count', 'rating_average', 'rating_count', 'following', 'notifications_enabled', 'feed_state', 'episodes_syncing', 'feed_error', 'claimed_by_viewer', 'categories'], array_keys($detail->json('data')));
         $listed = $this->actingAs($user, 'sanctum')->getJson("/api/v1/shows/{$show->id}/episodes")->assertOk()->assertJsonPath('data.0.title', 'Episode One');
-        $this->assertSame(['id', 'show_id', 'title', 'description', 'artwork_url', 'duration_seconds', 'published_at', 'show_title', 'show_author'], array_keys($listed->json('data.0')));
+        $this->assertSame(['id', 'show_id', 'title', 'description', 'artwork_url', 'duration_seconds', 'published_at', 'show_title', 'show_author', 'position_seconds', 'completed', 'played'], array_keys($listed->json('data.0')));
+        $this->assertSame(0, $listed->json('data.0.position_seconds'));
+        $this->assertFalse($listed->json('data.0.completed'));
+        $this->assertFalse($listed->json('data.0.played'));
         $this->assertArrayNotHasKey('audio_url', $listed->json('data.0'));
         $this->actingAs($user, 'sanctum')->getJson("/api/v1/episodes/{$listed->json('data.0.id')}")->assertOk()->assertJsonPath('data.audio_url', 'https://example.com/one.mp3')->assertJsonMissing(['guid']);
+    }
+
+    public function test_show_episode_list_marks_the_listeners_played_episodes(): void
+    {
+        $user = User::factory()->create();
+        $other = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/played-feed.xml', 'title' => 'Played Show']);
+        $fresh = Episode::create(['show_id' => $show->id, 'guid' => 'fresh', 'title' => 'Fresh Episode', 'audio_url' => 'https://example.com/fresh.mp3', 'published_at' => now()]);
+        $heard = Episode::create(['show_id' => $show->id, 'guid' => 'heard', 'title' => 'Heard Episode', 'audio_url' => 'https://example.com/heard.mp3', 'published_at' => now()->subDay()]);
+        DB::table('playback_progress')->insert([
+            ['user_id' => $user->id, 'episode_id' => $heard->id, 'position_seconds' => 90, 'completed' => true, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+            ['user_id' => $other->id, 'episode_id' => $fresh->id, 'position_seconds' => 40, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $listed = $this->actingAs($user, 'sanctum')->getJson("/api/v1/shows/{$show->id}/episodes")->assertOk()->json('data');
+        $byTitle = collect($listed)->keyBy('title');
+        $this->assertTrue($byTitle['Heard Episode']['played']);
+        $this->assertTrue($byTitle['Heard Episode']['completed']);
+        $this->assertFalse($byTitle['Fresh Episode']['played']);
+        $this->assertFalse($byTitle['Fresh Episode']['completed']);
     }
 
     public function test_playback_rejects_stale_version(): void
