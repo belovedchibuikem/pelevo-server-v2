@@ -68,6 +68,7 @@ Route::prefix('api/admin/v1')->middleware(['auth.admin', 'admin.mfa'])->group(fu
     Route::put('integrations/{provider}', [IntegrationSettingsController::class, 'update'])->middleware(['admin.permission:settings.write', 'admin.mfa.fresh']);
     Route::post('integrations/{provider}/test', [IntegrationSettingsController::class, 'test'])->middleware(['admin.permission:settings.write', 'admin.mfa.fresh']);
     Route::put('support/tickets/{ticket}', [SupportWorkspaceController::class, 'update'])->middleware('admin.permission:users.view');
+    Route::put('support/contact/{inquiry}', [SupportWorkspaceController::class, 'updateInquiry'])->middleware('admin.permission:users.view');
     Route::post('support/tickets/{ticket}/attachments', [SupportWorkspaceController::class, 'attach'])->middleware(['admin.permission:users.view', 'throttle:10,1']);
     Route::post('support/tickets/{ticket}/links', [SupportWorkspaceController::class, 'link'])->middleware('admin.permission:users.view');
     Route::get('support/tickets/{ticket}/attachments/{attachment}', [SupportWorkspaceController::class, 'attachment'])->middleware('admin.permission:users.view');
@@ -175,6 +176,7 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
         Route::get('cms', ModuleWorkspaceController::class)->defaults('module', 'cms')->middleware('admin.permission:settings.write')->name('cms');
         Route::get('ai', ModuleWorkspaceController::class)->defaults('module', 'ai')->middleware('admin.permission:ai.manage')->name('ai');
         Route::get('support', ModuleWorkspaceController::class)->defaults('module', 'support')->middleware('admin.permission:users.view')->name('support');
+        Route::get('support/contact/{inquiry}', [SupportWorkspaceController::class, 'inquiry'])->middleware('admin.permission:users.view')->name('support.contact');
         Route::get('support/tickets/{ticket}', [SupportWorkspaceController::class, 'show'])->middleware('admin.permission:users.view')->name('support.ticket');
         Route::get('analytics', ModuleWorkspaceController::class)->defaults('module', 'analytics')->middleware('admin.permission:audit.view')->name('analytics');
         Route::get('settings', ModuleWorkspaceController::class)->defaults('module', 'settings')->middleware('admin.permission:settings.write')->name('settings');

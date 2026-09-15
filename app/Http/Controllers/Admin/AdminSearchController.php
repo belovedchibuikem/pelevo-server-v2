@@ -25,6 +25,7 @@ class AdminSearchController extends Controller
         if ($can('users.view')) {
             $groups[] = $this->group('Users', DB::table('users')->where(fn (Builder $query) => $query->where('name', 'like', "%{$term}%")->orWhere('handle', 'like', "%{$term}%"))->select('id', 'name as title', 'handle as subtitle')->limit(6)->get(), fn ($row): string => '/admin/users/'.$row->id);
             $groups[] = $this->group('Support', DB::table('support_tickets')->where(fn (Builder $query) => $query->where('subject', 'like', "%{$term}%")->orWhere('id', 'like', "%{$term}%"))->select('id', 'subject as title', 'state as subtitle')->limit(6)->get(), fn ($row): string => '/admin/support/tickets/'.$row->id);
+            $groups[] = $this->group('Website contact', DB::table('contact_inquiries')->where(fn (Builder $query) => $query->where('subject', 'like', "%{$term}%")->orWhere('name', 'like', "%{$term}%")->orWhere('email', 'like', "%{$term}%")->orWhere('id', 'like', "%{$term}%"))->select('id', 'subject as title', 'email as subtitle')->limit(6)->get(), fn ($row): string => '/admin/support/contact/'.$row->id);
         }
         if ($can('catalog.write')) {
             $groups[] = $this->group('Shows', DB::table('shows')->where(fn (Builder $query) => $query->where('title', 'like', "%{$term}%")->orWhere('rss_url', 'like', "%{$term}%"))->select('id', 'title', 'author as subtitle')->limit(6)->get(), fn ($row): string => '/admin/records/shows/'.$row->id);

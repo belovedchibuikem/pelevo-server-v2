@@ -68,6 +68,38 @@ final class ListeningCoreTest extends TestCase
         $this->actingAs($user, 'sanctum')->putJson("/api/v1/playback/{$episode->id}", ['position_seconds' => 20, 'completed' => false, 'version' => 0])->assertConflict()->assertJsonPath('error.code', 'VERSION_CONFLICT');
     }
 
+    public function test_playback_marks_completed_only_when_nearly_finished(): void
+    {
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/feed.xml', 'title' => 'Show']);
+        $episode = Episode::create([
+            'show_id' => $show->id,
+            'guid' => 'long-one',
+            'title' => 'Long One',
+            'audio_url' => 'https://example.com/long.mp3',
+            'duration_seconds' => 600,
+        ]);
+
+        $mid = $this->actingAs($user, 'sanctum')->putJson("/api/v1/playback/{$episode->id}", [
+            'position_seconds' => 90,
+            'completed' => true,
+            'version' => 0,
+        ])->assertOk()->json('data');
+        $this->assertFalse($mid['completed']);
+        $this->assertSame(90, $mid['position_seconds']);
+
+        $listed = $this->actingAs($user, 'sanctum')->getJson("/api/v1/shows/{$show->id}/episodes")->assertOk()->json('data.0');
+        $this->assertTrue($listed['played']);
+        $this->assertFalse($listed['completed']);
+
+        $done = $this->actingAs($user, 'sanctum')->putJson("/api/v1/playback/{$episode->id}", [
+            'position_seconds' => 590,
+            'completed' => false,
+            'version' => $mid['version'],
+        ])->assertOk()->json('data');
+        $this->assertTrue($done['completed']);
+    }
+
     public function test_search_imports_provider_result_and_never_exposes_raw_payload(): void
     {
         Bus::fake([HydrateRssFeed::class]);

@@ -43,7 +43,7 @@ final class CommandCenterTest extends TestCase
             ->where('charts.0.points.0.previous', 2)
             ->where('charts.0.points.0.previous_date', '2026-09-07')
             ->where('charts.0.href', '/admin/users?view=directory&date_from=2026-09-08&date_to=2026-09-08')
-            ->where('charts', fn ($charts): bool => collect($charts)->every(fn ($chart): bool => in_array($chart['label'], ['New accounts', 'Support tickets'], true))));
+            ->where('charts', fn ($charts): bool => collect($charts)->every(fn ($chart): bool => in_array($chart['label'], ['New accounts', 'Support tickets', 'Website contact'], true))));
         $this->get('/admin?date_from=2026-01-01&date_to=2026-09-08')->assertUnprocessable();
     }
 }

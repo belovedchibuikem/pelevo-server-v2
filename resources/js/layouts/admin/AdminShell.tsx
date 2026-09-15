@@ -21,7 +21,7 @@ const navigation: NavItem[] = [
   { label: 'Referrals & Growth', href: '/admin/growth', group: 'Engage', keywords: 'programs funnel rewards fraud caps', permission: 'settings.write' },
   { label: 'CMS & Discovery', href: '/admin/cms', group: 'Engage', keywords: 'pages help rails editorial announcements', permission: 'settings.write' },
   { label: 'AI Desk', href: '/admin/ai', group: 'Platform', keywords: 'jobs cost prompts providers quotas safety', permission: 'ai.manage' },
-  { label: 'Support', href: '/admin/support', group: 'Platform', keywords: 'tickets feedback sla assignment', permission: 'users.view' },
+  { label: 'Support', href: '/admin/support', group: 'Platform', keywords: 'tickets feedback sla assignment contact form website inquiries', permission: 'users.view' },
   { label: 'Analytics', href: '/admin/analytics', group: 'Platform', keywords: 'retention listening search funnels exports', permission: 'audit.view' },
   { label: 'Settings', href: '/admin/settings', group: 'Platform', keywords: 'flags limits providers locales storage security smtp api podcast mux', permission: 'settings.write' },
   { label: 'API & SMTP', href: '/admin/settings/integrations', group: 'Platform', keywords: 'podcast index mux ai smtp paystack paypal flutterwave ffmpeg s3 credentials', permission: 'settings.write' },

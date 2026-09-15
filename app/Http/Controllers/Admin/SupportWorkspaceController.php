@@ -7,6 +7,7 @@ use App\Services\InAppNotificationDelivery;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -72,6 +73,51 @@ class SupportWorkspaceController extends Controller
             DB::table('audit_logs')->insert(['id' => $audit, 'admin_id' => $request->user('admin')->id, 'subject_type' => 'App\\Models\\SupportTicket', 'subject_id' => $ticket, 'action' => 'support.updated', 'reason' => $data['reason'], 'before' => json_encode(['state' => $row->state, 'priority' => $row->priority, 'assigned_admin_id' => $row->assigned_admin_id, 'version' => $row->version]), 'after' => json_encode($values), 'created_at' => now(), 'updated_at' => now()]);
 
             return ApiResponse::success(['version' => $values['version'], 'audit_reference' => $audit]);
+        }, 3);
+    }
+
+    public function inquiry(Request $request, string $inquiry): Response
+    {
+        $row = DB::table('contact_inquiries')->find($inquiry);
+        abort_unless($row, 404);
+        $matchedUser = DB::table('users')->where('email', $row->email)->first(['id', 'name', 'handle', 'status']);
+
+        return Inertia::render('Admin/ContactInquiry', [
+            'inquiry' => $row,
+            'matchedUser' => $matchedUser,
+            'audit' => DB::table('audit_logs')->where('subject_id', $inquiry)->latest()->limit(50)->get(['id', 'action', 'reason', 'created_at']),
+            'freshAt' => now()->toIso8601String(),
+        ]);
+    }
+
+    public function updateInquiry(Request $request, string $inquiry): JsonResponse
+    {
+        $data = $request->validate([
+            'state' => ['required', 'in:new,open,pending,resolved,closed'],
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+        ]);
+
+        return DB::transaction(function () use ($data, $inquiry, $request): JsonResponse {
+            $row = DB::table('contact_inquiries')->where('id', $inquiry)->lockForUpdate()->first();
+            abort_unless($row, 404);
+            $values = ['state' => $data['state'], 'updated_at' => now()];
+            DB::table('contact_inquiries')->where('id', $inquiry)->update($values);
+            $audit = (string) Str::ulid();
+            DB::table('audit_logs')->insert([
+                'id' => $audit,
+                'admin_id' => $request->user('admin')->id,
+                'subject_type' => 'contact_inquiry',
+                'subject_id' => $inquiry,
+                'action' => 'support.contact_updated',
+                'reason' => $data['reason'],
+                'before' => json_encode(['state' => $row->state]),
+                'after' => json_encode($values),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            Cache::forget('admin:module-counts:support');
+
+            return ApiResponse::success(['audit_reference' => $audit]);
         }, 3);
     }
 

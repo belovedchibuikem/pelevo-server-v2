@@ -42,6 +42,7 @@ final class DashboardController extends Controller
             ['Creator payout requests (PCN)', 'creator_payouts', 'amount', 'finance.view', '/admin/finance-records?view=payouts&unit=PCN'],
             ['Reel uploads', 'reels', null, 'moderation.act', '/admin/reels-live?view=reels'],
             ['Support tickets', 'support_tickets', null, 'users.view', '/admin/support?view=inbox'],
+            ['Website contact', 'contact_inquiries', null, 'users.view', '/admin/support?view=contact'],
             ['Gifts sent', 'gifts', null, 'finance.view', '/admin/finance-records?view=gifts'],
             ['Premium subscriptions started', 'premium_subscriptions', null, 'finance.view', '/admin/finance-records?view=premium'],
             ['Notification deliveries created', 'notification_deliveries', null, 'broadcast.send', '/admin/communications?view=delivery-report'],

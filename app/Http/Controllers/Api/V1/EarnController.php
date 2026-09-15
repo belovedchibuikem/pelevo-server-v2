@@ -12,6 +12,7 @@ use App\Models\FinancialAccount;
 use App\Models\Show;
 use App\Support\ApiResponse;
 use Illuminate\Database\QueryException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -74,18 +75,56 @@ final class EarnController extends Controller
         }
         $campaign = DB::table('earn_campaigns')->where('state', 'active')->where(fn ($q) => $q->whereNull('starts_at')->orWhere('starts_at', '<=', now()))->where(fn ($q) => $q->whereNull('ends_at')->orWhere('ends_at', '>', now()))->latest('starts_at')->first();
         $snapshot = ['config_version' => $config?->version, 'campaign_version' => $campaign?->config_version, 'award' => $award, 'lock_hours' => data_get($config?->payload, 'money.earn_lock_hours', 72), 'risk_policy' => 1];
-        $id = (string) Str::ulid();
-        $nonce = Str::random(64);
-        try {
-            DB::table('earn_sessions')->insert(['id' => $id, 'user_id' => $request->user()->id, 'episode_id' => $episode->id, 'device_id' => $device->id, 'earn_campaign_id' => $campaign?->id, 'active_guard' => 'active', 'nonce_hash' => hash('sha256', $nonce), 'nonce_expires_at' => now()->addHours(4), 'expected_award' => $award, 'eligibility_snapshot' => json_encode($snapshot, JSON_THROW_ON_ERROR), 'ip_address' => $request->ip(), 'created_at' => now(), 'updated_at' => now()]);
-        } catch (QueryException $e) {
-            if ($e->getCode() === '23000') {
-                return ApiResponse::error('MODERATION_HOLD', 'Only one Earn session may be active.', 409);
-            }
-            throw $e;
-        }
 
-        return ApiResponse::success($this->presentSession($id, $nonce), status: 201);
+        return DB::transaction(function () use ($request, $episode, $device, $campaign, $award, $snapshot): JsonResponse {
+            $existing = DB::table('earn_sessions')
+                ->where('user_id', $request->user()->id)
+                ->where('active_guard', 'active')
+                ->lockForUpdate()
+                ->first();
+
+            if ($existing) {
+                $stale = $existing->nonce_expires_at && now()->greaterThan($existing->nonce_expires_at);
+                if (! $stale) {
+                    return ApiResponse::error('MODERATION_HOLD', 'Only one Earn session may be active.', 409);
+                }
+                DB::table('earn_sessions')->where('id', $existing->id)->update([
+                    'state' => 'expired',
+                    'active_guard' => null,
+                    'nonce_hash' => null,
+                    'updated_at' => now(),
+                ]);
+            }
+
+            $id = (string) Str::ulid();
+            $nonce = Str::random(64);
+            try {
+                DB::table('earn_sessions')->insert([
+                    'id' => $id,
+                    'user_id' => $request->user()->id,
+                    'episode_id' => $episode->id,
+                    'device_id' => $device->id,
+                    'earn_campaign_id' => $campaign?->id,
+                    'active_guard' => 'active',
+                    'nonce_hash' => hash('sha256', $nonce),
+                    'nonce_expires_at' => now()->addHours(4),
+                    'expected_award' => $award,
+                    'eligibility_snapshot' => json_encode($snapshot, JSON_THROW_ON_ERROR),
+                    'ip_address' => $request->ip(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (UniqueConstraintViolationException) {
+                return ApiResponse::error('MODERATION_HOLD', 'Only one Earn session may be active.', 409);
+            } catch (QueryException $e) {
+                if ($this->isUniqueActiveSessionConflict($e)) {
+                    return ApiResponse::error('MODERATION_HOLD', 'Only one Earn session may be active.', 409);
+                }
+                throw $e;
+            }
+
+            return ApiResponse::success($this->presentSession($id, $nonce), status: 201);
+        }, 3);
     }
 
     public function heartbeat(string $session, Request $request, EarnIntegrityVerifier $integrity): JsonResponse
@@ -148,6 +187,14 @@ final class EarnController extends Controller
 
             return ApiResponse::success($this->presentAward(DB::table('earn_awards')->find($awardId)), status: 201);
         }, 3);
+    }
+
+    private function isUniqueActiveSessionConflict(QueryException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+
+        return in_array($sqlState, ['23000', '23505'], true)
+            || str_contains($e->getMessage(), 'earn_one_active_session');
     }
 
     private function hold(string $session, string $message): JsonResponse

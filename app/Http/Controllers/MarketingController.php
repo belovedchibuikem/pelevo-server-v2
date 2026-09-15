@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Support\MarketingLegal;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -78,6 +79,7 @@ final class MarketingController extends Controller
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+        Cache::forget('admin:module-counts:support');
 
         return back()->with('status', 'Thank you. A member of the Pelevo team will reply to the email you provided.');
     }

@@ -49,8 +49,8 @@ final class ModuleWorkspaceController extends Controller
         'ai' => ['title' => 'AI Desk', 'description' => 'Usage, cost, safety, controlled prompt rollout and provider safeguards.', 'views' => [
             'overview' => ['label' => 'Usage & cost', 'table' => 'ai_usage'], 'jobs' => ['label' => 'Job directory', 'table' => 'ai_jobs'], 'prompts' => ['label' => 'Prompt versions', 'table' => 'prompt_versions'], 'providers' => ['label' => 'Provider & model config', 'table' => 'configuration_versions'], 'quotas' => ['label' => 'User & tier quotas', 'table' => 'configuration_versions'], 'safety' => ['label' => 'Failure & safety review', 'table' => 'ai_jobs'], 'kill-switch' => ['label' => 'Kill switch', 'table' => 'configuration_versions'],
         ]],
-        'support' => ['title' => 'Support', 'description' => 'Ticket context, assignment, escalation, SLA and structured feedback.', 'views' => [
-            'inbox' => ['label' => 'Support inbox', 'table' => 'support_tickets'], 'tickets' => ['label' => 'Ticket detail', 'table' => 'support_tickets'], 'sla' => ['label' => 'Assignment & SLA', 'table' => 'support_tickets'], 'feedback' => ['label' => 'Feedback directory', 'table' => 'feedback'], 'responses' => ['label' => 'Responses & categories', 'table' => 'cms_pages'],
+        'support' => ['title' => 'Support', 'description' => 'Website contact, in-app tickets, assignment, SLA and structured feedback.', 'views' => [
+            'contact' => ['label' => 'Website contact', 'table' => 'contact_inquiries'], 'inbox' => ['label' => 'In-app tickets', 'table' => 'support_tickets'], 'tickets' => ['label' => 'Ticket detail', 'table' => 'support_tickets'], 'sla' => ['label' => 'Assignment & SLA', 'table' => 'support_tickets'], 'feedback' => ['label' => 'App feedback', 'table' => 'feedback'], 'responses' => ['label' => 'Responses & categories', 'table' => 'cms_pages'],
         ]],
         'analytics' => ['title' => 'Analytics', 'description' => 'Exact operational evidence for audience, content, revenue and scheduled exports.', 'views' => [
             'audience' => ['label' => 'Audience retention', 'table' => 'listening_daily_stats'], 'listening' => ['label' => 'Listening & completion', 'table' => 'listening_daily_stats'], 'search' => ['label' => 'Search success', 'table' => 'search_history'], 'recommendations' => ['label' => 'Recommendation quality', 'table' => 'recommendation_snapshots'], 'library' => ['label' => 'Library conversion', 'table' => 'follows'], 'reels' => ['label' => 'Reels funnel', 'table' => 'reel_engagements'], 'creators' => ['label' => 'Creator funnel', 'table' => 'creator_profiles'], 'earn' => ['label' => 'Earn & fraud', 'table' => 'earn_sessions'], 'gifts' => ['label' => 'Gifts & revenue', 'table' => 'gifts'], 'premium' => ['label' => 'Premium MRR & churn', 'table' => 'premium_subscriptions'], 'regional' => ['label' => 'Regional comparisons', 'table' => 'listening_daily_stats'], 'exports' => ['label' => 'Scheduled exports', 'table' => 'scheduled_exports'],
@@ -65,6 +65,11 @@ final class ModuleWorkspaceController extends Controller
     ];
 
     private const SAFE_COLUMNS = ['id', 'reference', 'title', 'name', 'slug', 'handle', 'subject', 'category', 'type', 'action', 'reason', 'priority', 'state', 'status', 'provider', 'store', 'currency', 'coins', 'unit', 'amount', 'net_amount', 'gross_amount', 'fee_amount', 'amount_minor', 'risk_score', 'version', 'last_seen_at', 'started_at', 'completed_at', 'published_at', 'scheduled_at', 'effective_at', 'created_at', 'updated_at'];
+
+    /** Extra operator columns that are only safe on a specific table. */
+    private const TABLE_COLUMNS = [
+        'contact_inquiries' => ['email', 'audience', 'message'],
+    ];
 
     public function __invoke(Request $request, string $module): Response
     {
@@ -86,6 +91,7 @@ final class ModuleWorkspaceController extends Controller
         $activeView = $validated['view'] ?? match ($module) {
             'audit' => 'audit-log',
             'finance-records' => 'ledger',
+            'support' => 'contact',
             default => $viewKeys[0],
         };
         $table = $definition['views'][$activeView]['table'];
@@ -122,10 +128,10 @@ final class ModuleWorkspaceController extends Controller
         $table = $definition['views'][$view]['table'] ?? null;
         abort_unless($table && Schema::hasTable($table), 422);
         $available = Schema::getColumnListing($table);
-        $columns = array_values(array_intersect(self::SAFE_COLUMNS, $available));
+        $columns = $this->safeColumns($table, $available);
         abort_if($columns === [], 422);
         $query = DB::table($table)->select($columns);
-        $this->applyFilters($query, $available, $filters);
+        $this->applyFilters($query, $available, $filters, $table);
 
         $defaultOrder = in_array('updated_at', $available, true) ? 'updated_at' : (in_array('created_at', $available, true) ? 'created_at' : $columns[0]);
 
@@ -139,12 +145,12 @@ final class ModuleWorkspaceController extends Controller
             return ['data' => [], 'columns' => [], 'current_page' => 1, 'last_page' => 1, 'total' => 0, 'degraded' => true];
         }
         $available = Schema::getColumnListing($table);
-        $columns = array_values(array_intersect(self::SAFE_COLUMNS, $available));
+        $columns = $this->safeColumns($table, $available);
         if ($columns === []) {
             return ['data' => [], 'columns' => [], 'current_page' => 1, 'last_page' => 1, 'total' => DB::table($table)->count(), 'degraded' => true];
         }
         $query = DB::table($table)->select($columns);
-        $this->applyFilters($query, $available, $filters);
+        $this->applyFilters($query, $available, $filters, $table);
         $defaultOrder = in_array('updated_at', $available, true) ? 'updated_at' : (in_array('created_at', $available, true) ? 'created_at' : $columns[0]);
         $order = in_array($filters['sort'] ?? '', $columns, true) ? $filters['sort'] : $defaultOrder;
         $direction = ($filters['direction'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
@@ -153,10 +159,22 @@ final class ModuleWorkspaceController extends Controller
         return array_merge($page->toArray(), ['columns' => $columns, 'degraded' => false]);
     }
 
-    /** @param string[] $available @param array<string, mixed> $filters */
-    private function applyFilters(Builder $query, array $available, array $filters): void
+    /** @param string[] $available */
+    private function safeColumns(string $table, array $available): array
     {
-        $searchable = array_values(array_intersect(['id', 'reference', 'title', 'name', 'slug', 'handle', 'subject'], $available));
+        $allowed = [...self::SAFE_COLUMNS, ...(self::TABLE_COLUMNS[$table] ?? [])];
+
+        return array_values(array_intersect($allowed, $available));
+    }
+
+    /** @param string[] $available @param array<string, mixed> $filters */
+    private function applyFilters(Builder $query, array $available, array $filters, string $table = ''): void
+    {
+        $searchKeys = ['id', 'reference', 'title', 'name', 'slug', 'handle', 'subject'];
+        if ($table === 'contact_inquiries') {
+            $searchKeys = [...$searchKeys, 'email', 'audience'];
+        }
+        $searchable = array_values(array_intersect($searchKeys, $available));
         if (($filters['q'] ?? '') !== '' && $searchable !== []) {
             $query->where(function (Builder $nested) use ($filters, $searchable): void {
                 foreach ($searchable as $index => $column) {

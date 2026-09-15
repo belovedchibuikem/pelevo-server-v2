@@ -67,4 +67,51 @@ class SupportWorkspaceTest extends TestCase
         $this->get('/api/admin/v1/support/tickets/'.$ticket.'/attachments/'.$attachment)->assertForbidden();
         $this->putJson('/api/admin/v1/support/tickets/'.$ticket, [...$payload, 'version' => 2])->assertForbidden();
     }
+
+    public function test_website_contact_inquiries_are_listed_and_triaged(): void
+    {
+        $this->withoutVite();
+        $this->seed(DatabaseSeeder::class);
+        $admin = Admin::create(['name' => 'Support', 'email' => 'contact-ops@example.test', 'password' => 'Admin-password-9!', 'status' => 'active', 'mfa_secret' => 'JBSWY3DPEHPK3PXP', 'mfa_confirmed_at' => now()]);
+        DB::table('admin_role')->insert(['admin_id' => $admin->id, 'role_id' => DB::table('roles')->where('name', 'support')->value('id')]);
+        $user = User::factory()->create(['email' => 'ada@example.test', 'name' => 'Ada Lovelace']);
+        $inquiry = (string) Str::ulid();
+        DB::table('contact_inquiries')->insert([
+            'id' => $inquiry,
+            'name' => 'Ada Lovelace',
+            'email' => 'ada@example.test',
+            'audience' => 'creator',
+            'subject' => 'Claim question',
+            'message' => 'How long does RSS verification take?',
+            'state' => 'new',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp]);
+        $this->get('/admin/support')->assertOk()->assertInertia(fn (Assert $page) => $page
+            ->component('Admin/ModuleWorkspace')
+            ->where('activeView', 'contact')
+            ->where('records.total', 1)
+            ->where('records.data.0.email', 'ada@example.test')
+            ->where('records.data.0.subject', 'Claim question'));
+        $this->get('/admin/support/contact/'.$inquiry)->assertOk()->assertInertia(fn (Assert $page) => $page
+            ->component('Admin/ContactInquiry')
+            ->where('inquiry.email', 'ada@example.test')
+            ->where('matchedUser.id', $user->id));
+        $this->putJson('/api/admin/v1/support/contact/'.$inquiry, ['state' => 'resolved', 'reason' => 'Replied by email to the creator.'])
+            ->assertOk()
+            ->assertJsonPath('data.audit_reference', fn ($value): bool => is_string($value) && $value !== '');
+        $this->assertDatabaseHas('contact_inquiries', ['id' => $inquiry, 'state' => 'resolved']);
+        $this->assertDatabaseHas('audit_logs', ['subject_id' => $inquiry, 'action' => 'support.contact_updated']);
+
+        $this->getJson('/api/admin/v1/search?q=Claim%20question')->assertOk()->assertJsonFragment([
+            'label' => 'Website contact',
+            'href' => '/admin/support/contact/'.$inquiry,
+        ]);
+
+        DB::table('admin_role')->where('admin_id', $admin->id)->delete();
+        $this->get('/admin/support/contact/'.$inquiry)->assertForbidden();
+        $this->putJson('/api/admin/v1/support/contact/'.$inquiry, ['state' => 'closed', 'reason' => 'Should be forbidden now.'])->assertForbidden();
+    }
 }

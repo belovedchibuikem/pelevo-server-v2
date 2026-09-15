@@ -27,8 +27,14 @@ final class PlaybackController extends Controller
             return ApiResponse::error('VERSION_CONFLICT', 'Playback progress changed on another device.', 409);
         }
         $device = Device::where('user_id', $request->user()->id)->where('device_identifier', $request->header('X-Device-Id'))->first();
-        $progress = PlaybackProgress::updateOrCreate(['user_id' => $request->user()->id, 'episode_id' => $episode->id], ['device_id' => $device?->id, 'position_seconds' => $data['position_seconds'], 'completed' => $data['completed'], 'version' => ($progress?->version ?? 0) + 1]);
-        if ($data['position_seconds'] > 0 || $data['completed']) {
+        $position = max(0, (int) $data['position_seconds']);
+        $duration = (int) ($episode->duration_seconds ?? 0);
+        if ($duration > 0) {
+            $position = min($position, $duration);
+        }
+        $completed = $this->isCompleted($duration, $position);
+        $progress = PlaybackProgress::updateOrCreate(['user_id' => $request->user()->id, 'episode_id' => $episode->id], ['device_id' => $device?->id, 'position_seconds' => $position, 'completed' => $completed, 'version' => ($progress?->version ?? 0) + 1]);
+        if ($position > 0 || $completed) {
             $consumePick->handle($request->user()->id, $episode->id);
         }
         $cache->user($request->user()->id);
@@ -45,5 +51,16 @@ final class PlaybackController extends Controller
             'completed' => (bool) $progress->completed,
             'version' => (int) $progress->version,
         ];
+    }
+
+    private function isCompleted(int $durationSeconds, int $positionSeconds): bool
+    {
+        if ($durationSeconds < 30 || $positionSeconds <= 0) {
+            return false;
+        }
+
+        $remaining = $durationSeconds - $positionSeconds;
+
+        return $remaining <= 15 || $positionSeconds >= (int) floor($durationSeconds * 0.95);
     }
 }

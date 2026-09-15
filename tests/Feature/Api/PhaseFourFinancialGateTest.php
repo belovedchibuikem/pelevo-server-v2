@@ -155,6 +155,32 @@ final class PhaseFourFinancialGateTest extends TestCase
         $this->assertDatabaseHas('ledger_entries', ['id' => $entry->id, 'amount' => $entry->amount]);
     }
 
+    public function test_earn_start_returns_conflict_instead_of_500_when_an_active_session_exists(): void
+    {
+        config()->set('finance.public_enabled', true);
+        [$user, $device, $first] = $this->listenerEpisode(600);
+        $second = Episode::create(['show_id' => $first->show_id, 'guid' => (string) Str::ulid(), 'title' => 'Next Earn Episode', 'audio_url' => 'https://cdn.example.com/next.mp3', 'duration_seconds' => 600]);
+        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$first->id}/sessions")->assertCreated();
+        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$second->id}/sessions")
+            ->assertConflict()
+            ->assertJsonPath('error.code', 'MODERATION_HOLD');
+        $this->assertSame(1, DB::table('earn_sessions')->where('user_id', $user->id)->where('active_guard', 'active')->count());
+    }
+
+    public function test_earn_start_replaces_an_expired_active_session(): void
+    {
+        config()->set('finance.public_enabled', true);
+        [$user, $device, $first] = $this->listenerEpisode(600);
+        $second = Episode::create(['show_id' => $first->show_id, 'guid' => (string) Str::ulid(), 'title' => 'Later Earn Episode', 'audio_url' => 'https://cdn.example.com/later.mp3', 'duration_seconds' => 600]);
+        $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$first->id}/sessions")->assertCreated();
+        DB::table('earn_sessions')->where('id', $started->json('data.id'))->update(['nonce_expires_at' => now()->subMinute()]);
+        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$second->id}/sessions")
+            ->assertCreated()
+            ->assertJsonPath('data.episode_id', $second->id);
+        $this->assertDatabaseHas('earn_sessions', ['id' => $started->json('data.id'), 'state' => 'expired', 'active_guard' => null]);
+        $this->assertSame(1, DB::table('earn_sessions')->where('user_id', $user->id)->where('active_guard', 'active')->count());
+    }
+
     private function listenerEpisode(int $seconds): array
     {
         $user = User::factory()->create();
