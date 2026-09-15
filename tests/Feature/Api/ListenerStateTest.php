@@ -44,9 +44,10 @@ final class ListenerStateTest extends TestCase
         $client->getJson('/api/v1/library/liked')->assertOk()->assertJsonPath('data.0.id', $episode->id);
         $stats = $client->getJson('/api/v1/stats/me')->assertOk()->assertJsonPath('data.listening_seconds', 120)->assertJsonPath('data.episodes_completed', 1)->assertJsonPath('data.shows_followed', 1)->assertJsonPath('data.downloads_count', 0)->assertJsonPath('data.shows.0.title', 'Stats Show');
         $this->assertSame(['listening_seconds', 'episodes_started', 'episodes_completed', 'shows_followed', 'episodes_saved', 'reviews', 'downloads_count', 'daily', 'streak', 'achievements', 'shows', 'categories'], array_keys($stats->json('data')));
-        $this->assertSame([], $stats->json('data.daily'));
+        $this->assertNotEmpty($stats->json('data.daily'));
         $this->assertSame([], $stats->json('data.achievements'));
-        $this->assertNull($stats->json('data.streak'));
+        $this->assertGreaterThanOrEqual(1, $stats->json('data.streak.current_days'));
+        $this->assertSame((string) $show->id, $stats->json('data.shows.0.id'));
         $this->actingAs($other, 'sanctum')->getJson('/api/v1/stats/me')->assertOk()->assertJsonPath('data.listening_seconds', 0)->assertJsonPath('data.shows', []);
     }
 
