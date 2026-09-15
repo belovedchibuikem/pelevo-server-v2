@@ -160,15 +160,16 @@ final class BuildHomeFeed
     private function datasets(string $userId, array $filters = []): array
     {
         $trendingShows = $this->trendingShows();
-        $madeForYou = $this->affinityEpisodes($userId, $this->trendingEpisodesFallback());
+        $trendingEpisodes = $this->trendingEpisodesFallback();
+        $madeForYou = $this->affinityEpisodes($userId, $trendingEpisodes);
 
         return [
             'moods' => $this->moods(),
-            'pick_for_today' => $this->withPickReason($userId, $madeForYou->take(1)),
+            'pick_for_today' => $this->pickForToday($userId, $madeForYou, $trendingEpisodes),
             'continue_listening' => $this->continueListening($userId),
             'made_for_you' => $madeForYou,
             'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
-            'because_you_listened' => $this->becauseYouListened($userId, $this->trendingEpisodesFallback()),
+            'because_you_listened' => $this->becauseYouListened($userId, $trendingEpisodes),
             'trending' => $trendingShows,
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
@@ -577,19 +578,103 @@ final class BuildHomeFeed
             ->get();
     }
 
-    private function withPickReason(string $userId, Collection $items): Collection
+    private function pickForToday(string $userId, Collection $madeForYou, Collection $trendingEpisodes): Collection
     {
-        $completed = DB::table('playback_progress')
-            ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
-            ->where('playback_progress.user_id', $userId)
-            ->where('playback_progress.completed', true)
-            ->orderByDesc('playback_progress.updated_at')
-            ->value('episodes.title');
+        $hasHistory = DB::table('playback_progress')->where('user_id', $userId)->exists();
+        $completedIds = DB::table('playback_progress')
+            ->where('user_id', $userId)
+            ->where('completed', true)
+            ->pluck('episode_id');
 
-        return $items->map(function (object $item) use ($completed): object {
-            $item->reason = $completed
-                ? 'Picked because you finished '.$completed
-                : 'Picked for you based on what you like on Pelevo';
+        $source = $hasHistory ? $madeForYou : $trendingEpisodes;
+        $pool = $source
+            ->reject(fn (object $item): bool => $completedIds->contains($item->id))
+            ->values();
+
+        if ($pool->isEmpty() && $hasHistory) {
+            $pool = $trendingEpisodes
+                ->reject(fn (object $item): bool => $completedIds->contains($item->id))
+                ->values();
+        }
+
+        if ($pool->isEmpty()) {
+            return collect();
+        }
+
+        $pick = $this->stickyDailyPick($userId, $pool);
+        if ($pick === null) {
+            return collect();
+        }
+
+        return $this->withPickReason($userId, collect([$pick]), $hasHistory);
+    }
+
+    private function stickyDailyPick(string $userId, Collection $pool): ?object
+    {
+        return DB::transaction(function () use ($userId, $pool): ?object {
+            $existing = DB::table('home_daily_picks')->where('user_id', $userId)->lockForUpdate()->first();
+            $byId = $pool->keyBy(fn (object $item): string => (string) $item->id);
+            $current = $existing ? $byId->get((string) $existing->episode_id) : null;
+            $stillValid = $current !== null
+                && $existing->consumed_at === null
+                && $existing->expires_at !== null
+                && now()->lt(\Illuminate\Support\Carbon::parse((string) $existing->expires_at));
+
+            if ($stillValid) {
+                return $current;
+            }
+
+            $excludeId = $existing->episode_id ?? null;
+            $candidates = $pool
+                ->reject(fn (object $item): bool => $excludeId !== null && (string) $item->id === (string) $excludeId)
+                ->values();
+            if ($candidates->isEmpty()) {
+                $candidates = $pool->values();
+            }
+
+            $latest = $candidates
+                ->sortByDesc(fn (object $item): string => sprintf('%s|%s', (string) ($item->published_at ?? ''), $item->id))
+                ->values()
+                ->take(8);
+            if ($latest->isEmpty()) {
+                return null;
+            }
+
+            $pick = $latest->get(random_int(0, $latest->count() - 1));
+            $now = now();
+            DB::table('home_daily_picks')->updateOrInsert(
+                ['user_id' => $userId],
+                [
+                    'episode_id' => $pick->id,
+                    'selected_at' => $now,
+                    'expires_at' => $now->copy()->addHours(6),
+                    'consumed_at' => null,
+                    'created_at' => $existing->created_at ?? $now,
+                    'updated_at' => $now,
+                ],
+            );
+
+            return $pick;
+        });
+    }
+
+    private function withPickReason(string $userId, Collection $items, bool $hasHistory = true): Collection
+    {
+        $completed = $hasHistory
+            ? DB::table('playback_progress')
+                ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
+                ->where('playback_progress.user_id', $userId)
+                ->where('playback_progress.completed', true)
+                ->orderByDesc('playback_progress.updated_at')
+                ->value('episodes.title')
+            : null;
+
+        return $items->map(function (object $item) use ($completed, $hasHistory): object {
+            $item->reason = $hasHistory
+                ? ($completed
+                    ? 'Fresh pick from Made For You after '.$completed
+                    : 'A latest Made For You episode picked for you')
+                : 'Popular on Pelevo while we learn what you like';
 
             return $item;
         });

@@ -146,4 +146,51 @@ final class DiscoveryAndHomeTest extends TestCase
         $this->assertNotContains('science', $scienceSlugs);
         $this->assertNotSame($comedySlugs, $scienceSlugs);
     }
+
+    public function test_pick_for_today_uses_trending_until_the_listener_has_history(): void
+    {
+        Cache::flush();
+        $newbie = User::factory()->create();
+        $fan = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/pick-trend.xml', 'title' => 'Trend Show']);
+        $popular = Episode::create(['show_id' => $show->id, 'guid' => 'pick-trend', 'title' => 'Crowd Favorite', 'audio_url' => 'https://example.com/pick-trend.mp3', 'published_at' => now()]);
+        DB::table('playback_progress')->insert(['user_id' => $fan->id, 'episode_id' => $popular->id, 'position_seconds' => 120, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()]);
+
+        $pick = collect($this->actingAs($newbie, 'sanctum')->getJson('/api/v1/home/feed')->assertOk()->json('data.rails'))
+            ->firstWhere('key', 'pick_for_today');
+
+        $this->assertSame('Crowd Favorite', $pick['items'][0]['title']);
+        $this->assertStringContainsString('Popular on Pelevo', (string) $pick['items'][0]['reason']);
+    }
+
+    public function test_pick_for_today_skips_finished_episodes_and_rotates_after_listen(): void
+    {
+        Cache::flush();
+        $listener = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/pick-history.xml', 'title' => 'History Show']);
+        $finished = Episode::create(['show_id' => $show->id, 'guid' => 'pick-finished', 'title' => 'Already Finished', 'audio_url' => 'https://example.com/finished.mp3', 'published_at' => now()->subDays(2)]);
+        $fresh = Episode::create(['show_id' => $show->id, 'guid' => 'pick-fresh', 'title' => 'Fresh Pick', 'audio_url' => 'https://example.com/fresh.mp3', 'published_at' => now()]);
+        $other = Episode::create(['show_id' => $show->id, 'guid' => 'pick-other', 'title' => 'Another Fresh', 'audio_url' => 'https://example.com/other.mp3', 'published_at' => now()->subHour()]);
+        $categoryId = DB::table('categories')->insertGetId(['name' => 'Business', 'slug' => 'business-pick', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('category_show')->insert([
+            ['category_id' => $categoryId, 'show_id' => $show->id],
+        ]);
+        DB::table('playback_progress')->insert(['user_id' => $listener->id, 'episode_id' => $finished->id, 'position_seconds' => 600, 'completed' => true, 'version' => 1, 'created_at' => now(), 'updated_at' => now()]);
+
+        $client = $this->actingAs($listener, 'sanctum');
+        $first = collect($client->getJson('/api/v1/home/feed')->assertOk()->json('data.rails'))->firstWhere('key', 'pick_for_today')['items'][0];
+        $second = collect($client->getJson('/api/v1/home/feed')->assertOk()->json('data.rails'))->firstWhere('key', 'pick_for_today')['items'][0];
+
+        $this->assertNotSame($finished->id, $first['id']);
+        $this->assertContains($first['title'], ['Fresh Pick', 'Another Fresh']);
+        $this->assertSame($first['id'], $second['id']);
+
+        $client->putJson('/api/v1/playback/'.$first['id'], ['position_seconds' => 20, 'completed' => false, 'version' => 0])->assertOk();
+        Cache::flush();
+        $afterListen = collect($client->getJson('/api/v1/home/feed')->assertOk()->json('data.rails'))->firstWhere('key', 'pick_for_today')['items'][0];
+
+        $this->assertNotSame($first['id'], $afterListen['id']);
+        $this->assertNotSame($finished->id, $afterListen['id']);
+        $this->assertContains($afterListen['title'], ['Fresh Pick', 'Another Fresh']);
+    }
 }

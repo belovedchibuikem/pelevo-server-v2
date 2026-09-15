@@ -27,8 +27,9 @@ final class HomeController extends Controller
                 $validSnapshot = false;
             }
         }
-        $rotationSlot = now()->format('Y-m-d').'-'.intdiv((int) now()->format('G'), 4);
-        $rails = $validSnapshot ? $snapshotRails : Cache::flexible("home:feed:{$userId}:v3:{$moduleVersion}:{$rotationSlot}", [30, 120], fn (): array => $builder->handle($userId));
+        $rotationSlot = now()->format('Y-m-d').'-'.intdiv((int) now()->format('G'), 6);
+        $bust = (int) Cache::get("home:feed:bust:{$userId}", 0);
+        $rails = $validSnapshot ? $snapshotRails : Cache::flexible("home:feed:{$userId}:v3:{$moduleVersion}:{$rotationSlot}:{$bust}", [30, 120], fn (): array => $builder->handle($userId));
         if (! $validSnapshot) {
             MaterializeHomeFeed::dispatch($userId)->afterResponse();
         }
