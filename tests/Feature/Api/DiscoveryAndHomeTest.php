@@ -103,6 +103,42 @@ final class DiscoveryAndHomeTest extends TestCase
         $this->assertDatabaseHas('shows', ['title' => 'Remote Technology']);
     }
 
+    public function test_search_with_category_still_queries_byterm_for_the_mood_text(): void
+    {
+        Http::fake([
+            'api.podcastindex.org/api/1.0/search/byterm*' => Http::response([
+                'status' => 'true',
+                'feeds' => [[
+                    'id' => 77,
+                    'url' => 'https://example.com/sleep.xml',
+                    'title' => 'Sleep Meditation Unwind',
+                    'author' => 'Rest Host',
+                ]],
+            ]),
+            'api.podcastindex.org/api/1.0/podcasts/trending*' => Http::response([
+                'status' => 'true',
+                'feeds' => [[
+                    'id' => 88,
+                    'url' => 'https://example.com/health.xml',
+                    'title' => 'Generic Health Chart',
+                    'author' => 'Charts',
+                    'category' => 'Health',
+                ]],
+            ]),
+        ]);
+        config()->set('services.podcast_index.enabled', true);
+        config()->set('services.podcast_index.api_key', 'key');
+        config()->set('services.podcast_index.api_secret', 'secret');
+
+        $this->actingAs(User::factory()->create(), 'sanctum')
+            ->getJson('/api/v1/search?q='.urlencode('sleep meditation unwind').'&category=Health')
+            ->assertOk()
+            ->assertJsonPath('data.shows.0.title', 'Sleep Meditation Unwind');
+
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/search/byterm')
+            && str_contains($request->url(), 'q='.rawurlencode('sleep meditation unwind')));
+    }
+
     public function test_editorial_playlists_and_charts_are_bounded_public_rails(): void
     {
         Cache::flush();

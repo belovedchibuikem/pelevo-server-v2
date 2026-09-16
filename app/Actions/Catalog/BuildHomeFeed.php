@@ -8,6 +8,7 @@ use App\Support\ArtworkUrl;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -38,7 +39,7 @@ final class BuildHomeFeed
             return null;
         }
 
-        return $this->present($module, $this->datasets($userId, $filters)[$key] ?? collect(), $userId);
+        return $this->present($module, $this->datasets($userId, $filters, $key)[$key] ?? collect(), $userId);
     }
 
     /**
@@ -157,8 +158,12 @@ final class BuildHomeFeed
      * @param  array{min_duration?: int, max_duration?: int, country?: string}  $filters
      * @return array<string, Collection<int, object>>
      */
-    private function datasets(string $userId, array $filters = []): array
+    private function datasets(string $userId, array $filters = [], ?string $only = null): array
     {
+        if ($only !== null) {
+            return [$only => $this->dataset($userId, $only, $filters)];
+        }
+
         $trendingShows = $this->trendingShows();
         $trendingEpisodes = $this->trendingEpisodesFallback();
         $madeForYou = $this->affinityEpisodes($userId, $trendingEpisodes);
@@ -179,6 +184,40 @@ final class BuildHomeFeed
             'shorts_for_you' => $this->shortsForYou($userId),
             'browse_categories' => $this->browseCategories(),
         ];
+    }
+
+    /**
+     * @param  array{min_duration?: int, max_duration?: int, country?: string}  $filters
+     */
+    private function dataset(string $userId, string $key, array $filters): Collection
+    {
+        return match ($key) {
+            'moods' => $this->moods(),
+            'continue_listening' => $this->continueListening($userId),
+            'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
+            'trending' => $this->trendingShows(),
+            'new_from_following' => $this->following($userId),
+            'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
+            'try_something_new' => $this->unexploredCategories($userId),
+            'explore_by_topic' => $this->categories(30),
+            'trending_shorts' => $this->trendingShorts(),
+            'shorts_for_you' => $this->shortsForYou($userId),
+            'browse_categories' => $this->browseCategories(),
+            'pick_for_today', 'made_for_you', 'because_you_listened' => $this->personalizedDataset($userId, $key),
+            default => collect(),
+        };
+    }
+
+    private function personalizedDataset(string $userId, string $key): Collection
+    {
+        $trendingEpisodes = $this->trendingEpisodesFallback();
+        $madeForYou = $this->affinityEpisodes($userId, $trendingEpisodes);
+
+        return match ($key) {
+            'pick_for_today' => $this->pickForToday($userId, $madeForYou, $trendingEpisodes),
+            'because_you_listened' => $this->becauseYouListened($userId, $trendingEpisodes),
+            default => $madeForYou,
+        };
     }
 
     private function continueListening(string $userId): Collection
@@ -1091,33 +1130,30 @@ final class BuildHomeFeed
             return collect();
         }
 
+        $cacheKey = 'home:discover-shows:'.hash('sha256', strtolower($query).'|'.($country ?? '').'|'.$limit);
+
         try {
-            $client = app(PodcastIndexClient::class);
-            $persist = app(PersistDiscoveredShow::class);
-            $feeds = $client->searchByTerm($query, $limit)['feeds'] ?? [];
-            $ids = [];
-            foreach ($feeds as $feed) {
-                if (! is_array($feed)) {
-                    continue;
-                }
-                if ($country !== null && isset($feed['country']) && strtoupper((string) $feed['country']) !== $country) {
-                    // Still persist; country filter is soft for discovery cold-start.
-                }
-                if ($show = $persist->handle($feed)) {
-                    if ($country !== null && $show->country_code === null) {
-                        $show->forceFill(['country_code' => $country])->save();
+            $ids = Cache::remember($cacheKey, now()->addMinutes(30), function () use ($query, $limit, $country): array {
+                $client = app(PodcastIndexClient::class);
+                $persist = app(PersistDiscoveredShow::class);
+                $feeds = $client->searchByTerm($query, $limit, fast: true)['feeds'] ?? [];
+                $ids = [];
+                foreach ($feeds as $feed) {
+                    if (! is_array($feed) || count($ids) >= $limit) {
+                        continue;
                     }
-                    $ids[] = $show->id;
+                    if ($show = $persist->handle($feed)) {
+                        if ($country !== null && $show->country_code === null) {
+                            $show->forceFill(['country_code' => $country])->save();
+                        }
+                        $ids[] = $show->id;
+                    }
                 }
-            }
 
-            if ($ids === []) {
-                return collect();
-            }
+                Log::info('home.discover.podcast_index', ['query' => $query, 'persisted' => count($ids)]);
 
-            Log::info('home.discover.podcast_index', ['query' => $query, 'persisted' => count($ids)]);
-
-            return $this->shows()->whereIn('shows.id', $ids)->limit($limit)->get();
+                return $ids;
+            });
         } catch (PodcastIndexException $exception) {
             Log::warning('home.discover.podcast_index_failed', [
                 'query' => $query,
@@ -1126,6 +1162,12 @@ final class BuildHomeFeed
 
             return collect();
         }
+
+        if ($ids === []) {
+            return collect();
+        }
+
+        return $this->shows()->whereIn('shows.id', $ids)->limit($limit)->get();
     }
 
     private function activeModules(): Collection

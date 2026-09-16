@@ -47,12 +47,19 @@ final class CatalogController extends Controller
         if (config('services.podcast_index.enabled')) {
             try {
                 $remoteCap = $preview ? 8 : 20;
-                // search/byterm only accepts q/max/similar — category filters use podcasts/trending.
-                $feeds = $category !== null
-                    ? ($client->trending($category, min($limit, $remoteCap), $data['language'] ?? null, fast: true)['feeds'] ?? [])
-                    : ($client->searchByTerm($normalizedQuery, min($limit, $remoteCap), fast: true)['feeds'] ?? []);
-                if ($feeds === [] && $category !== null) {
-                    $feeds = $client->searchByTerm($normalizedQuery, min($limit, $remoteCap), fast: true)['feeds'] ?? [];
+                $feeds = $client->searchByTerm($normalizedQuery, min($limit, $remoteCap), fast: true)['feeds'] ?? [];
+                if (! is_array($feeds)) {
+                    $feeds = [];
+                }
+                if ($category !== null) {
+                    try {
+                        $trending = $client->trending($category, min($limit, $remoteCap), $data['language'] ?? null, fast: true)['feeds'] ?? [];
+                        if (is_array($trending) && $trending !== []) {
+                            $feeds = array_values(array_merge($feeds, $trending));
+                        }
+                    } catch (PodcastIndexException) {
+                        // Term search already ran; trending is optional.
+                    }
                 }
                 $merged = collect();
                 $persisted = 0;
