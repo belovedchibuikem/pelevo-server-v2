@@ -21,21 +21,21 @@ final class PodcastIndexClient
         ], timeoutSeconds: $fast ? 3 : null, retries: $fast ? 0 : 2);
     }
 
-    public function trending(?string $category = null, int $limit = 20, ?string $language = null): array
+    public function trending(?string $category = null, int $limit = 20, ?string $language = null, bool $fast = false): array
     {
         return $this->get('podcasts/trending', [
-            'max' => min($limit, 100),
+            'max' => min($limit, $fast ? 24 : 100),
             'lang' => $language,
             'cat' => $category,
-        ]);
+        ], timeoutSeconds: $fast ? 3 : null, retries: $fast ? 0 : 2);
     }
 
     /**
      * @return array{status?: string, feeds?: list<array{id?: int|string, name?: string}>, count?: int}
      */
-    public function categoriesList(): array
+    public function categoriesList(bool $fast = false): array
     {
-        return $this->get('categories/list', []);
+        return $this->get('categories/list', [], timeoutSeconds: $fast ? 3 : null, retries: $fast ? 0 : 2);
     }
 
     /**

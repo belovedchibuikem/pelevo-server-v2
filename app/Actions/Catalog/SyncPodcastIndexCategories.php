@@ -90,7 +90,7 @@ final class SyncPodcastIndexCategories
     {
         if (config('services.podcast_index.enabled')) {
             try {
-                $payload = $this->client->categoriesList();
+                $payload = $this->client->categoriesList(fast: true);
                 $feeds = $payload['feeds'] ?? [];
                 if (is_array($feeds) && $feeds !== []) {
                     return array_values($feeds);

@@ -73,20 +73,33 @@ final class DiscoveryAndHomeTest extends TestCase
         $this->assertDatabaseMissing('search_history', ['user_id' => $listener->id]);
     }
 
-    public function test_search_preview_stays_local_and_does_not_call_podcast_index(): void
+    public function test_search_preview_discovers_remotely_without_writing_history(): void
     {
-        Http::fake();
+        Http::fake([
+            'api.podcastindex.org/api/1.0/search/byterm*' => Http::response([
+                'status' => 'true',
+                'feeds' => [[
+                    'id' => 42,
+                    'url' => 'https://example.com/remote.xml',
+                    'title' => 'Remote Technology',
+                    'author' => 'Index Host',
+                ]],
+            ]),
+        ]);
         config()->set('services.podcast_index.enabled', true);
+        config()->set('services.podcast_index.api_key', 'key');
+        config()->set('services.podcast_index.api_secret', 'secret');
         $listener = User::factory()->create();
         Show::create(['rss_url' => 'https://example.com/voice.xml', 'title' => 'Voice Technology']);
 
         $this->actingAs($listener, 'sanctum')
             ->getJson('/api/v1/search?q=Technology&preview=1')
             ->assertOk()
-            ->assertJsonPath('data.shows.0.title', 'Voice Technology')
-            ->assertJsonPath('meta.freshness', 'local');
+            ->assertJsonPath('data.shows.0.title', 'Remote Technology')
+            ->assertJsonPath('meta.freshness', 'fresh');
 
-        Http::assertNothingSent();
+        $this->assertSame(0, DB::table('search_history')->where('user_id', $listener->id)->count());
+        $this->assertDatabaseHas('shows', ['title' => 'Remote Technology']);
     }
 
     public function test_editorial_playlists_and_charts_are_bounded_public_rails(): void

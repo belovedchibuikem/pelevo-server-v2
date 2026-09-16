@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Actions\Catalog\BuildHomeFeed;
+use App\Actions\Catalog\SyncPodcastIndexCategories;
 use App\Http\Controllers\Controller;
 use App\Jobs\MaterializeHomeFeed;
 use App\Support\ApiResponse;
@@ -53,6 +54,10 @@ final class HomeController extends Controller
     public function discover(): JsonResponse
     {
         $data = Cache::flexible('home:discover:v2', [60, 300], function (): array {
+            if (! DB::table('categories')->where('active', true)->exists()) {
+                app(SyncPodcastIndexCategories::class)->handle(invalidateCache: false);
+            }
+
             $editorial = DB::table('editorial_playlists')
                 ->where('published', true)
                 ->orderBy('position')

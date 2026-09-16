@@ -42,18 +42,19 @@ final class CatalogController extends Controller
         }
         $shows = $this->matchingShows($normalizedQuery, $limit);
         $freshness = 'local';
-        // Typeahead stays on the local catalog so keystrokes return immediately.
-        // Submitted search still discovers remotely, with a short timeout.
-        if (! $preview && config('services.podcast_index.enabled')) {
+        // Preview and submit both discover remotely with a short timeout so typing
+        // is not limited to shows already in the local catalog.
+        if (config('services.podcast_index.enabled')) {
             try {
-                $feeds = $client->searchByTerm($normalizedQuery, min($limit, 12), $data['language'] ?? null, $category, fast: true)['feeds'] ?? [];
+                $remoteCap = $preview ? 8 : 12;
+                $feeds = $client->searchByTerm($normalizedQuery, min($limit, $remoteCap), $data['language'] ?? null, $category, fast: true)['feeds'] ?? [];
                 if ($feeds === [] && $category !== null) {
-                    $feeds = $client->trending($category, min($limit, 12), $data['language'] ?? null)['feeds'] ?? [];
+                    $feeds = $client->trending($category, min($limit, $remoteCap), $data['language'] ?? null, fast: true)['feeds'] ?? [];
                 }
                 $merged = collect();
                 $persisted = 0;
                 foreach ($feeds as $feed) {
-                    if ($persisted >= 12) {
+                    if ($persisted >= $remoteCap) {
                         break;
                     }
                     try {
@@ -101,7 +102,7 @@ final class CatalogController extends Controller
         } else {
             Log::info('catalog.search.podcast_index_skipped', [
                 'query' => $normalizedQuery,
-                'reason' => $preview ? 'preview' : 'disabled',
+                'reason' => 'disabled',
             ]);
         }
         if (! $preview) {
