@@ -11,9 +11,11 @@ use App\Models\Episode;
 use App\Models\FeedSyncRun;
 use App\Models\Show;
 use App\Support\ArtworkUrl;
+use App\Support\CatalogText;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -123,15 +125,24 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 $cache->show($show->id);
             }
         } catch (Throwable $exception) {
-            $syncRun->update([
-                'state' => 'failed',
-                'error' => substr($exception->getMessage(), 0, 1000),
-                'finished_at' => now(),
-            ]);
             Log::warning('catalog.rss.hydrate_failed', [
                 'show_id' => $this->showId,
-                'message' => $exception->getMessage(),
+                'message' => CatalogText::utf8($exception->getMessage(), 400),
             ]);
+            if ($this->isPermanentFeedFailure($exception)) {
+                $this->persistFailure($show, $syncRun, $exception);
+
+                return;
+            }
+            try {
+                $syncRun->update([
+                    'state' => 'failed',
+                    'error' => $this->safeFailureMessage($exception),
+                    'finished_at' => now(),
+                ]);
+            } catch (Throwable) {
+                //
+            }
 
             throw $exception;
         }
@@ -182,8 +193,16 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 if ($guid === '') {
                     continue;
                 }
-                if ($this->upsertPodcastIndexEpisode($show, $item, $guid)) {
-                    $imported++;
+                try {
+                    if ($this->upsertPodcastIndexEpisode($show, $item, $guid)) {
+                        $imported++;
+                    }
+                } catch (Throwable $exception) {
+                    Log::warning('catalog.rss.episode_upsert_failed', [
+                        'show_id' => $show->id,
+                        'guid' => CatalogText::utf8($guid, 180),
+                        'message' => CatalogText::utf8($exception->getMessage(), 400),
+                    ]);
                 }
             }
         } catch (PodcastIndexException $exception) {
@@ -199,16 +218,16 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
 
     private function podcastIndexGuid(array $item): string
     {
-        $guid = trim((string) ($item['guid'] ?? ''));
+        $guid = CatalogText::utf8(trim((string) ($item['guid'] ?? '')), 2000);
         if ($guid !== '') {
             return $guid;
         }
-        $id = trim((string) ($item['id'] ?? ''));
+        $id = CatalogText::utf8(trim((string) ($item['id'] ?? '')), 64);
         if ($id !== '') {
             return 'podcastindex:'.$id;
         }
 
-        return hash('sha256', trim((string) ($item['title'] ?? '')).'|'.trim((string) ($item['enclosureUrl'] ?? '')).'|'.trim((string) ($item['datePublished'] ?? '')));
+        return hash('sha256', CatalogText::utf8(($item['title'] ?? '').'|'.($item['enclosureUrl'] ?? '').'|'.($item['datePublished'] ?? '')));
     }
 
     private function upsertPodcastIndexEpisode(Show $show, array $item, string $guid): bool
@@ -228,9 +247,9 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         $episode = Episode::updateOrCreate(
             ['show_id' => $show->id, 'guid' => $guid],
             [
-                'external_id' => isset($item['id']) ? (string) $item['id'] : null,
-                'title' => strip_tags((string) ($item['title'] ?? 'Untitled episode')),
-                'description' => strip_tags((string) ($item['description'] ?? '')),
+                'external_id' => isset($item['id']) ? CatalogText::utf8((string) $item['id'], 191) : null,
+                'title' => CatalogText::utf8(strip_tags((string) ($item['title'] ?? 'Untitled episode')), 500) ?: 'Untitled episode',
+                'description' => CatalogText::utf8(strip_tags((string) ($item['description'] ?? ''))),
                 'audio_url' => $audioUrl,
                 'duration_seconds' => $duration,
                 'published_at' => $published,
@@ -249,15 +268,16 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         $newEpisodes = [];
 
         foreach ($channel->item ?? [] as $item) {
-            $guid = trim((string) ($item->guid ?? '')) ?: hash('sha256', trim((string) $item->title).'|'.trim((string) ($item->enclosure['url'] ?? '')).'|'.trim((string) $item->pubDate));
+            $rawGuid = trim((string) ($item->guid ?? ''));
+            $guid = CatalogText::utf8($rawGuid, 2000) ?: hash('sha256', CatalogText::utf8((string) $item->title.'|'.(string) ($item->enclosure['url'] ?? '').'|'.(string) $item->pubDate));
             $audioUrl = $this->enclosureUrl($item);
             if (! $audioUrl || ! str_starts_with($audioUrl, 'https://')) {
                 continue;
             }
             $buffer[] = [
                 'guid' => $guid,
-                'title' => strip_tags((string) $item->title),
-                'description' => strip_tags((string) ($item->description ?? '')),
+                'title' => CatalogText::utf8(strip_tags((string) $item->title), 500) ?: 'Untitled episode',
+                'description' => CatalogText::utf8(strip_tags((string) ($item->description ?? ''))),
                 'audio_url' => $audioUrl,
                 'duration_seconds' => $this->durationSeconds($item),
                 'published_at' => ($date = strtotime((string) $item->pubDate)) ? date(DATE_ATOM, $date) : null,
@@ -279,17 +299,27 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
     {
         $created = [];
         foreach ($rows as $row) {
-            $episode = Episode::updateOrCreate(
-                ['show_id' => $show->id, 'guid' => $row['guid']],
-                [
-                    'title' => $row['title'],
-                    'description' => $row['description'],
-                    'audio_url' => $row['audio_url'],
-                    'duration_seconds' => $row['duration_seconds'],
-                    'published_at' => $row['published_at'],
-                    'availability' => 'available',
-                ]
-            );
+            try {
+                $episode = Episode::updateOrCreate(
+                    ['show_id' => $show->id, 'guid' => $row['guid']],
+                    [
+                        'title' => $row['title'],
+                        'description' => $row['description'],
+                        'audio_url' => $row['audio_url'],
+                        'duration_seconds' => $row['duration_seconds'],
+                        'published_at' => $row['published_at'],
+                        'availability' => 'available',
+                    ]
+                );
+            } catch (Throwable $exception) {
+                Log::warning('catalog.rss.episode_upsert_failed', [
+                    'show_id' => $show->id,
+                    'guid' => CatalogText::utf8((string) $row['guid'], 180),
+                    'message' => CatalogText::utf8($exception->getMessage(), 400),
+                ]);
+
+                continue;
+            }
             if ($episode->wasRecentlyCreated) {
                 $created[] = $episode;
             }
@@ -543,14 +573,61 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         if (! $show) {
             return;
         }
-        $state = $show->feedState()->firstOrCreate([], ['state' => 'failed']);
-        $failures = $state->consecutive_failures + 1;
-        $state->update([
-            'last_failure_at' => now(),
-            'consecutive_failures' => $failures,
-            'state' => $failures >= config('rss.failure_stale_threshold') ? 'stale' : 'failed',
-            'next_poll_at' => $failures >= config('rss.failure_stale_threshold') ? now()->addWeek() : now()->addHours(min(24, 2 ** $failures)),
-            'last_error' => substr((string) $exception?->getMessage(), 0, 1000),
-        ]);
+        $this->persistFailure($show, null, $exception);
+    }
+
+    private function persistFailure(Show $show, ?FeedSyncRun $syncRun, ?Throwable $exception): void
+    {
+        $message = $this->safeFailureMessage($exception);
+        try {
+            $syncRun?->update([
+                'state' => 'failed',
+                'error' => $message,
+                'finished_at' => now(),
+            ]);
+        } catch (Throwable) {
+            // Never let diagnostics take down the worker.
+        }
+
+        try {
+            $state = $show->feedState()->firstOrCreate([], ['state' => 'failed']);
+            $failures = $state->consecutive_failures + 1;
+            $state->update([
+                'last_failure_at' => now(),
+                'consecutive_failures' => $failures,
+                'state' => $failures >= config('rss.failure_stale_threshold') ? 'stale' : 'failed',
+                'next_poll_at' => $failures >= config('rss.failure_stale_threshold') ? now()->addWeek() : now()->addHours(min(24, 2 ** $failures)),
+                'last_error' => $message,
+            ]);
+        } catch (Throwable) {
+            //
+        }
+    }
+
+    private function isPermanentFeedFailure(Throwable $exception): bool
+    {
+        if (! $exception instanceof RequestException) {
+            return false;
+        }
+        $status = $exception->response?->status();
+
+        return in_array($status, [404, 410, 403], true);
+    }
+
+    private function safeFailureMessage(?Throwable $exception): string
+    {
+        if ($exception instanceof RequestException) {
+            $status = $exception->response?->status();
+            if (in_array($status, [404, 410], true)) {
+                return 'RSS feed returned HTTP '.$status.'.';
+            }
+            if ($status) {
+                return CatalogText::utf8('RSS feed returned HTTP '.$status.'.', 500);
+            }
+        }
+        $raw = CatalogText::utf8((string) $exception?->getMessage(), 400);
+        $raw = preg_replace('/\s+/', ' ', $raw) ?? $raw;
+
+        return $raw !== '' ? $raw : 'RSS hydration failed.';
     }
 }

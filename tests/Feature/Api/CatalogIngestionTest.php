@@ -214,4 +214,55 @@ final class CatalogIngestionTest extends TestCase
         $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'pending']);
         Bus::assertDispatched(HydrateRssFeed::class, fn (HydrateRssFeed $job): bool => $job->showId === $show->id);
     }
+
+    public function test_rss_hydration_accepts_long_percent_encoded_guids(): void
+    {
+        Event::fake();
+        $guid = 'https://yitzchoklowy.com/uncategorized/%d7%a1%d7%93%d7%a8-%d7%94%d7%aa%d7%a4%d7%9c%d7%95%d7%aa-%d7%97-%d7%91%d7%a8%d7%9b%d7%aa-%d7%94%d7%9e%d7%96%d7%95%d7%9f-%d7%95%d7%94%d7%a4%d7%98%d7%a8%d7%94/';
+        $show = Show::create(['rss_url' => 'https://example.com/hebrew.xml', 'title' => 'Hebrew Show']);
+        $show->feedState()->create(['state' => 'pending', 'next_poll_at' => now()]);
+        Http::preventStrayRequests();
+        Http::fake(['https://example.com/hebrew.xml' => Http::response(<<<XML
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Hebrew Show</title>
+                <item>
+                  <guid>{$guid}</guid>
+                  <title>סדר התפלות ח – ברכת המזון והפטרה</title>
+                  <enclosure url="https://cdn.example.com/ep.mp3" type="audio/mpeg"/>
+                  <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                </item>
+              </channel>
+            </rss>
+            XML, 200)]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertGreaterThan(191, strlen($guid));
+        $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => $guid]);
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'healthy']);
+    }
+
+    public function test_missing_rss_feed_is_marked_failed_without_retry_throw(): void
+    {
+        Event::fake();
+        $show = Show::create(['rss_url' => 'https://example.com/gone.xml', 'title' => 'Gone Show']);
+        $show->feedState()->create(['state' => 'pending', 'next_poll_at' => now()]);
+        Http::preventStrayRequests();
+        Http::fake(['https://example.com/gone.xml' => Http::response('Not Found', 404)]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'failed']);
+        $this->assertDatabaseHas('feed_sync_runs', ['show_id' => $show->id, 'state' => 'failed', 'error' => 'RSS feed returned HTTP 404.']);
+    }
 }
