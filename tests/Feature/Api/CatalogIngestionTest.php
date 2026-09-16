@@ -66,6 +66,144 @@ final class CatalogIngestionTest extends TestCase
         $this->assertDatabaseHas('feed_sync_runs', ['show_id' => $show->id, 'state' => 'completed', 'http_status' => 200, 'new_episode_count' => 1]);
     }
 
+    public function test_rss_hydration_persists_permanent_redirects_and_itunes_new_feed_url(): void
+    {
+        Event::fake();
+        $show = Show::create([
+            'rss_url' => 'https://example.com/legacy.xml',
+            'title' => 'RSS Show',
+            'description' => 'Old description',
+            'artwork_url' => 'https://cdn.example.com/old.jpg',
+        ]);
+        $show->feedState()->create(['state' => 'pending', 'next_poll_at' => now()]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://example.com/legacy.xml' => Http::response('', 301, ['Location' => 'https://example.com/moved.xml']),
+            'https://example.com/moved.xml' => Http::response(<<<'XML'
+                <?xml version="1.0"?>
+                <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+                  <channel>
+                    <title>RSS Show</title>
+                    <itunes:new-feed-url>https://example.com/canonical.xml</itunes:new-feed-url>
+                    <item>
+                      <guid>bridge</guid>
+                      <title>Bridge</title>
+                      <enclosure url="https://cdn.example.com/bridge.mp3" type="audio/mpeg"/>
+                      <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                XML, 200),
+            'https://example.com/canonical.xml' => Http::response(<<<'XML'
+                <?xml version="1.0"?>
+                <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+                  <channel>
+                    <title>RSS Show</title>
+                    <description>Fresh show notes</description>
+                    <itunes:image href="https://cdn.example.com/cover.jpg"/>
+                    <item>
+                      <guid>episode-1</guid>
+                      <title>First episode</title>
+                      <enclosure url="https://cdn.example.com/episode-1.mp3" type="audio/mpeg"/>
+                      <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                XML, 200, ['ETag' => '"canonical-v1"']),
+        ]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('shows', [
+            'id' => $show->id,
+            'rss_url' => 'https://example.com/canonical.xml',
+            'description' => 'Fresh show notes',
+            'artwork_url' => 'https://cdn.example.com/cover.jpg',
+        ]);
+        $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'episode-1']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'rss_url', 'new_value' => 'https://example.com/canonical.xml']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'artwork_url', 'new_value' => 'https://cdn.example.com/cover.jpg']);
+    }
+
+    public function test_rss_hydration_does_not_persist_temporary_redirects(): void
+    {
+        Event::fake();
+        $show = Show::create(['rss_url' => 'https://example.com/show.xml', 'title' => 'RSS Show']);
+        $show->feedState()->create(['state' => 'pending', 'next_poll_at' => now()]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://example.com/show.xml' => Http::response('', 302, ['Location' => 'https://example.com/tmp.xml']),
+            'https://example.com/tmp.xml' => Http::response(<<<'XML'
+                <?xml version="1.0"?>
+                <rss version="2.0">
+                  <channel>
+                    <title>RSS Show</title>
+                    <item>
+                      <guid>tmp-1</guid>
+                      <title>Temporary hop</title>
+                      <enclosure url="https://cdn.example.com/tmp-1.mp3" type="audio/mpeg"/>
+                      <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                XML, 200),
+        ]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('shows', ['id' => $show->id, 'rss_url' => 'https://example.com/show.xml']);
+        $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'tmp-1']);
+    }
+
+    public function test_rss_hydration_refreshes_channel_artwork_from_rss_image(): void
+    {
+        Event::fake();
+        $show = Show::create([
+            'rss_url' => 'https://example.com/show.xml',
+            'title' => 'RSS Show',
+            'description' => 'Stale copy',
+            'artwork_url' => 'https://cdn.example.com/stale.png',
+        ]);
+        $show->feedState()->create(['state' => 'pending', 'next_poll_at' => now()]);
+        Http::preventStrayRequests();
+        Http::fake(['https://example.com/show.xml' => Http::response(<<<'XML'
+            <?xml version="1.0"?>
+            <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+              <channel>
+                <title>RSS Show</title>
+                <description>Updated copy</description>
+                <image><url>https://cdn.example.com/rss-image.png</url></image>
+                <item>
+                  <guid>episode-1</guid>
+                  <title>First episode</title>
+                  <enclosure url="https://cdn.example.com/episode-1.mp3" type="audio/mpeg"/>
+                  <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                </item>
+              </channel>
+            </rss>
+            XML, 200)]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('shows', [
+            'id' => $show->id,
+            'description' => 'Updated copy',
+            'artwork_url' => 'https://cdn.example.com/rss-image.png',
+        ]);
+    }
+
     public function test_poll_command_backfills_missing_feed_state_and_dispatches_due_show(): void
     {
         Bus::fake([HydrateRssFeed::class]);

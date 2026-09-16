@@ -10,6 +10,7 @@ use App\Integrations\Rss\RssFeedFetcher;
 use App\Models\Episode;
 use App\Models\FeedSyncRun;
 use App\Models\Show;
+use App\Support\ArtworkUrl;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -59,9 +60,12 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             // populate while RSS continues for full archives (including 2K+).
             $seeded = $this->seedFromPodcastIndex($show, $podcastIndex);
 
-            $result = $fetcher->fetch($show);
+            $originalRssUrl = $show->rss_url;
+            $result = $this->fetchFollowingFeedMoves($show, $fetcher);
             if ($result['not_modified']) {
-                DB::transaction(function () use ($show, $syncRun, $result, $seeded): void {
+                $urlChanged = false;
+                DB::transaction(function () use ($show, $syncRun, $result, $seeded, &$urlChanged): void {
+                    $urlChanged = $this->persistCanonicalFeedUrl($show, $result);
                     $show->feedState()->updateOrCreate([], [
                         'last_success_at' => now(),
                         'consecutive_failures' => 0,
@@ -77,12 +81,16 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                         'finished_at' => now(),
                     ]);
                 });
+                if ($urlChanged || $show->rss_url !== $originalRssUrl) {
+                    $cache->show($show->id);
+                }
 
                 return;
             }
 
-            $newEpisodes = DB::transaction(function () use ($show, $result, $syncRun): array {
-                $this->applyResolvedUrl($show, $result['resolved_url']);
+            $outcome = DB::transaction(function () use ($show, $result, $syncRun, $originalRssUrl): array {
+                $urlChanged = $this->persistCanonicalFeedUrl($show, $result);
+                $metadataChanged = $this->syncChannelMetadata($show, $result['xml']);
                 $newEpisodes = $this->upsertRssItems($show, $result['xml']);
                 $show->feedState()->updateOrCreate([], [
                     'etag' => $result['etag'],
@@ -102,13 +110,16 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                     'finished_at' => now(),
                 ]);
 
-                return $newEpisodes;
+                return [
+                    'episodes' => $newEpisodes,
+                    'catalog_changed' => $urlChanged || $metadataChanged || $show->rss_url !== $originalRssUrl,
+                ];
             });
 
-            foreach ($newEpisodes as $episode) {
+            foreach ($outcome['episodes'] as $episode) {
                 NewEpisodePublished::dispatch($episode);
             }
-            if ($newEpisodes !== [] || $seeded > 0) {
+            if ($outcome['episodes'] !== [] || $seeded > 0 || $outcome['catalog_changed']) {
                 $cache->show($show->id);
             }
         } catch (Throwable $exception) {
@@ -287,10 +298,173 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         return $created;
     }
 
-    private function applyResolvedUrl(Show $show, string $resolvedUrl): void
+    /**
+     * Follow HTTP 301/308 into the stored feed URL, then honour itunes:new-feed-url
+     * once so the next poll (and this run's metadata) use the publisher's new host.
+     *
+     * @return array<string, mixed>
+     */
+    private function fetchFollowingFeedMoves(Show $show, RssFeedFetcher $fetcher): array
+    {
+        $result = $fetcher->fetch($show);
+        if ($result['not_modified']) {
+            return $result;
+        }
+
+        $declared = $this->declaredNewFeedUrl($result['xml'], $fetcher);
+        if ($declared === null || $declared === $show->rss_url) {
+            return $result;
+        }
+
+        if (! $this->applyResolvedUrl($show, $declared)) {
+            return $result;
+        }
+
+        $show->refresh();
+        $show->load('feedState');
+
+        return $fetcher->fetch($show, bypassCache: true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function persistCanonicalFeedUrl(Show $show, array $result): bool
+    {
+        if (! ($result['permanent_redirect'] ?? false)) {
+            return false;
+        }
+
+        $canonical = is_string($result['canonical_url'] ?? null) ? $result['canonical_url'] : null;
+        if ($canonical === null || $canonical === '') {
+            return false;
+        }
+
+        return $this->applyResolvedUrl($show, $canonical);
+    }
+
+    private function declaredNewFeedUrl(\SimpleXMLElement $xml, RssFeedFetcher $fetcher): ?string
+    {
+        $channel = $xml->channel ?? $xml;
+        $itunes = $channel->children('http://www.itunes.com/dtds/podcast-1.0.dtd');
+        $candidate = trim((string) ($itunes->{'new-feed-url'} ?? $channel->{'new-feed-url'} ?? ''));
+        if ($candidate === '') {
+            return null;
+        }
+
+        return $this->normalizedSafeFeedUrl($candidate, $fetcher);
+    }
+
+    private function normalizedSafeFeedUrl(string $url, RssFeedFetcher $fetcher): ?string
+    {
+        $url = trim($url);
+        if (str_starts_with($url, 'http://')) {
+            $url = 'https://'.substr($url, strlen('http://'));
+        }
+        if (! filter_var($url, FILTER_VALIDATE_URL) || ! str_starts_with($url, 'https://')) {
+            return null;
+        }
+        if (! $fetcher->isSafeFeedUrl($url)) {
+            Log::info('catalog.rss.rejected_feed_move', [
+                'show_id' => $this->showId,
+                'url' => $url,
+            ]);
+
+            return null;
+        }
+
+        return $url;
+    }
+
+    private function syncChannelMetadata(Show $show, \SimpleXMLElement $xml): bool
+    {
+        $channel = $xml->channel ?? $xml;
+        $itunes = $channel->children('http://www.itunes.com/dtds/podcast-1.0.dtd');
+        $updates = [];
+
+        $description = $this->channelDescription($channel, $itunes);
+        if ($description !== null && $description !== (string) $show->description) {
+            $this->recordMetadataChange($show, 'description', $show->description, $description);
+            $updates['description'] = $description;
+        }
+
+        $artwork = $this->channelArtworkUrl($channel, $itunes);
+        if ($artwork !== null && $artwork !== $show->artwork_url) {
+            $this->recordMetadataChange($show, 'artwork_url', $show->artwork_url, $artwork);
+            $updates['artwork_url'] = $artwork;
+        }
+
+        $title = trim(strip_tags((string) ($channel->title ?? '')));
+        if ($title !== '' && $title !== (string) $show->title) {
+            $this->recordMetadataChange($show, 'title', $show->title, $title);
+            $updates['title'] = $title;
+        }
+
+        if ($updates === []) {
+            return false;
+        }
+
+        $show->update($updates);
+
+        return true;
+    }
+
+    private function channelDescription(\SimpleXMLElement $channel, \SimpleXMLElement $itunes): ?string
+    {
+        $raw = trim((string) ($itunes->summary ?? ''));
+        if ($raw === '') {
+            $raw = trim((string) ($channel->description ?? ''));
+        }
+        if ($raw === '') {
+            return null;
+        }
+
+        return strip_tags($raw);
+    }
+
+    private function channelArtworkUrl(\SimpleXMLElement $channel, \SimpleXMLElement $itunes): ?string
+    {
+        $candidates = [];
+        if (isset($itunes->image)) {
+            foreach ($itunes->image as $image) {
+                $attributes = $image->attributes() ?: [];
+                $candidates[] = (string) ($attributes['href'] ?? '');
+                $candidates[] = (string) ($image['href'] ?? '');
+                $candidates[] = (string) ($image->url ?? '');
+            }
+        }
+        $channel->registerXPathNamespace('itunes', 'http://www.itunes.com/dtds/podcast-1.0.dtd');
+        foreach ($channel->xpath('.//itunes:image/@href') ?: [] as $href) {
+            $candidates[] = (string) $href;
+        }
+        $candidates[] = (string) ($channel->image->url ?? '');
+        $candidates[] = (string) ($channel->image['href'] ?? '');
+        foreach ($candidates as $candidate) {
+            $sanitized = ArtworkUrl::sanitize(trim($candidate));
+            if ($sanitized !== null) {
+                return $sanitized;
+            }
+        }
+
+        return null;
+    }
+
+    private function recordMetadataChange(Show $show, string $field, ?string $old, ?string $new): void
+    {
+        DB::table('show_metadata_changes')->insert([
+            'id' => (string) Str::ulid(),
+            'show_id' => $show->id,
+            'field' => $field,
+            'old_value' => $old,
+            'new_value' => $new,
+            'detected_at' => now(),
+        ]);
+    }
+
+    private function applyResolvedUrl(Show $show, string $resolvedUrl): bool
     {
         if ($resolvedUrl === $show->rss_url) {
-            return;
+            return false;
         }
 
         $conflict = Show::query()
@@ -307,9 +481,13 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             'detected_at' => now(),
         ]);
 
-        if (! $conflict) {
-            $show->update(['rss_url' => $resolvedUrl]);
+        if ($conflict) {
+            return false;
         }
+
+        $show->update(['rss_url' => $resolvedUrl]);
+
+        return true;
     }
 
     private function enclosureUrl(\SimpleXMLElement $item): ?string
