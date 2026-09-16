@@ -40,8 +40,8 @@ return [
         'base_url' => env('PODCAST_INDEX_BASE_URL', 'https://api.podcastindex.org/api/1.0'),
         'api_key' => env('PODCAST_INDEX_API_KEY'),
         'api_secret' => env('PODCAST_INDEX_API_SECRET'),
-        'user_agent' => env('PODCAST_INDEX_USER_AGENT', 'Pelevo/1.3'),
-        'timeout' => (int) env('PODCAST_INDEX_TIMEOUT', 5),
+        'user_agent' => env('PODCAST_INDEX_USER_AGENT', 'Pelevo/1.3 +https://pelevo.com'),
+        'timeout' => (int) env('PODCAST_INDEX_TIMEOUT', 10),
         // Episode pages stay modest (PI hard-caps at 1000). Prefer RSS for full archives.
         'episode_page_size' => (int) env('PODCAST_INDEX_EPISODE_PAGE_SIZE', 100),
         'episode_page_delay_ms' => (int) env('PODCAST_INDEX_EPISODE_PAGE_DELAY_MS', 350),

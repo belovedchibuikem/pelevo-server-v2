@@ -46,10 +46,13 @@ final class CatalogController extends Controller
         // is not limited to shows already in the local catalog.
         if (config('services.podcast_index.enabled')) {
             try {
-                $remoteCap = $preview ? 8 : 12;
-                $feeds = $client->searchByTerm($normalizedQuery, min($limit, $remoteCap), $data['language'] ?? null, $category, fast: true)['feeds'] ?? [];
+                $remoteCap = $preview ? 8 : 20;
+                // search/byterm only accepts q/max/similar — category filters use podcasts/trending.
+                $feeds = $category !== null
+                    ? ($client->trending($category, min($limit, $remoteCap), $data['language'] ?? null, fast: true)['feeds'] ?? [])
+                    : ($client->searchByTerm($normalizedQuery, min($limit, $remoteCap), fast: true)['feeds'] ?? []);
                 if ($feeds === [] && $category !== null) {
-                    $feeds = $client->trending($category, min($limit, $remoteCap), $data['language'] ?? null, fast: true)['feeds'] ?? [];
+                    $feeds = $client->searchByTerm($normalizedQuery, min($limit, $remoteCap), fast: true)['feeds'] ?? [];
                 }
                 $merged = collect();
                 $persisted = 0;

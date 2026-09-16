@@ -35,6 +35,7 @@ final class DiscoveryAndHomeTest extends TestCase
     public function test_browse_related_reviews_and_notification_controls_are_consistent(): void
     {
         Cache::flush();
+        Http::fake();
         $listener = User::factory()->create(['name' => 'Reviewer']);
         $show = Show::create(['rss_url' => 'https://example.com/main.xml', 'title' => 'Main Show']);
         $related = Show::create(['rss_url' => 'https://example.com/related.xml', 'title' => 'Related Show']);

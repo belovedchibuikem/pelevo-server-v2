@@ -7,27 +7,39 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
+/**
+ * Podcast Index HTTP client.
+ *
+ * Official contract (https://podcastindex-org.github.io/docs-api/):
+ * - Every request: User-Agent, X-Auth-Key, X-Auth-Date, Authorization = sha1(key+secret+date)
+ * - search/byterm: q, max, similar, clean, fulltext, aponly, val — not cat/lang
+ * - podcasts/trending: max, since, lang, cat, notcat (cat is name or numeric id)
+ * - categories/list: no query
+ * - episodes/byfeedid: id, max (≤1000), since
+ * - 429: stop and surface; do not tight-loop retries
+ */
 final class PodcastIndexClient
 {
     public function __construct(private readonly PodcastIndexAuthenticator $authenticator) {}
 
-    public function searchByTerm(string $query, int $limit, ?string $language = null, ?string $category = null, bool $fast = false): array
+    public function searchByTerm(string $query, int $limit, bool $fast = false): array
     {
         return $this->get('search/byterm', [
             'q' => $query,
-            'max' => min($limit, $fast ? 12 : 100),
-            'lang' => $language,
-            'cat' => $category,
-        ], timeoutSeconds: $fast ? 3 : null, retries: $fast ? 0 : 2);
+            'max' => max(1, min($limit, $fast ? 20 : 50)),
+            'similar' => 'true',
+        ], timeoutSeconds: $fast ? 8 : null, retries: $fast ? 0 : 1);
     }
 
     public function trending(?string $category = null, int $limit = 20, ?string $language = null, bool $fast = false): array
     {
         return $this->get('podcasts/trending', [
-            'max' => min($limit, $fast ? 24 : 100),
+            'max' => max(1, min($limit, $fast ? 24 : 50)),
             'lang' => $language,
             'cat' => $category,
-        ], timeoutSeconds: $fast ? 3 : null, retries: $fast ? 0 : 2);
+            // PI’s default window is a few days and often returns zero feeds per category.
+            'since' => -2592000,
+        ], timeoutSeconds: $fast ? 8 : null, retries: $fast ? 0 : 1);
     }
 
     /**
@@ -35,7 +47,7 @@ final class PodcastIndexClient
      */
     public function categoriesList(bool $fast = false): array
     {
-        return $this->get('categories/list', [], timeoutSeconds: $fast ? 3 : null, retries: $fast ? 0 : 2);
+        return $this->get('categories/list', [], timeoutSeconds: $fast ? 8 : null, retries: $fast ? 0 : 1);
     }
 
     /**
@@ -55,7 +67,7 @@ final class PodcastIndexClient
         ], $useCache);
     }
 
-    private function get(string $path, array $query, bool $useCache = true, ?int $timeoutSeconds = null, int $retries = 2): array
+    private function get(string $path, array $query, bool $useCache = true, ?int $timeoutSeconds = null, int $retries = 1): array
     {
         if (! config('services.podcast_index.enabled')) {
             throw new PodcastIndexException('Podcast Index is disabled.');
@@ -76,19 +88,26 @@ final class PodcastIndexClient
         }
     }
 
-    private function request(string $path, array $query, ?int $timeoutSeconds = null, int $retries = 2): array
+    private function request(string $path, array $query, ?int $timeoutSeconds = null, int $retries = 1): array
     {
-        $pending = Http::baseUrl(rtrim((string) config('services.podcast_index.base_url'), '/'))
-            ->withHeaders($this->authenticator->headers())
+        $base = rtrim((string) config('services.podcast_index.base_url'), '/');
+        $url = $base.'/'.ltrim($path, '/');
+        $userAgent = trim((string) config('services.podcast_index.user_agent'));
+        if ($userAgent === '') {
+            $userAgent = 'Pelevo/1.3 +https://pelevo.com';
+        }
+
+        $pending = Http::withHeaders($this->authenticator->headers())
+            ->withUserAgent($userAgent)
             ->acceptJson()
-            ->connectTimeout(2)
-            ->timeout($timeoutSeconds ?? (int) config('services.podcast_index.timeout', 5));
+            ->connectTimeout(5)
+            ->timeout($timeoutSeconds ?? max(8, (int) config('services.podcast_index.timeout', 10)));
         if ($retries > 0) {
-            $pending = $pending->retry($retries, 100, function ($exception, $request): bool {
+            $pending = $pending->retry($retries, 250, function ($exception, $request): bool {
                 return $exception instanceof ConnectionException;
             }, throw: false);
         }
-        $response = $pending->get($path, $query);
+        $response = $pending->get($url, $query);
 
         if ($response->status() === 429) {
             throw new PodcastIndexException('Podcast Index rate limited (429).');
@@ -102,6 +121,11 @@ final class PodcastIndexClient
             );
         }
 
-        return $response->json() ?? throw new PodcastIndexException('Podcast Index returned malformed JSON.');
+        $payload = $response->json();
+        if (! is_array($payload)) {
+            throw new PodcastIndexException('Podcast Index returned malformed JSON.');
+        }
+
+        return $payload;
     }
 }
