@@ -10,6 +10,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -70,6 +71,22 @@ final class DiscoveryAndHomeTest extends TestCase
         $client->getJson('/api/v1/search?q=Technology')->assertOk();
         $client->deleteJson('/api/v1/search/recent')->assertOk();
         $this->assertDatabaseMissing('search_history', ['user_id' => $listener->id]);
+    }
+
+    public function test_search_preview_stays_local_and_does_not_call_podcast_index(): void
+    {
+        Http::fake();
+        config()->set('services.podcast_index.enabled', true);
+        $listener = User::factory()->create();
+        Show::create(['rss_url' => 'https://example.com/voice.xml', 'title' => 'Voice Technology']);
+
+        $this->actingAs($listener, 'sanctum')
+            ->getJson('/api/v1/search?q=Technology&preview=1')
+            ->assertOk()
+            ->assertJsonPath('data.shows.0.title', 'Voice Technology')
+            ->assertJsonPath('meta.freshness', 'local');
+
+        Http::assertNothingSent();
     }
 
     public function test_editorial_playlists_and_charts_are_bounded_public_rails(): void

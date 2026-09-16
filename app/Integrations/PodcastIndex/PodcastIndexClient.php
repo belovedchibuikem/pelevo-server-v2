@@ -11,14 +11,14 @@ final class PodcastIndexClient
 {
     public function __construct(private readonly PodcastIndexAuthenticator $authenticator) {}
 
-    public function searchByTerm(string $query, int $limit, ?string $language = null, ?string $category = null): array
+    public function searchByTerm(string $query, int $limit, ?string $language = null, ?string $category = null, bool $fast = false): array
     {
         return $this->get('search/byterm', [
             'q' => $query,
-            'max' => min($limit, 100),
+            'max' => min($limit, $fast ? 12 : 100),
             'lang' => $language,
             'cat' => $category,
-        ]);
+        ], timeoutSeconds: $fast ? 3 : null, retries: $fast ? 0 : 2);
     }
 
     public function trending(?string $category = null, int $limit = 20, ?string $language = null): array
@@ -55,7 +55,7 @@ final class PodcastIndexClient
         ], $useCache);
     }
 
-    private function get(string $path, array $query, bool $useCache = true): array
+    private function get(string $path, array $query, bool $useCache = true, ?int $timeoutSeconds = null, int $retries = 2): array
     {
         if (! config('services.podcast_index.enabled')) {
             throw new PodcastIndexException('Podcast Index is disabled.');
@@ -63,7 +63,7 @@ final class PodcastIndexClient
         $query = array_filter($query, fn (mixed $value): bool => $value !== null && $value !== '');
         ksort($query);
         $cacheKey = 'podcast-index:'.hash('sha256', $path.'?'.http_build_query($query));
-        $resolver = fn (): array => $this->request($path, $query);
+        $resolver = fn (): array => $this->request($path, $query, $timeoutSeconds, $retries);
 
         try {
             if (! $useCache) {
@@ -76,17 +76,19 @@ final class PodcastIndexClient
         }
     }
 
-    private function request(string $path, array $query): array
+    private function request(string $path, array $query, ?int $timeoutSeconds = null, int $retries = 2): array
     {
-        $response = Http::baseUrl(rtrim((string) config('services.podcast_index.base_url'), '/'))
+        $pending = Http::baseUrl(rtrim((string) config('services.podcast_index.base_url'), '/'))
             ->withHeaders($this->authenticator->headers())
             ->acceptJson()
             ->connectTimeout(2)
-            ->timeout((int) config('services.podcast_index.timeout', 5))
-            ->retry(2, 100, function ($exception, $request): bool {
+            ->timeout($timeoutSeconds ?? (int) config('services.podcast_index.timeout', 5));
+        if ($retries > 0) {
+            $pending = $pending->retry($retries, 100, function ($exception, $request): bool {
                 return $exception instanceof ConnectionException;
-            }, throw: false)
-            ->get($path, $query);
+            }, throw: false);
+        }
+        $response = $pending->get($path, $query);
 
         if ($response->status() === 429) {
             throw new PodcastIndexException('Podcast Index rate limited (429).');

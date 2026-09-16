@@ -42,17 +42,20 @@ final class CatalogController extends Controller
         }
         $shows = $this->matchingShows($normalizedQuery, $limit);
         $freshness = 'local';
-        // Preview (typeahead) also hits Podcast Index so typing finds shows, but
-        // skips search_history writes.
-        if (config('services.podcast_index.enabled')) {
+        // Typeahead stays on the local catalog so keystrokes return immediately.
+        // Submitted search still discovers remotely, with a short timeout.
+        if (! $preview && config('services.podcast_index.enabled')) {
             try {
-                $feeds = $client->searchByTerm($normalizedQuery, $limit, $data['language'] ?? null, $category)['feeds'] ?? [];
+                $feeds = $client->searchByTerm($normalizedQuery, min($limit, 12), $data['language'] ?? null, $category, fast: true)['feeds'] ?? [];
                 if ($feeds === [] && $category !== null) {
-                    $feeds = $client->trending($category, $limit, $data['language'] ?? null)['feeds'] ?? [];
+                    $feeds = $client->trending($category, min($limit, 12), $data['language'] ?? null)['feeds'] ?? [];
                 }
                 $merged = collect();
                 $persisted = 0;
                 foreach ($feeds as $feed) {
+                    if ($persisted >= 12) {
+                        break;
+                    }
                     try {
                         if ($show = $persist->handle(is_array($feed) ? $feed : [])) {
                             $merged->put($show->id, $show);
@@ -98,16 +101,18 @@ final class CatalogController extends Controller
         } else {
             Log::info('catalog.search.podcast_index_skipped', [
                 'query' => $normalizedQuery,
-                'reason' => 'disabled',
+                'reason' => $preview ? 'preview' : 'disabled',
             ]);
         }
         if (! $preview) {
             DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->update(['result_count' => $shows->count(), 'updated_at' => now()]);
         }
 
+        $followedShowIds = $this->followedShowIds($request->user()?->id, $shows->pluck('id'));
+
         return ApiResponse::success([
             'query' => $normalizedQuery,
-            'shows' => $shows->map(fn (Show $show): array => $this->presentShowCard($show))->values(),
+            'shows' => $shows->map(fn (Show $show): array => $this->presentShowCard($show, $followedShowIds))->values(),
             'episodes' => $this->matchingEpisodes($normalizedQuery, $limit),
             'playlists' => $this->matchingPlaylists($normalizedQuery, $limit),
         ], ['cursor' => null, 'has_more' => false, 'freshness' => $freshness]);
@@ -456,17 +461,40 @@ final class CatalogController extends Controller
         return $parts;
     }
 
-    private function presentShowCard(Show $show): array
+    /**
+     * @param  iterable<int, string>|null  $showIds
+     * @return array<string, true>
+     */
+    private function followedShowIds(?string $userId, $showIds): array
     {
-        $userId = request()->user()?->id;
+        if ($userId === null) {
+            return [];
+        }
+        $ids = collect($showIds)->filter()->values();
+        if ($ids->isEmpty()) {
+            return [];
+        }
 
+        return DB::table('follows')
+            ->where('user_id', $userId)
+            ->whereIn('show_id', $ids)
+            ->pluck('show_id')
+            ->mapWithKeys(fn (mixed $id): array => [(string) $id => true])
+            ->all();
+    }
+
+    /**
+     * @param  array<string, true>  $followedShowIds
+     */
+    private function presentShowCard(Show $show, array $followedShowIds = []): array
+    {
         return [
             'id' => $show->id,
             'title' => $this->nonEmptyText($show->title, 'Untitled podcast'),
             'author' => $this->nullableText($show->author),
             'artwork_url' => ArtworkUrl::sanitize($show->artwork_url),
             'description' => $this->nullableText($show->description),
-            'following' => $userId !== null && DB::table('follows')->where('user_id', $userId)->where('show_id', $show->id)->exists(),
+            'following' => isset($followedShowIds[$show->id]),
         ];
     }
 

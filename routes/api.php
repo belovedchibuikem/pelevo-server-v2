@@ -271,7 +271,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('episodes/{episode}/queue', [QueueController::class, 'addEpisode']);
         Route::delete('episodes/{episode}/queue', [QueueController::class, 'removeEpisode']);
         Route::delete('queue/items/{item}', [QueueController::class, 'remove']);
-        Route::put('queue/reorder', [QueueController::class, 'replace']);
+        Route::put('queue/reorder', [QueueController::class, 'reorder']);
         Route::delete('queue', [QueueController::class, 'clear']);
         Route::get('downloads', [DownloadController::class, 'index']);
         Route::get('downloads/settings', [DownloadController::class, 'settings']);

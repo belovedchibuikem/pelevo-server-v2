@@ -60,6 +60,47 @@ final class QueueController extends Controller
         });
     }
 
+    public function reorder(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'version' => ['required', 'integer', 'min:0'],
+            'episode_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'episode_ids.*' => ['required', 'distinct', 'exists:episodes,id'],
+        ]);
+
+        return DB::transaction(function () use ($request, $data): JsonResponse {
+            $queue = DB::table('queues')->where('user_id', $request->user()->id)->lockForUpdate()->first();
+            if (! $queue) {
+                return ApiResponse::error('NOT_FOUND', 'Queue is empty.', 404);
+            }
+            if ($queue->version !== $data['version']) {
+                return ApiResponse::error('VERSION_CONFLICT', 'Queue changed on another device.', 409);
+            }
+
+            $items = DB::table('queue_items')->where('queue_id', $queue->id)->get(['id', 'episode_id']);
+            $byEpisode = $items->keyBy(fn (object $row): string => (string) $row->episode_id);
+            $requested = collect($data['episode_ids'])->map(fn (mixed $id): string => (string) $id);
+            if ($requested->count() !== $items->count() || $requested->diff($byEpisode->keys())->isNotEmpty()) {
+                return ApiResponse::error('QUEUE_MISMATCH', 'Queue items changed. Refresh and try again.', 409);
+            }
+
+            foreach ($items as $offset => $row) {
+                DB::table('queue_items')->where('id', $row->id)->update([
+                    'position' => 1000 + $offset,
+                    'updated_at' => now(),
+                ]);
+            }
+            foreach ($data['episode_ids'] as $position => $episodeId) {
+                DB::table('queue_items')
+                    ->where('id', $byEpisode[(string) $episodeId]->id)
+                    ->update(['position' => $position, 'updated_at' => now()]);
+            }
+            DB::table('queues')->where('id', $queue->id)->update(['version' => $queue->version + 1, 'updated_at' => now()]);
+
+            return ApiResponse::success(['version' => $queue->version + 1, 'count' => $requested->count()]);
+        });
+    }
+
     public function add(Request $request): JsonResponse
     {
         $data = $request->validate(['version' => ['required', 'integer', 'min:0'], 'episode_id' => ['required', 'exists:episodes,id']]);

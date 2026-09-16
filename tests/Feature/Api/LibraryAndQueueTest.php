@@ -36,6 +36,42 @@ final class LibraryAndQueueTest extends TestCase
         $this->actingAs($user, 'sanctum')->putJson('/api/v1/queue', ['version' => 0, 'episode_ids' => [$first->id]])->assertConflict();
     }
 
+    public function test_queue_reorder_moves_play_order_without_replacing_items(): void
+    {
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/feed.xml', 'title' => 'Show']);
+        $first = Episode::create(['show_id' => $show->id, 'guid' => 'one', 'title' => 'One', 'audio_url' => 'https://example.com/one.mp3']);
+        $second = Episode::create(['show_id' => $show->id, 'guid' => 'two', 'title' => 'Two', 'audio_url' => 'https://example.com/two.mp3']);
+        $third = Episode::create(['show_id' => $show->id, 'guid' => 'three', 'title' => 'Three', 'audio_url' => 'https://example.com/three.mp3']);
+
+        $this->actingAs($user, 'sanctum')->putJson('/api/v1/queue', [
+            'version' => 0,
+            'episode_ids' => [$first->id, $second->id, $third->id],
+        ])->assertOk();
+
+        $before = $this->actingAs($user, 'sanctum')->getJson('/api/v1/queue')->assertOk()->json('data');
+        $firstItemId = $before['items'][0]['queue_item_id'];
+
+        $this->actingAs($user, 'sanctum')->putJson('/api/v1/queue/reorder', [
+            'version' => $before['version'],
+            'episode_ids' => [$third->id, $first->id, $second->id],
+        ])->assertOk()->assertJsonPath('data.version', $before['version'] + 1);
+
+        $after = $this->actingAs($user, 'sanctum')->getJson('/api/v1/queue')->assertOk()->json('data');
+        $this->assertSame([$third->id, $first->id, $second->id], array_column($after['items'], 'id'));
+        $this->assertSame($firstItemId, $after['items'][1]['queue_item_id']);
+
+        $this->actingAs($user, 'sanctum')->putJson('/api/v1/queue/reorder', [
+            'version' => $before['version'],
+            'episode_ids' => [$third->id, $first->id, $second->id],
+        ])->assertConflict()->assertJsonPath('error.code', 'VERSION_CONFLICT');
+
+        $this->actingAs($user, 'sanctum')->putJson('/api/v1/queue/reorder', [
+            'version' => $after['version'],
+            'episode_ids' => [$first->id, $second->id],
+        ])->assertConflict()->assertJsonPath('error.code', 'QUEUE_MISMATCH');
+    }
+
     public function test_library_overview_and_playlist_detail_stay_public(): void
     {
         $user = User::factory()->create();
