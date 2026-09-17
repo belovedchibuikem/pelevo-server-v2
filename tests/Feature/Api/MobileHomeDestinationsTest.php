@@ -99,9 +99,13 @@ final class MobileHomeDestinationsTest extends TestCase
         $user = User::factory()->create();
         $nigeria = Show::create(['rss_url' => 'https://example.invalid/ng.xml', 'title' => 'NG Show', 'country_code' => 'NG', 'status' => 'active']);
         $ghana = Show::create(['rss_url' => 'https://example.invalid/gh.xml', 'title' => 'GH Show', 'country_code' => 'GH', 'status' => 'active']);
-        Episode::create(['show_id' => $nigeria->id, 'guid' => 'short', 'title' => 'Short NG', 'audio_url' => 'https://example.invalid/s.mp3', 'duration_seconds' => 400, 'published_at' => now(), 'availability' => 'available']);
+        $short = Episode::create(['show_id' => $nigeria->id, 'guid' => 'short', 'title' => 'Short NG', 'audio_url' => 'https://example.invalid/s.mp3', 'duration_seconds' => 400, 'published_at' => now(), 'availability' => 'available']);
         Episode::create(['show_id' => $nigeria->id, 'guid' => 'long', 'title' => 'Long NG', 'audio_url' => 'https://example.invalid/l.mp3', 'duration_seconds' => 2400, 'published_at' => now(), 'availability' => 'available']);
-        Episode::create(['show_id' => $ghana->id, 'guid' => 'ghana', 'title' => 'GH episode', 'audio_url' => 'https://example.invalid/g.mp3', 'duration_seconds' => 2400, 'published_at' => now(), 'availability' => 'available']);
+        $ghanaEpisode = Episode::create(['show_id' => $ghana->id, 'guid' => 'ghana', 'title' => 'GH episode', 'audio_url' => 'https://example.invalid/g.mp3', 'duration_seconds' => 2400, 'published_at' => now(), 'availability' => 'available']);
+        DB::table('playback_progress')->insert([
+            ['user_id' => $user->id, 'episode_id' => $short->id, 'position_seconds' => 40, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+            ['user_id' => $user->id, 'episode_id' => $ghanaEpisode->id, 'position_seconds' => 40, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+        ]);
 
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/home/rails/quick_listen?min_duration=300&max_duration=600')->assertOk()
             ->assertJsonPath('data.rail.items.0.title', 'Short NG');

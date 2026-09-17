@@ -68,14 +68,35 @@ final class HomeRecommendationRailsTest extends TestCase
         $first = User::factory()->create();
         $second = User::factory()->create();
         $plain = Show::create(['rss_url' => 'https://example.invalid/plain.xml', 'title' => 'No Cover Voice', 'country_code' => 'NG', 'status' => 'active']);
+        $covers = [];
         for ($index = 1; $index <= 8; $index++) {
-            Show::create([
+            $covers[] = Show::create([
                 'rss_url' => "https://example.invalid/ng-{$index}.xml",
                 'title' => "Covered Voice {$index}",
                 'artwork_url' => "https://covers.example.invalid/ng-{$index}.jpg",
                 'country_code' => 'NG',
                 'status' => 'active',
             ]);
+        }
+        foreach ([$first, $second] as $listener) {
+            foreach ($covers as $index => $cover) {
+                $episode = Episode::create([
+                    'show_id' => $cover->id,
+                    'guid' => "ng-{$listener->id}-{$index}",
+                    'title' => "Heard {$index}",
+                    'audio_url' => 'https://example.invalid/h.mp3',
+                    'availability' => 'available',
+                ]);
+                DB::table('playback_progress')->insert([
+                    'user_id' => $listener->id,
+                    'episode_id' => $episode->id,
+                    'position_seconds' => 30,
+                    'completed' => false,
+                    'version' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
         }
 
         $firstTitles = collect($this->actingAs($first, 'sanctum')->getJson('/api/v1/home/rails/african_voices?country=NG')->assertOk()->json('data.rail.items'))->pluck('title');
@@ -105,6 +126,17 @@ final class HomeRecommendationRailsTest extends TestCase
                 'availability' => 'available',
             ]);
             $titles[] = $episode->title;
+        }
+        foreach ([$first, $second] as $listener) {
+            DB::table('playback_progress')->insert([
+                'user_id' => $listener->id,
+                'episode_id' => Episode::query()->where('show_id', $show->id)->where('guid', 'quick-1')->value('id'),
+                'position_seconds' => 20,
+                'completed' => false,
+                'version' => 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
         }
         Episode::create([
             'show_id' => $show->id,

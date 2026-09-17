@@ -32,7 +32,7 @@ final class PlaybackController extends Controller
         if ($duration > 0) {
             $position = min($position, $duration);
         }
-        $completed = $this->isCompleted($duration, $position);
+        $completed = $this->isCompleted($duration, $position, (bool) $data['completed']);
         $progress = PlaybackProgress::updateOrCreate(['user_id' => $request->user()->id, 'episode_id' => $episode->id], ['device_id' => $device?->id, 'position_seconds' => $position, 'completed' => $completed, 'version' => ($progress?->version ?? 0) + 1]);
         if ($position > 0 || $completed) {
             $consumePick->handle($request->user()->id, $episode->id);
@@ -53,10 +53,14 @@ final class PlaybackController extends Controller
         ];
     }
 
-    private function isCompleted(int $durationSeconds, int $positionSeconds): bool
+    private function isCompleted(int $durationSeconds, int $positionSeconds, bool $clientCompleted = false): bool
     {
-        if ($durationSeconds < 30 || $positionSeconds <= 0) {
+        if ($positionSeconds <= 0 && ! $clientCompleted) {
             return false;
+        }
+
+        if ($durationSeconds < 30) {
+            return $clientCompleted && $positionSeconds > 0;
         }
 
         $remaining = $durationSeconds - $positionSeconds;

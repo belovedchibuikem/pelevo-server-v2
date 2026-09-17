@@ -134,7 +134,7 @@ final class LibraryController extends Controller
             $request,
             fn (object $row): array => $this->presentedEpisode($row, [
                 'position_seconds' => (int) $row->position_seconds,
-                'completed' => (bool) $row->completed,
+                'completed' => (bool) $row->completed || $this->progressLooksComplete($row),
                 'played_at' => $this->iso($row->played_at),
             ]),
         );
@@ -377,6 +377,17 @@ final class LibraryController extends Controller
             'duration_seconds' => $row->duration_seconds === null ? null : (int) $row->duration_seconds,
             ...$extra,
         ];
+    }
+
+    private function progressLooksComplete(object $row): bool
+    {
+        $duration = (int) ($row->duration_seconds ?? 0);
+        $position = (int) ($row->position_seconds ?? 0);
+        if ($duration < 30 || $position <= 0) {
+            return false;
+        }
+
+        return ($duration - $position) <= 15 || $position >= (int) floor($duration * 0.95);
     }
 
     /**

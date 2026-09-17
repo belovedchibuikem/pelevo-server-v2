@@ -22,12 +22,6 @@ final class HomeController extends Controller
         $snapshotRails = $snapshot ? json_decode($snapshot->rails, true, flags: JSON_THROW_ON_ERROR) : null;
         $validSnapshot = is_array($snapshotRails) && isset($snapshotRails[0]['id'], $snapshotRails[0]['type']);
         $moduleVersion = hash('sha256', (string) DB::table('home_modules')->max('updated_at'));
-        if ($validSnapshot) {
-            $tryNew = collect($snapshotRails)->firstWhere('key', 'try_something_new');
-            if (is_array($tryNew) && ($tryNew['items'] ?? []) === []) {
-                $validSnapshot = false;
-            }
-        }
         $rotationSlot = now()->format('Y-m-d').'-'.intdiv((int) now()->format('G'), 6);
         $bust = (int) Cache::get("home:feed:bust:{$userId}", 0);
         $rails = $validSnapshot ? $snapshotRails : Cache::flexible("home:feed:{$userId}:v3:{$moduleVersion}:{$rotationSlot}:{$bust}", [30, 120], fn (): array => $builder->handle($userId));

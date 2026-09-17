@@ -178,7 +178,7 @@ final class CatalogController extends Controller
         $pageItems = collect($items->items());
         $playback = $this->playbackByEpisodeIds($userId, $pageItems->pluck('id'));
 
-        return ApiResponse::success($pageItems->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show, playback: $playback[$episode->id] ?? null))->values(), [
+        return ApiResponse::success($pageItems->map(fn (Episode $episode): array => $this->presentEpisode($episode, $show, playback: $playback[(string) $episode->id] ?? null))->values(), [
             'cursor' => $items->nextCursor()?->encode(),
             'has_more' => $items->hasMorePages(),
             'feed_state' => $show->feedState?->state,
@@ -577,7 +577,7 @@ final class CatalogController extends Controller
             ->where('user_id', $userId)
             ->whereIn('episode_id', $episodeIds->all())
             ->get(['episode_id', 'position_seconds', 'completed'])
-            ->keyBy('episode_id')
+            ->mapWithKeys(fn (object $row): array => [(string) $row->episode_id => $row])
             ->all();
     }
 
@@ -585,6 +585,11 @@ final class CatalogController extends Controller
     {
         $position = is_object($playback) ? max(0, (int) ($playback->position_seconds ?? 0)) : 0;
         $completed = is_object($playback) && (bool) ($playback->completed ?? false);
+        $duration = (int) ($episode->duration_seconds ?? 0);
+        if (! $completed && $duration >= 30 && $position > 0) {
+            $remaining = $duration - $position;
+            $completed = $remaining <= 15 || $position >= (int) floor($duration * 0.95);
+        }
         $payload = [
             'id' => $episode->id,
             'show_id' => $episode->show_id,

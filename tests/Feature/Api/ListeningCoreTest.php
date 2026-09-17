@@ -98,6 +98,32 @@ final class ListeningCoreTest extends TestCase
             'version' => $mid['version'],
         ])->assertOk()->json('data');
         $this->assertTrue($done['completed']);
+
+        $listedDone = $this->actingAs($user, 'sanctum')->getJson("/api/v1/shows/{$show->id}/episodes")->assertOk()->json('data.0');
+        $this->assertTrue($listedDone['completed']);
+    }
+
+    public function test_playback_honors_client_completed_when_duration_is_unknown(): void
+    {
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/feed.xml', 'title' => 'Show']);
+        $episode = Episode::create([
+            'show_id' => $show->id,
+            'guid' => 'unknown-length',
+            'title' => 'Unknown Length',
+            'audio_url' => 'https://example.com/unknown.mp3',
+        ]);
+
+        $done = $this->actingAs($user, 'sanctum')->putJson("/api/v1/playback/{$episode->id}", [
+            'position_seconds' => 940,
+            'completed' => true,
+            'version' => 0,
+        ])->assertOk()->json('data');
+        $this->assertTrue($done['completed']);
+
+        $listed = $this->actingAs($user, 'sanctum')->getJson("/api/v1/shows/{$show->id}/episodes")->assertOk()->json('data.0');
+        $this->assertTrue($listed['completed']);
+        $this->assertTrue($listed['played']);
     }
 
     public function test_search_imports_provider_result_and_never_exposes_raw_payload(): void

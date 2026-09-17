@@ -164,9 +164,8 @@ final class BuildHomeFeed
             return [$only => $this->dataset($userId, $only, $filters)];
         }
 
-        $trendingShows = $this->trendingShows();
         $trendingEpisodes = $this->trendingEpisodesFallback();
-        $madeForYou = $this->affinityEpisodes($userId, $trendingEpisodes);
+        $madeForYou = $this->affinityEpisodes($userId, collect());
 
         return [
             'moods' => $this->moods(),
@@ -174,13 +173,13 @@ final class BuildHomeFeed
             'continue_listening' => $this->continueListening($userId),
             'made_for_you' => $madeForYou,
             'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
-            'because_you_listened' => $this->becauseYouListened($userId, $trendingEpisodes),
-            'trending' => $trendingShows,
+            'because_you_listened' => $this->becauseYouListened($userId, collect()),
+            'trending' => $this->historyShows($userId),
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
-            'try_something_new' => $this->unexploredCategories($userId),
-            'explore_by_topic' => $this->categories(30),
-            'trending_shorts' => $this->trendingShorts(),
+            'try_something_new' => collect(),
+            'explore_by_topic' => $this->historyTopics($userId),
+            'trending_shorts' => collect(),
             'shorts_for_you' => $this->shortsForYou($userId),
             'browse_categories' => $this->browseCategories(),
         ];
@@ -195,12 +194,12 @@ final class BuildHomeFeed
             'moods' => $this->moods(),
             'continue_listening' => $this->continueListening($userId),
             'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
-            'trending' => $this->trendingShows(),
+            'trending' => $this->historyShows($userId),
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
-            'try_something_new' => $this->unexploredCategories($userId),
-            'explore_by_topic' => $this->categories(30),
-            'trending_shorts' => $this->trendingShorts(),
+            'try_something_new' => collect(),
+            'explore_by_topic' => $this->historyTopics($userId),
+            'trending_shorts' => collect(),
             'shorts_for_you' => $this->shortsForYou($userId),
             'browse_categories' => $this->browseCategories(),
             'pick_for_today', 'made_for_you', 'because_you_listened' => $this->personalizedDataset($userId, $key),
@@ -210,12 +209,11 @@ final class BuildHomeFeed
 
     private function personalizedDataset(string $userId, string $key): Collection
     {
-        $trendingEpisodes = $this->trendingEpisodesFallback();
-        $madeForYou = $this->affinityEpisodes($userId, $trendingEpisodes);
+        $madeForYou = $this->affinityEpisodes($userId, collect());
 
         return match ($key) {
-            'pick_for_today' => $this->pickForToday($userId, $madeForYou, $trendingEpisodes),
-            'because_you_listened' => $this->becauseYouListened($userId, $trendingEpisodes),
+            'pick_for_today' => $this->pickForToday($userId, $madeForYou, $this->trendingEpisodesFallback()),
+            'because_you_listened' => $this->becauseYouListened($userId, collect()),
             default => $madeForYou,
         };
     }
@@ -246,8 +244,15 @@ final class BuildHomeFeed
 
     private function quickListen(string $userId, ?int $minDuration = null, ?int $maxDuration = null): Collection
     {
+        $showIds = $this->listenedShowIds($userId);
+        if ($showIds === []) {
+            return collect();
+        }
+
         $minimum = $minDuration ?? 300;
-        $query = $this->episodes()->where('episodes.duration_seconds', '>=', $minimum);
+        $query = $this->episodes()
+            ->whereIn('episodes.show_id', $showIds)
+            ->where('episodes.duration_seconds', '>=', $minimum);
         if ($maxDuration !== null) {
             $query->where('episodes.duration_seconds', '<=', $maxDuration);
         } elseif ($minDuration === null) {
@@ -269,7 +274,13 @@ final class BuildHomeFeed
         $selected = is_string($country) ? strtoupper($country) : null;
         $targetCountries = $selected !== null && in_array($selected, $countries, true) ? [$selected] : $countries;
 
+        $listenedShowIds = $this->listenedShowIds($userId);
+        if ($listenedShowIds === []) {
+            return collect();
+        }
+
         $shows = $this->shows()
+            ->whereIn('shows.id', $listenedShowIds)
             ->whereIn('shows.country_code', $targetCountries)
             ->orderByDesc('shows.updated_at')
             ->orderByDesc('shows.id')
@@ -277,14 +288,7 @@ final class BuildHomeFeed
             ->get();
 
         if ($shows->isEmpty()) {
-            $query = match ($selected) {
-                'NG' => 'nigeria podcast',
-                'GH' => 'ghana podcast',
-                'KE' => 'kenya podcast',
-                default => 'africa podcast',
-            };
-
-            $shows = $this->discoverShows($query, 24, $selected);
+            return collect();
         }
 
         $withArtwork = $shows->filter(fn (object $show): bool => ArtworkUrl::sanitize($show->artwork_url ?? null) !== null)->values();
@@ -334,11 +338,7 @@ final class BuildHomeFeed
             return $shows;
         }
 
-        if ($shows->isNotEmpty()) {
-            return $shows;
-        }
-
-        return $this->discoverShows('africa podcast nigeria', 12);
+        return collect();
     }
 
     private function trendingEpisodesFallback(): Collection
@@ -368,7 +368,7 @@ final class BuildHomeFeed
         ];
 
         if ($profile['source_show_ids'] === []) {
-            return $fallback->take(20)->values();
+            return collect();
         }
 
         $candidates = $this->episodes()
@@ -431,11 +431,7 @@ final class BuildHomeFeed
             return $ranked;
         }
 
-        return $fallback
-            ->reject(fn (object $item): bool => in_array($item->id, $profile['listened_episode_ids'], true) || in_array($item->show_id, $profile['source_show_ids'], true))
-            ->unique('show_id')
-            ->take(20)
-            ->values();
+        return collect();
     }
 
     /**
@@ -582,6 +578,51 @@ final class BuildHomeFeed
         return array_slice(array_keys($counts), 0, 8);
     }
 
+    /**
+     * @return list<string>
+     */
+    private function listenedShowIds(string $userId): array
+    {
+        return DB::table('playback_progress')
+            ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
+            ->where('playback_progress.user_id', $userId)
+            ->distinct()
+            ->pluck('episodes.show_id')
+            ->map(fn (mixed $id): string => (string) $id)
+            ->values()
+            ->all();
+    }
+
+    private function historyShows(string $userId): Collection
+    {
+        $showIds = $this->listenedShowIds($userId);
+        if ($showIds === []) {
+            return collect();
+        }
+
+        return $this->shows()
+            ->whereIn('shows.id', $showIds)
+            ->orderByDesc('shows.updated_at')
+            ->limit(20)
+            ->get();
+    }
+
+    private function historyTopics(string $userId): Collection
+    {
+        $showIds = $this->listenedShowIds($userId);
+        if ($showIds === []) {
+            return collect();
+        }
+
+        return $this->categoryQuery()
+            ->join('category_show', 'category_show.category_id', '=', 'categories.id')
+            ->whereIn('category_show.show_id', $showIds)
+            ->addSelect('categories.position')
+            ->groupBy('categories.id', 'categories.name', 'categories.slug', 'categories.position')
+            ->limit(30)
+            ->get();
+    }
+
     private function rotateCollection(Collection $items, string $userId, string $railKey, int $limit): Collection
     {
         $seed = $userId.'|'.$railKey.'|'.now()->format('Y-m-d').'|'.intdiv((int) now()->format('G'), 4);
@@ -603,7 +644,7 @@ final class BuildHomeFeed
             ->distinct()
             ->pluck('category_show.category_id');
         if ($categoryIds->isEmpty()) {
-            return $fallback->take(20)->values();
+            return collect();
         }
 
         return $this->episodes()
@@ -629,12 +670,6 @@ final class BuildHomeFeed
         $pool = $source
             ->reject(fn (object $item): bool => $completedIds->contains($item->id))
             ->values();
-
-        if ($pool->isEmpty() && $hasHistory) {
-            $pool = $trendingEpisodes
-                ->reject(fn (object $item): bool => $completedIds->contains($item->id))
-                ->values();
-        }
 
         if ($pool->isEmpty()) {
             return collect();
@@ -1025,6 +1060,7 @@ final class BuildHomeFeed
             ->leftJoin('follows', function ($join) use ($userId): void {
                 $join->on('follows.show_id', '=', 'reels.show_id')->where('follows.user_id', $userId);
             })
+            ->whereNotNull('follows.user_id')
             ->select(
                 'reels.id',
                 'reels.caption',
@@ -1042,7 +1078,7 @@ final class BuildHomeFeed
 
         $items = $this->presentReelRows($rows, trending: false);
 
-        return $items->isNotEmpty() ? $items : $this->trendingShorts();
+        return $items;
     }
 
     private function presentReelRows(Collection $rows, bool $trending): Collection

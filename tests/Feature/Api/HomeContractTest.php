@@ -51,11 +51,7 @@ final class HomeContractTest extends TestCase
         $response->assertJsonPath('data.rails.7.items.0.title', 'A local episode');
         $response->assertJsonPath('data.rails.13.items.0.title', 'Podcasts');
         $tryNew = collect($response->json('data.rails'))->firstWhere('key', 'try_something_new');
-        $this->assertIsArray($tryNew['items']);
-        $this->assertNotEmpty($tryNew['items']);
-        $this->assertSame('category', $tryNew['items'][0]['type']);
-        $this->assertIsString($tryNew['items'][0]['id']);
-        $this->assertNotEmpty($tryNew['items'][0]['slug']);
+        $this->assertSame([], $tryNew['items']);
         Http::assertNothingSent();
     }
 
