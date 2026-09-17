@@ -120,12 +120,19 @@ final class CatalogController extends Controller
         }
 
         $followedShowIds = $this->followedShowIds($request->user()?->id, $shows->pluck('id'));
+        $showIds = $shows->pluck('id');
+        // After a Podcast Index hit, do not LIKE-scan the whole episode table —
+        // that work outlives the app receive timeout, so the client never paints
+        // the 20 shows we already persisted.
+        $episodes = $freshness === 'fresh'
+            ? $this->matchingEpisodes($normalizedQuery, $limit, $showIds)
+            : $this->matchingEpisodes($normalizedQuery, $limit);
 
         return ApiResponse::success([
             'query' => $normalizedQuery,
-            'shows' => $shows->map(fn (Show $show): array => $this->presentShowCard($show, $followedShowIds))->values(),
-            'episodes' => $this->matchingEpisodes($normalizedQuery, $limit),
-            'playlists' => $this->matchingPlaylists($normalizedQuery, $limit),
+            'shows' => $shows->map(fn (Show $show): array => $this->presentShowCard($show, $followedShowIds))->values()->all(),
+            'episodes' => $episodes,
+            'playlists' => $preview ? [] : $this->matchingPlaylists($normalizedQuery, $limit),
         ], ['cursor' => null, 'has_more' => false, 'freshness' => $freshness]);
     }
 
@@ -306,13 +313,22 @@ final class CatalogController extends Controller
             ->get();
     }
 
-    private function matchingEpisodes(string $query, int $limit): array
+    /**
+     * @param  \Illuminate\Support\Collection<int, string>|null  $showIds
+     */
+    private function matchingEpisodes(string $query, int $limit, $showIds = null): array
     {
+        $ids = collect($showIds)->filter()->values();
+        if ($showIds !== null && $ids->isEmpty()) {
+            return [];
+        }
+
         $like = '%'.$query.'%';
         $fulltext = $this->fullTextClause(['title', 'description'], $query);
 
         return Episode::query()
             ->where('availability', 'available')
+            ->when($showIds !== null, fn ($builder) => $builder->whereIn('show_id', $ids->all()))
             ->where(function ($builder) use ($like, $fulltext): void {
                 if ($fulltext !== null) {
                     $builder->whereRaw($fulltext['match'], $fulltext['bindings']);
