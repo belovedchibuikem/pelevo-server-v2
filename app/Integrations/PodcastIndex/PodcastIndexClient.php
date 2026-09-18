@@ -67,6 +67,18 @@ final class PodcastIndexClient
         ], $useCache);
     }
 
+    /**
+     * Current feed metadata (URL, title, artwork) for a Podcast Index feed id.
+     *
+     * @return array{status?: string, feed?: array<string, mixed>}
+     */
+    public function podcastByFeedId(string $feedId, bool $useCache = false): array
+    {
+        return $this->get('podcasts/byfeedid', [
+            'id' => $feedId,
+        ], $useCache);
+    }
+
     private function get(string $path, array $query, bool $useCache = true, ?int $timeoutSeconds = null, int $retries = 1): array
     {
         if (! config('services.podcast_index.enabled')) {

@@ -32,6 +32,41 @@ final class CatalogIngestionTest extends TestCase
         Bus::assertNotDispatched(HydrateRssFeed::class);
     }
 
+    public function test_discovered_show_updates_existing_url_title_and_artwork(): void
+    {
+        Bus::fake([HydrateRssFeed::class]);
+        $first = app(PersistDiscoveredShow::class)->handle([
+            'id' => 101,
+            'url' => 'https://example.com/legacy.xml',
+            'title' => 'Talk Tech Nigeria',
+            'description' => 'Old copy',
+            'image' => 'https://cdn.example.com/old.jpg',
+        ]);
+
+        $second = app(PersistDiscoveredShow::class)->handle([
+            'id' => 101,
+            'url' => 'https://anchor.fm/s/a2f0864/podcast/rss',
+            'originalUrl' => 'https://anchor.fm/s/a2f0864/podcast/rss',
+            'title' => 'Talk Tech Africa | TTAF',
+            'description' => 'Continent-wide mission',
+            'artwork' => 'https://cdn.example.com/ttaf.jpg',
+        ]);
+
+        $this->assertSame($first?->id, $second?->id);
+        $this->assertDatabaseCount('shows', 1);
+        $this->assertDatabaseHas('shows', [
+            'id' => $first?->id,
+            'title' => 'Talk Tech Africa | TTAF',
+            'rss_url' => 'https://anchor.fm/s/a2f0864/podcast/rss',
+            'artwork_url' => 'https://cdn.example.com/ttaf.jpg',
+            'description' => 'Continent-wide mission',
+        ]);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $first?->id, 'field' => 'title', 'new_value' => 'Talk Tech Africa | TTAF']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $first?->id, 'field' => 'rss_url', 'new_value' => 'https://anchor.fm/s/a2f0864/podcast/rss']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $first?->id, 'field' => 'artwork_url', 'new_value' => 'https://cdn.example.com/ttaf.jpg']);
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $first?->id, 'state' => 'pending']);
+    }
+
     public function test_rss_hydration_records_the_run_and_normalizes_episode_duration(): void
     {
         Event::fake();
@@ -359,6 +394,72 @@ final class CatalogIngestionTest extends TestCase
 
         $this->assertGreaterThan(191, strlen($guid));
         $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => $guid]);
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'healthy']);
+    }
+
+    public function test_rss_hydration_refreshes_dead_feed_url_from_podcast_index(): void
+    {
+        Event::fake();
+        config()->set('services.podcast_index.enabled', true);
+        config()->set('services.podcast_index.api_key', 'key');
+        config()->set('services.podcast_index.api_secret', 'secret');
+
+        $show = Show::create([
+            'rss_url' => 'https://example.com/gone.xml',
+            'title' => 'Talk Tech Nigeria',
+            'artwork_url' => 'https://cdn.example.com/old.jpg',
+        ]);
+        $show->feedState()->create(['state' => 'failed', 'consecutive_failures' => 3, 'next_poll_at' => now()]);
+        \Illuminate\Support\Facades\DB::table('show_external_ids')->insert([
+            'show_id' => $show->id,
+            'provider' => 'podcast_index',
+            'external_id' => '75075',
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.podcastindex.org/api/1.0/episodes/byfeedid*' => Http::response(['items' => []]),
+            'api.podcastindex.org/api/1.0/podcasts/byfeedid*' => Http::response([
+                'status' => 'true',
+                'feed' => [
+                    'id' => 75075,
+                    'url' => 'https://example.com/ttaf.xml',
+                    'title' => 'Talk Tech Africa | TTAF',
+                    'description' => 'Continent-wide mission',
+                    'artwork' => 'https://cdn.example.com/ttaf.jpg',
+                    'image' => 'https://cdn.example.com/ttaf.jpg',
+                ],
+            ]),
+            'https://example.com/gone.xml' => Http::response('Gone', 404),
+            'https://example.com/ttaf.xml' => Http::response(<<<'XML'
+                <?xml version="1.0"?>
+                <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+                  <channel>
+                    <title>Talk Tech Africa | TTAF</title>
+                    <itunes:image href="https://cdn.example.com/ttaf.jpg"/>
+                    <item>
+                      <guid>ttaf-1</guid>
+                      <title>New episode</title>
+                      <enclosure url="https://cdn.example.com/ttaf-1.mp3" type="audio/mpeg"/>
+                      <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                XML, 200),
+        ]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('shows', [
+            'id' => $show->id,
+            'title' => 'Talk Tech Africa | TTAF',
+            'rss_url' => 'https://example.com/ttaf.xml',
+            'artwork_url' => 'https://cdn.example.com/ttaf.jpg',
+        ]);
+        $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'ttaf-1']);
         $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'healthy']);
     }
 

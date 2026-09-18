@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Actions\Catalog\InvalidateDiscoveryCache;
+use App\Actions\Catalog\PersistDiscoveredShow;
 use App\Events\NewEpisodePublished;
 use App\Integrations\PodcastIndex\PodcastIndexClient;
 use App\Integrations\PodcastIndex\PodcastIndexException;
@@ -63,7 +64,17 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             $seeded = $this->seedFromPodcastIndex($show, $podcastIndex);
 
             $originalRssUrl = $show->rss_url;
-            $result = $this->fetchFollowingFeedMoves($show, $fetcher);
+            try {
+                $result = $this->fetchFollowingFeedMoves($show, $fetcher);
+            } catch (Throwable $exception) {
+                if (! $this->isPermanentFeedFailure($exception) || ! $this->refreshFeedUrlFromPodcastIndex($show, $podcastIndex)) {
+                    throw $exception;
+                }
+                $show->refresh();
+                $show->load('feedState');
+                $originalRssUrl = $show->rss_url;
+                $result = $this->fetchFollowingFeedMoves($show, $fetcher);
+            }
             if ($result['not_modified']) {
                 $urlChanged = false;
                 DB::transaction(function () use ($show, $syncRun, $result, $seeded, &$urlChanged): void {
@@ -383,6 +394,52 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         }
 
         return $this->applyResolvedUrl($show, $canonical);
+    }
+
+    private function refreshFeedUrlFromPodcastIndex(Show $show, PodcastIndexClient $client): bool
+    {
+        if (! config('services.podcast_index.enabled')) {
+            return false;
+        }
+
+        $feedId = DB::table('show_external_ids')
+            ->where('show_id', $show->id)
+            ->where('provider', 'podcast_index')
+            ->value('external_id');
+        if (! is_string($feedId) || $feedId === '') {
+            return false;
+        }
+
+        try {
+            $payload = $client->podcastByFeedId($feedId, useCache: false);
+        } catch (PodcastIndexException $exception) {
+            Log::info('catalog.podcast_index.feed_url_refresh_skipped', [
+                'show_id' => $show->id,
+                'feed_id' => $feedId,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+
+        $feed = $payload['feed'] ?? null;
+        if (! is_array($feed)) {
+            return false;
+        }
+
+        $before = $show->rss_url;
+        $persisted = app(PersistDiscoveredShow::class)->handle($feed);
+        if ($persisted === null || $persisted->rss_url === $before) {
+            return false;
+        }
+
+        Log::info('catalog.rss.feed_url_refreshed_from_index', [
+            'show_id' => $show->id,
+            'from' => $before,
+            'to' => $persisted->rss_url,
+        ]);
+
+        return true;
     }
 
     private function declaredNewFeedUrl(\SimpleXMLElement $xml, RssFeedFetcher $fetcher): ?string
