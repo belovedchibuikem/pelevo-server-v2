@@ -76,31 +76,52 @@ final class IntegrationSettings
 
     public function applyToConfig(): void
     {
-        if (! Schema::hasTable('integration_settings')) {
+        // Composer scripts (`package:discover`) boot the app while Forge may be
+        // restarting Postgres. Never fail the deploy for a missing overlay.
+        if ($this->isComposerLifecycleCommand()) {
             return;
         }
-        foreach ($this->catalog() as $provider => $definition) {
-            $values = $this->decrypted($provider);
-            if ($values === []) {
-                continue;
+
+        try {
+            if (! Schema::hasTable('integration_settings')) {
+                return;
             }
-            foreach ($definition['config'] as $field => $key) {
-                if (! array_key_exists($field, $values) || $values[$field] === null || $values[$field] === '') {
+            foreach ($this->catalog() as $provider => $definition) {
+                $values = $this->decrypted($provider);
+                if ($values === []) {
                     continue;
                 }
-                $value = $values[$field];
-                if (in_array($field, ['enabled'], true)) {
-                    $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+                foreach ($definition['config'] as $field => $key) {
+                    if (! array_key_exists($field, $values) || $values[$field] === null || $values[$field] === '') {
+                        continue;
+                    }
+                    $value = $values[$field];
+                    if (in_array($field, ['enabled'], true)) {
+                        $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+                    }
+                    if ($field === 'port') {
+                        $value = (int) $value;
+                    }
+                    config([$key => $value]);
                 }
-                if ($field === 'port') {
-                    $value = (int) $value;
+                if ($provider === 'paypal' && filled(config('services.paypal.payout_token'))) {
+                    config(['services.paypal.payout_verification_token' => config('services.paypal.payout_token')]);
                 }
-                config([$key => $value]);
             }
-            if ($provider === 'paypal' && filled(config('services.paypal.payout_token'))) {
-                config(['services.paypal.payout_verification_token' => config('services.paypal.payout_token')]);
-            }
+        } catch (Throwable) {
+            return;
         }
+    }
+
+    private function isComposerLifecycleCommand(): bool
+    {
+        if (! app()->runningInConsole()) {
+            return false;
+        }
+
+        $command = (string) ($_SERVER['argv'][1] ?? '');
+
+        return in_array($command, ['package:discover', 'vendor:publish'], true);
     }
 
     /** @return list<array<string, mixed>> */

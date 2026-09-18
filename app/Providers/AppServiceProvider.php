@@ -47,7 +47,11 @@ class AppServiceProvider extends ServiceProvider
             URL::forceScheme('https');
         }
 
-        app(IntegrationSettings::class)->applyToConfig();
+        try {
+            app(IntegrationSettings::class)->applyToConfig();
+        } catch (\Throwable) {
+            // package:discover / deploys must succeed even if Postgres is restarting.
+        }
 
         RateLimiter::for('auth', fn (Request $request) => Limit::perMinute(10)->by($request->ip()));
         RateLimiter::for('contact', fn (Request $request) => Limit::perMinute(5)->by($request->ip()));
