@@ -174,7 +174,7 @@ final class BuildHomeFeed
             'made_for_you' => $madeForYou,
             'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
             'because_you_listened' => $this->becauseYouListened($userId, collect()),
-            'trending' => $this->historyShows($userId),
+            'trending' => $this->trendingShows(),
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
             'try_something_new' => collect(),
@@ -194,7 +194,7 @@ final class BuildHomeFeed
             'moods' => $this->moods(),
             'continue_listening' => $this->continueListening($userId),
             'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
-            'trending' => $this->historyShows($userId),
+            'trending' => $this->trendingShows(),
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
             'try_something_new' => collect(),
@@ -274,13 +274,7 @@ final class BuildHomeFeed
         $selected = is_string($country) ? strtoupper($country) : null;
         $targetCountries = $selected !== null && in_array($selected, $countries, true) ? [$selected] : $countries;
 
-        $listenedShowIds = $this->listenedShowIds($userId);
-        if ($listenedShowIds === []) {
-            return collect();
-        }
-
         $shows = $this->shows()
-            ->whereIn('shows.id', $listenedShowIds)
             ->whereIn('shows.country_code', $targetCountries)
             ->orderByDesc('shows.updated_at')
             ->orderByDesc('shows.id')
@@ -288,7 +282,14 @@ final class BuildHomeFeed
             ->get();
 
         if ($shows->isEmpty()) {
-            return collect();
+            $query = match ($selected) {
+                'NG' => 'nigeria podcast',
+                'GH' => 'ghana podcast',
+                'KE' => 'kenya podcast',
+                default => 'africa podcast',
+            };
+
+            $shows = $this->discoverShows($query, 24, $selected);
         }
 
         $withArtwork = $shows->filter(fn (object $show): bool => ArtworkUrl::sanitize($show->artwork_url ?? null) !== null)->values();
@@ -325,7 +326,7 @@ final class BuildHomeFeed
             ->groupBy('shows.id', 'shows.title', 'shows.author', 'shows.artwork_url', 'shows.country_code')
             ->orderByDesc('play_count')
             ->orderByDesc('shows.updated_at')
-            ->limit(30)
+            ->limit(12)
             ->get()
             ->values()
             ->map(function (object $show, int $index): object {
@@ -334,11 +335,11 @@ final class BuildHomeFeed
                 return $show;
             });
 
-        if ($shows->filter(fn (object $show): bool => (int) ($show->play_count ?? 0) > 0)->isNotEmpty()) {
+        if ($shows->isNotEmpty()) {
             return $shows;
         }
 
-        return collect();
+        return $this->discoverShows('africa podcast nigeria', 12);
     }
 
     private function trendingEpisodesFallback(): Collection
@@ -382,6 +383,7 @@ final class BuildHomeFeed
                         ->whereIn('category_show.category_id', $profile['category_ids']);
                 });
             })
+            ->addSelect('shows.language as show_language')
             ->orderByDesc('episodes.published_at')
             ->orderByDesc('episodes.id')
             ->limit(150)
@@ -400,10 +402,15 @@ final class BuildHomeFeed
                             ->orWhere('shows.description', 'like', $like);
                     }
                 })
+                ->addSelect('shows.language as show_language')
                 ->orderByDesc('episodes.published_at')
                 ->limit(150)
                 ->get();
         }
+
+        $candidates = $candidates
+            ->filter(fn (object $item): bool => $this->matchesListeningLanguage($item, $profile))
+            ->values();
 
         $ranked = $candidates
             ->map(function (object $item) use ($profile): object {
@@ -437,9 +444,11 @@ final class BuildHomeFeed
     /**
      * @return array{
      *     source_show_ids: list<string>,
+     *     show_scores: array<string, int>,
      *     category_ids: list<int|string>,
      *     listened_episode_ids: list<string>,
      *     tokens: list<string>,
+     *     languages: list<string>,
      *     seed_show_title: string|null,
      *     seed_topics: list<string>
      * }
@@ -458,6 +467,8 @@ final class BuildHomeFeed
                 'episodes.description as episode_description',
                 'episodes.duration_seconds',
                 'shows.title as show_title',
+                'shows.language as show_language',
+                'shows.country_code as show_country',
                 'playback_progress.completed',
                 'playback_progress.position_seconds',
                 'playback_progress.updated_at',
@@ -465,6 +476,7 @@ final class BuildHomeFeed
 
         $showScores = [];
         $showTitles = [];
+        $languageScores = [];
         $texts = [];
         foreach ($plays as $play) {
             $showId = (string) $play->show_id;
@@ -474,15 +486,30 @@ final class BuildHomeFeed
             $completed = ((int) $play->completed) === 1 ? 32 : 0;
             $duration = max(1, (int) ($play->duration_seconds ?: 1));
             $depth = (int) min(18, round(((int) $play->position_seconds / $duration) * 18));
-            $showScores[$showId] = ($showScores[$showId] ?? 0) + $recency + $completed + $depth + 12;
+            $weight = $recency + $completed + $depth + 12;
+            $showScores[$showId] = ($showScores[$showId] ?? 0) + $weight;
             $showTitles[$showId] = (string) $play->show_title;
+            $language = $this->normalizeLanguage($play->show_language ?? null, $play->show_country ?? null);
+            if ($language !== null) {
+                $languageScores[$language] = ($languageScores[$language] ?? 0) + $weight;
+            }
             $texts[] = (string) $play->episode_title;
             $texts[] = (string) $play->episode_description;
             $texts[] = (string) $play->show_title;
         }
 
-        foreach (DB::table('follows')->where('user_id', $userId)->pluck('show_id') as $showId) {
-            $showScores[(string) $showId] = ($showScores[(string) $showId] ?? 0) + 40;
+        $followedShows = DB::table('shows')
+            ->whereIn('id', DB::table('follows')->where('user_id', $userId)->pluck('show_id'))
+            ->get(['id', 'title', 'language', 'country_code']);
+        foreach ($followedShows as $followed) {
+            $showId = (string) $followed->id;
+            $showScores[$showId] = ($showScores[$showId] ?? 0) + 40;
+            $showTitles[$showId] = (string) $followed->title;
+            $texts[] = (string) $followed->title;
+            $language = $this->normalizeLanguage($followed->language ?? null, $followed->country_code ?? null);
+            if ($language !== null) {
+                $languageScores[$language] = ($languageScores[$language] ?? 0) + 40;
+            }
         }
 
         $savedShowIds = DB::table('episode_saves')
@@ -540,14 +567,48 @@ final class BuildHomeFeed
             ->values()
             ->all();
 
+        $categoryWeights = [];
+        foreach ($categoryRows as $row) {
+            $showId = (string) $row->show_id;
+            $categoryWeights[(string) $row->id] = ($categoryWeights[(string) $row->id] ?? 0) + (int) ($showScores[$showId] ?? 1);
+        }
+        arsort($categoryWeights);
+        $topCategoryIds = array_slice(array_keys($categoryWeights), 0, 5);
+
+        arsort($languageScores);
+        $languages = array_keys($languageScores);
+
         return [
             'source_show_ids' => $sourceShowIds,
-            'category_ids' => $categoryRows->pluck('id')->unique()->values()->all(),
+            'show_scores' => $showScores,
+            'category_ids' => $topCategoryIds !== [] ? $topCategoryIds : $categoryRows->pluck('id')->unique()->values()->all(),
             'listened_episode_ids' => $plays->pluck('episode_id')->unique()->values()->all(),
             'tokens' => $this->interestTokens($texts),
+            'languages' => $languages,
             'seed_show_title' => $seedShowId !== null ? ($showTitles[$seedShowId] ?? null) : null,
             'seed_topics' => array_values($seedTopics),
         ];
+    }
+
+    private function normalizeLanguage(mixed $value, mixed $country = null): ?string
+    {
+        $raw = strtolower(trim((string) $value));
+        if ($raw !== '') {
+            $code = substr($raw, 0, 2);
+            if (preg_match('/^[a-z]{2}$/', $code) === 1) {
+                return $code;
+            }
+        }
+
+        $countryCode = strtoupper(trim((string) $country));
+        if (in_array($countryCode, ['NG', 'GH', 'KE', 'ZA', 'UG', 'TZ', 'RW', 'ET', 'US', 'GB', 'IE', 'CA', 'AU', 'NZ'], true)) {
+            return 'en';
+        }
+        if (in_array($countryCode, ['SN', 'CI', 'CM', 'BJ', 'TG', 'ML', 'BF'], true)) {
+            return 'fr';
+        }
+
+        return null;
     }
 
     /**
@@ -636,26 +697,84 @@ final class BuildHomeFeed
 
     private function affinityEpisodes(string $userId, Collection $fallback, bool $excludePlayed = false): Collection
     {
-        $playedEpisodeIds = DB::table('playback_progress')->where('user_id', $userId)->pluck('episode_id');
-        $categoryIds = DB::table('category_show')
-            ->join('episodes', 'episodes.show_id', '=', 'category_show.show_id')
-            ->join('playback_progress', 'playback_progress.episode_id', '=', 'episodes.id')
-            ->where('playback_progress.user_id', $userId)
-            ->distinct()
-            ->pluck('category_show.category_id');
-        if ($categoryIds->isEmpty()) {
+        $profile = $this->listeningProfile($userId);
+        if ($profile['source_show_ids'] === [] && $profile['category_ids'] === []) {
             return collect();
         }
 
-        return $this->episodes()
-            ->join('category_show', 'category_show.show_id', '=', 'shows.id')
-            ->whereIn('category_show.category_id', $categoryIds)
-            ->when($excludePlayed && $playedEpisodeIds->isNotEmpty(), fn (Builder $query) => $query->whereNotIn('episodes.id', $playedEpisodeIds))
-            ->distinct()
+        $candidates = $this->episodes()
+            ->addSelect('shows.language as show_language')
+            ->when($profile['listened_episode_ids'] !== [] || $excludePlayed, function (Builder $query) use ($profile): void {
+                if ($profile['listened_episode_ids'] !== []) {
+                    $query->whereNotIn('episodes.id', $profile['listened_episode_ids']);
+                }
+            })
+            ->where(function (Builder $query) use ($profile): void {
+                if ($profile['source_show_ids'] !== []) {
+                    $query->orWhereIn('episodes.show_id', $profile['source_show_ids']);
+                }
+                if ($profile['category_ids'] !== []) {
+                    $query->orWhereExists(function (Builder $exists) use ($profile): void {
+                        $exists->selectRaw('1')
+                            ->from('category_show')
+                            ->whereColumn('category_show.show_id', 'shows.id')
+                            ->whereIn('category_show.category_id', $profile['category_ids']);
+                    });
+                }
+            })
             ->orderByDesc('episodes.published_at')
             ->orderByDesc('episodes.id')
-            ->limit(20)
-            ->get();
+            ->limit(200)
+            ->get()
+            ->filter(fn (object $item): bool => $this->matchesListeningLanguage($item, $profile))
+            ->values();
+
+        $showScores = $profile['show_scores'] ?? [];
+        $ranked = $candidates
+            ->map(function (object $item) use ($profile, $showScores): object {
+                $haystack = strtolower(trim(($item->title ?? '').' '.($item->description ?? '').' '.($item->show_title ?? '')));
+                $tokenHits = 0;
+                foreach ($profile['tokens'] as $token) {
+                    if ($token !== '' && str_contains($haystack, $token)) {
+                        $tokenHits++;
+                    }
+                }
+                $favoriteWeight = (int) ($showScores[(string) $item->show_id] ?? 0);
+                $unheardShow = ! in_array((string) $item->show_id, $profile['source_show_ids'], true);
+                $item->recommendation_score = (int) min(90, intdiv($favoriteWeight, 2))
+                    + ($favoriteWeight > 0 ? 28 : 0)
+                    + ($unheardShow ? 24 : 0)
+                    + ($profile['category_ids'] !== [] ? 36 : 0)
+                    + ($tokenHits * 12);
+                $item->reason = $profile['seed_topics'] !== []
+                    ? 'Because you listen to '.implode(', ', $profile['seed_topics'])
+                    : 'Picked from your listening history';
+
+                return $item;
+            })
+            ->sortByDesc(fn (object $item): int => (int) $item->recommendation_score)
+            ->unique('show_id')
+            ->take(20)
+            ->values();
+
+        return $ranked;
+    }
+
+    /**
+     * @param  array{languages?: list<string>, source_show_ids?: list<string>}  $profile
+     */
+    private function matchesListeningLanguage(object $item, array $profile): bool
+    {
+        $languages = $profile['languages'] ?? [];
+        $code = $this->normalizeLanguage($item->show_language ?? null, $item->country_code ?? null);
+        if ($code !== null && in_array($code, ['ja', 'zh', 'ko'], true) && ! in_array($code, $languages, true)) {
+            return false;
+        }
+        if ($languages === [] || $code === null) {
+            return true;
+        }
+
+        return in_array($code, $languages, true);
     }
 
     private function pickForToday(string $userId, Collection $madeForYou, Collection $trendingEpisodes): Collection

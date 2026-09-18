@@ -156,4 +156,81 @@ final class HomeRecommendationRailsTest extends TestCase
         $this->assertEqualsCanonicalizing($titles, $secondItems->all());
         $this->assertNotSame($firstItems->all(), $secondItems->all());
     }
+
+    public function test_african_voices_lists_country_catalog_without_listening_history(): void
+    {
+        Cache::flush();
+        $user = User::factory()->create();
+        Show::create([
+            'rss_url' => 'https://example.invalid/voices-ng.xml',
+            'title' => 'Lagos Voices',
+            'artwork_url' => 'https://covers.example.invalid/lagos.jpg',
+            'country_code' => 'NG',
+            'status' => 'active',
+        ]);
+
+        $titles = collect($this->actingAs($user, 'sanctum')->getJson('/api/v1/home/rails/african_voices?country=NG')->assertOk()->json('data.rail.items'))->pluck('title');
+
+        $this->assertContains('Lagos Voices', $titles->all());
+    }
+
+    public function test_trending_ranks_shows_by_stream_count(): void
+    {
+        Cache::flush();
+        $user = User::factory()->create();
+        $other = User::factory()->create();
+        $quiet = Show::create(['rss_url' => 'https://example.invalid/quiet.xml', 'title' => 'Quiet Show', 'status' => 'active']);
+        $hot = Show::create(['rss_url' => 'https://example.invalid/hot.xml', 'title' => 'Hot Show', 'status' => 'active']);
+        $quietEpisode = Episode::create(['show_id' => $quiet->id, 'guid' => 'quiet-1', 'title' => 'Quiet ep', 'audio_url' => 'https://example.invalid/q.mp3', 'availability' => 'available']);
+        $hotEpisode = Episode::create(['show_id' => $hot->id, 'guid' => 'hot-1', 'title' => 'Hot ep', 'audio_url' => 'https://example.invalid/h.mp3', 'availability' => 'available']);
+
+        DB::table('playback_progress')->insert([
+            ['user_id' => $user->id, 'episode_id' => $quietEpisode->id, 'position_seconds' => 20, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+            ['user_id' => $user->id, 'episode_id' => $hotEpisode->id, 'position_seconds' => 20, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+            ['user_id' => $other->id, 'episode_id' => $hotEpisode->id, 'position_seconds' => 20, 'completed' => false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $titles = collect($this->actingAs($user, 'sanctum')->getJson('/api/v1/home/rails/trending')->assertOk()->json('data.rail.items'))->pluck('title')->all();
+
+        $this->assertSame('Hot Show', $titles[0]);
+        $this->assertContains('Quiet Show', $titles);
+    }
+
+    public function test_made_for_you_uses_overall_history_and_skips_unrelated_languages(): void
+    {
+        Cache::flush();
+        $user = User::factory()->create();
+        $news = DB::table('categories')->insertGetId(['name' => 'News', 'slug' => 'news', 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
+
+        $seed = Show::create(['rss_url' => 'https://example.invalid/africa-news.xml', 'title' => 'Africa Daily', 'language' => 'en', 'country_code' => 'NG', 'status' => 'active']);
+        $related = Show::create(['rss_url' => 'https://example.invalid/lagos-news.xml', 'title' => 'Lagos Morning', 'language' => 'en', 'country_code' => 'NG', 'status' => 'active']);
+        $japanese = Show::create(['rss_url' => 'https://example.invalid/tokyo.xml', 'title' => 'Tokyo Briefing', 'language' => 'ja', 'country_code' => 'JP', 'status' => 'active']);
+
+        DB::table('category_show')->insert([
+            ['category_id' => $news, 'show_id' => $seed->id],
+            ['category_id' => $news, 'show_id' => $related->id],
+            ['category_id' => $news, 'show_id' => $japanese->id],
+        ]);
+
+        $heard = Episode::create(['show_id' => $seed->id, 'guid' => 'africa-1', 'title' => 'Nigeria briefing', 'description' => 'Lagos politics and news', 'audio_url' => 'https://example.invalid/a.mp3', 'duration_seconds' => 900, 'published_at' => now()->subDay(), 'availability' => 'available']);
+        $relatedEpisode = Episode::create(['show_id' => $related->id, 'guid' => 'lagos-1', 'title' => 'Lagos headlines', 'description' => 'Morning news from Lagos', 'audio_url' => 'https://example.invalid/b.mp3', 'duration_seconds' => 800, 'published_at' => now(), 'availability' => 'available']);
+        Episode::create(['show_id' => $japanese->id, 'guid' => 'tokyo-1', 'title' => 'Tokyo news', 'description' => 'News from Tokyo', 'audio_url' => 'https://example.invalid/c.mp3', 'duration_seconds' => 700, 'published_at' => now(), 'availability' => 'available']);
+
+        DB::table('playback_progress')->insert([
+            'user_id' => $user->id,
+            'episode_id' => $heard->id,
+            'position_seconds' => 900,
+            'completed' => true,
+            'version' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        DB::table('follows')->insert(['user_id' => $user->id, 'show_id' => $seed->id, 'created_at' => now(), 'updated_at' => now()]);
+
+        $titles = collect($this->actingAs($user, 'sanctum')->getJson('/api/v1/home/rails/made_for_you')->assertOk()->json('data.rail.items'))->pluck('title')->all();
+
+        $this->assertContains($relatedEpisode->title, $titles);
+        $this->assertNotContains('Tokyo news', $titles);
+        $this->assertNotContains('Nigeria briefing', $titles);
+    }
 }
