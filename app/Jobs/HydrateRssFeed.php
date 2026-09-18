@@ -99,6 +99,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                     'last_modified' => $result['last_modified'],
                     'content_hash' => $result['content_hash'],
                     'last_success_at' => now(),
+                    'channel_synced_at' => now(),
                     'consecutive_failures' => 0,
                     'state' => 'healthy',
                     'next_poll_at' => now()->addHour(),
@@ -337,6 +338,9 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
     private function fetchFollowingFeedMoves(Show $show, RssFeedFetcher $fetcher): array
     {
         $result = $fetcher->fetch($show);
+        if ($result['not_modified'] && $this->channelRefreshDue($show)) {
+            $result = $fetcher->fetch($show, bypassCache: true);
+        }
         if ($result['not_modified']) {
             return $result;
         }
@@ -354,6 +358,14 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         $show->load('feedState');
 
         return $fetcher->fetch($show, bypassCache: true);
+    }
+
+    private function channelRefreshDue(Show $show): bool
+    {
+        $hours = max(1, (int) config('rss.channel_refresh_hours', 24));
+        $synced = $show->feedState?->channel_synced_at;
+
+        return $synced === null || $synced->lte(now()->subHours($hours));
     }
 
     /**
@@ -376,8 +388,13 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
     private function declaredNewFeedUrl(\SimpleXMLElement $xml, RssFeedFetcher $fetcher): ?string
     {
         $channel = $xml->channel ?? $xml;
-        $itunes = $channel->children('http://www.itunes.com/dtds/podcast-1.0.dtd');
-        $candidate = trim((string) ($itunes->{'new-feed-url'} ?? $channel->{'new-feed-url'} ?? ''));
+        foreach ($this->itunesChildren($channel) as $itunes) {
+            $candidate = trim((string) ($itunes->{'new-feed-url'} ?? ''));
+            if ($candidate !== '') {
+                return $this->normalizedSafeFeedUrl($candidate, $fetcher);
+            }
+        }
+        $candidate = trim((string) ($channel->{'new-feed-url'} ?? ''));
         if ($candidate === '') {
             return null;
         }
@@ -409,25 +426,24 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
     private function syncChannelMetadata(Show $show, \SimpleXMLElement $xml): bool
     {
         $channel = $xml->channel ?? $xml;
-        $itunes = $channel->children('http://www.itunes.com/dtds/podcast-1.0.dtd');
         $updates = [];
 
-        $description = $this->channelDescription($channel, $itunes);
-        if ($description !== null && $description !== (string) $show->description) {
-            $this->recordMetadataChange($show, 'description', $show->description, $description);
-            $updates['description'] = $description;
+        $title = $this->channelTitle($channel);
+        if ($title !== '' && $title !== (string) $show->title) {
+            $this->recordMetadataChange($show, 'title', $show->title, $title);
+            $updates['title'] = $title;
         }
 
-        $artwork = $this->channelArtworkUrl($channel, $itunes);
+        $artwork = $this->channelArtworkUrl($channel);
         if ($artwork !== null && $artwork !== $show->artwork_url) {
             $this->recordMetadataChange($show, 'artwork_url', $show->artwork_url, $artwork);
             $updates['artwork_url'] = $artwork;
         }
 
-        $title = trim(strip_tags((string) ($channel->title ?? '')));
-        if ($title !== '' && $title !== (string) $show->title) {
-            $this->recordMetadataChange($show, 'title', $show->title, $title);
-            $updates['title'] = $title;
+        $description = $this->channelDescription($channel);
+        if ($description !== null && $description !== (string) $show->description) {
+            $this->recordMetadataChange($show, 'description', $show->description, $description);
+            $updates['description'] = $description;
         }
 
         if ($updates === []) {
@@ -435,27 +451,90 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         }
 
         $show->update($updates);
+        Log::info('catalog.rss.channel_metadata_updated', [
+            'show_id' => $show->id,
+            'fields' => array_keys($updates),
+        ]);
 
         return true;
     }
 
-    private function channelDescription(\SimpleXMLElement $channel, \SimpleXMLElement $itunes): ?string
+    /**
+     * @return list<\SimpleXMLElement>
+     */
+    private function itunesChildren(\SimpleXMLElement $channel): array
     {
-        $raw = trim((string) ($itunes->summary ?? ''));
-        if ($raw === '') {
-            $raw = trim((string) ($channel->description ?? ''));
+        $uris = [
+            'http://www.itunes.com/dtds/podcast-1.0.dtd',
+            'https://www.itunes.com/dtds/podcast-1.0.dtd',
+            'http://www.itunes.com/DTDs/Podcast-1.0.dtd',
+        ];
+        foreach ($channel->getDocNamespaces(true) as $uri) {
+            if (is_string($uri) && stripos($uri, 'itunes.com') !== false) {
+                $uris[] = $uri;
+            }
         }
-        if ($raw === '') {
+
+        $nodes = [];
+        foreach (array_unique($uris) as $uri) {
+            $children = $channel->children($uri);
+            if ($children !== null && $children->count() > 0) {
+                $nodes[] = $children;
+            }
+        }
+
+        return $nodes;
+    }
+
+    private function channelTitle(\SimpleXMLElement $channel): string
+    {
+        foreach ($this->itunesChildren($channel) as $itunes) {
+            $title = $this->cleanText((string) ($itunes->title ?? ''), 255);
+            if ($title !== '') {
+                return $title;
+            }
+        }
+        $title = $this->cleanText((string) ($channel->title ?? ''), 255);
+        if ($title !== '') {
+            return $title;
+        }
+
+        return $this->cleanText((string) ($channel->children('http://www.w3.org/2005/Atom')->title ?? ''), 255);
+    }
+
+    private function channelDescription(\SimpleXMLElement $channel): ?string
+    {
+        $raw = '';
+        foreach ($this->itunesChildren($channel) as $itunes) {
+            $raw = (string) ($itunes->summary ?? '');
+            if (trim($raw) === '') {
+                $raw = (string) ($itunes->subtitle ?? '');
+            }
+            if (trim($raw) !== '') {
+                break;
+            }
+        }
+        if (trim($raw) === '') {
+            $raw = (string) ($channel->description ?? '');
+        }
+        if (trim($raw) === '') {
+            $raw = (string) ($channel->children('http://www.w3.org/2005/Atom')->subtitle ?? '');
+        }
+        $description = $this->cleanText($raw);
+        if ($description === '') {
             return null;
         }
 
-        return strip_tags($raw);
+        return $description;
     }
 
-    private function channelArtworkUrl(\SimpleXMLElement $channel, \SimpleXMLElement $itunes): ?string
+    private function channelArtworkUrl(\SimpleXMLElement $channel): ?string
     {
         $candidates = [];
-        if (isset($itunes->image)) {
+        foreach ($this->itunesChildren($channel) as $itunes) {
+            if (! isset($itunes->image)) {
+                continue;
+            }
             foreach ($itunes->image as $image) {
                 $attributes = $image->attributes() ?: [];
                 $candidates[] = (string) ($attributes['href'] ?? '');
@@ -463,20 +542,46 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 $candidates[] = (string) ($image->url ?? '');
             }
         }
-        $channel->registerXPathNamespace('itunes', 'http://www.itunes.com/dtds/podcast-1.0.dtd');
-        foreach ($channel->xpath('.//itunes:image/@href') ?: [] as $href) {
-            $candidates[] = (string) $href;
+        foreach ($channel->getDocNamespaces(true) as $prefix => $uri) {
+            if (! is_string($uri) || stripos($uri, 'itunes.com') === false) {
+                continue;
+            }
+            $alias = ($prefix === '' || $prefix === 'itunes') ? 'itunes' : $prefix;
+            $channel->registerXPathNamespace($alias, $uri);
+            foreach ($channel->xpath('./'.$alias.':image/@href') ?: [] as $href) {
+                $candidates[] = (string) $href;
+            }
         }
         $candidates[] = (string) ($channel->image->url ?? '');
         $candidates[] = (string) ($channel->image['href'] ?? '');
+        $atom = $channel->children('http://www.w3.org/2005/Atom');
+        $candidates[] = (string) ($atom->logo ?? '');
+        $candidates[] = (string) ($atom->icon ?? '');
         foreach ($candidates as $candidate) {
             $sanitized = ArtworkUrl::sanitize(trim($candidate));
-            if ($sanitized !== null) {
-                return $sanitized;
+            if ($sanitized === null) {
+                continue;
             }
+            if (str_starts_with($sanitized, 'http://')) {
+                $https = ArtworkUrl::sanitize('https://'.substr($sanitized, strlen('http://')));
+                if ($https !== null) {
+                    return $https;
+                }
+            }
+
+            return $sanitized;
         }
 
         return null;
+    }
+
+    private function cleanText(string $value, int $maxChars = 10000): string
+    {
+        $text = html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = strip_tags($text);
+        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+
+        return CatalogText::utf8(trim($text), $maxChars);
     }
 
     private function recordMetadataChange(Show $show, string $field, ?string $old, ?string $new): void
@@ -485,8 +590,8 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             'id' => (string) Str::ulid(),
             'show_id' => $show->id,
             'field' => $field,
-            'old_value' => $old,
-            'new_value' => $new,
+            'old_value' => $old === null ? null : CatalogText::utf8($old, 65000),
+            'new_value' => $new === null ? null : CatalogText::utf8($new, 65000),
             'detected_at' => now(),
         ]);
     }
@@ -502,20 +607,30 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             ->whereKeyNot($show->id)
             ->exists();
 
-        DB::table('show_metadata_changes')->insert([
-            'id' => (string) Str::ulid(),
-            'show_id' => $show->id,
-            'field' => $conflict ? 'rss_url_redirect_conflict' : 'rss_url',
-            'old_value' => $show->rss_url,
-            'new_value' => $resolvedUrl,
-            'detected_at' => now(),
-        ]);
+        $this->recordMetadataChange(
+            $show,
+            $conflict ? 'rss_url_redirect_conflict' : 'rss_url',
+            $show->rss_url,
+            $resolvedUrl,
+        );
 
         if ($conflict) {
+            Log::info('catalog.rss.feed_move_conflict', [
+                'show_id' => $show->id,
+                'from' => $show->rss_url,
+                'to' => $resolvedUrl,
+            ]);
+
             return false;
         }
 
+        $from = $show->rss_url;
         $show->update(['rss_url' => $resolvedUrl]);
+        Log::info('catalog.rss.feed_moved', [
+            'show_id' => $show->id,
+            'from' => $from,
+            'to' => $resolvedUrl,
+        ]);
 
         return true;
     }

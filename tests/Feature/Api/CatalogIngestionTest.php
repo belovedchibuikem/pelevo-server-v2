@@ -98,7 +98,8 @@ final class CatalogIngestionTest extends TestCase
                 <?xml version="1.0"?>
                 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
                   <channel>
-                    <title>RSS Show</title>
+                    <title>Relocated Show</title>
+                    <itunes:title>Relocated Show</itunes:title>
                     <description>Fresh show notes</description>
                     <itunes:image href="https://cdn.example.com/cover.jpg"/>
                     <item>
@@ -121,11 +122,13 @@ final class CatalogIngestionTest extends TestCase
         $this->assertDatabaseHas('shows', [
             'id' => $show->id,
             'rss_url' => 'https://example.com/canonical.xml',
+            'title' => 'Relocated Show',
             'description' => 'Fresh show notes',
             'artwork_url' => 'https://cdn.example.com/cover.jpg',
         ]);
         $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'episode-1']);
         $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'rss_url', 'new_value' => 'https://example.com/canonical.xml']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'title', 'old_value' => 'RSS Show', 'new_value' => 'Relocated Show']);
         $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'artwork_url', 'new_value' => 'https://cdn.example.com/cover.jpg']);
     }
 
@@ -202,6 +205,117 @@ final class CatalogIngestionTest extends TestCase
             'description' => 'Updated copy',
             'artwork_url' => 'https://cdn.example.com/rss-image.png',
         ]);
+    }
+
+    public function test_rss_hydration_tracks_url_title_and_artwork_after_301_even_when_etag_would_304(): void
+    {
+        Event::fake();
+        $show = Show::create([
+            'rss_url' => 'https://example.com/legacy.xml',
+            'title' => 'Old Host Title',
+            'artwork_url' => 'https://cdn.example.com/old.jpg',
+        ]);
+        $show->feedState()->create([
+            'state' => 'healthy',
+            'etag' => '"old-host-etag"',
+            'last_modified' => 'Wed, 01 Jan 2020 00:00:00 GMT',
+            'next_poll_at' => now(),
+        ]);
+        Http::preventStrayRequests();
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if ($request->url() === 'https://example.com/legacy.xml') {
+                return Http::response('', 301, ['Location' => 'https://example.com/moved.xml']);
+            }
+            if ($request->hasHeader('If-None-Match') || $request->hasHeader('If-Modified-Since')) {
+                return Http::response('', 304);
+            }
+
+            return Http::response(<<<'XML'
+                <?xml version="1.0"?>
+                <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+                  <channel>
+                    <title>New Host Title</title>
+                    <itunes:image href="https://cdn.example.com/new-cover.jpg"/>
+                    <item>
+                      <guid>moved-1</guid>
+                      <title>Still here</title>
+                      <enclosure url="https://cdn.example.com/moved-1.mp3" type="audio/mpeg"/>
+                      <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                XML, 200);
+        });
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('shows', [
+            'id' => $show->id,
+            'rss_url' => 'https://example.com/moved.xml',
+            'title' => 'New Host Title',
+            'artwork_url' => 'https://cdn.example.com/new-cover.jpg',
+        ]);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'rss_url', 'new_value' => 'https://example.com/moved.xml']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'title', 'new_value' => 'New Host Title']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'artwork_url', 'new_value' => 'https://cdn.example.com/new-cover.jpg']);
+    }
+
+    public function test_rss_hydration_refreshes_channel_metadata_when_304_and_channel_sync_is_due(): void
+    {
+        Event::fake();
+        $show = Show::create([
+            'rss_url' => 'https://example.com/show.xml',
+            'title' => 'Stale Title',
+            'artwork_url' => 'https://cdn.example.com/stale.png',
+        ]);
+        $show->feedState()->create([
+            'state' => 'healthy',
+            'etag' => '"unchanged"',
+            'channel_synced_at' => now()->subDays(2),
+            'next_poll_at' => now(),
+        ]);
+        Http::preventStrayRequests();
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if ($request->hasHeader('If-None-Match')) {
+                return Http::response('', 304);
+            }
+
+            return Http::response(<<<'XML'
+                <?xml version="1.0"?>
+                <rss version="2.0" xmlns:itunes="https://www.itunes.com/dtds/podcast-1.0.dtd">
+                  <channel>
+                    <title>Refreshed Title</title>
+                    <itunes:image href="https://cdn.example.com/refreshed.png"/>
+                    <itunes:new-feed-url>https://example.com/canonical.xml</itunes:new-feed-url>
+                    <item>
+                      <guid>refresh-1</guid>
+                      <title>Same episode</title>
+                      <enclosure url="https://cdn.example.com/refresh-1.mp3" type="audio/mpeg"/>
+                      <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                XML, 200);
+        });
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('shows', [
+            'id' => $show->id,
+            'rss_url' => 'https://example.com/canonical.xml',
+            'title' => 'Refreshed Title',
+            'artwork_url' => 'https://cdn.example.com/refreshed.png',
+        ]);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'title', 'new_value' => 'Refreshed Title']);
+        $this->assertDatabaseHas('show_metadata_changes', ['show_id' => $show->id, 'field' => 'rss_url', 'new_value' => 'https://example.com/canonical.xml']);
     }
 
     public function test_poll_command_backfills_missing_feed_state_and_dispatches_due_show(): void

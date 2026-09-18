@@ -33,12 +33,35 @@ final class RssFeedFetcher
         $url = $show->rss_url;
         $canonicalUrl = $show->rss_url;
         $sawPermanent = false;
+        $conditional = ! $bypassCache;
         $state = $show->feedState;
-        for ($redirects = 0; $redirects <= config('rss.max_redirects'); $redirects++) {
+        $hops = 0;
+        $maxHops = (int) config('rss.max_redirects');
+
+        while ($hops <= $maxHops) {
             $this->guard->ensureSafe($url);
-            $headers = $bypassCache ? ['Cache-Control' => 'no-cache', 'Pragma' => 'no-cache'] : array_filter(['If-None-Match' => $state?->etag, 'If-Modified-Since' => $state?->last_modified]);
-            $response = Http::withOptions(['allow_redirects' => false])->withHeaders($headers)->connectTimeout(config('rss.connect_timeout'))->timeout(config('rss.timeout'))->get($url);
+            $headers = $conditional
+                ? array_filter([
+                    'If-None-Match' => $state?->etag,
+                    'If-Modified-Since' => $state?->last_modified,
+                ])
+                : ['Cache-Control' => 'no-cache', 'Pragma' => 'no-cache'];
+            $response = Http::withOptions(['allow_redirects' => false])
+                ->withHeaders($headers)
+                ->connectTimeout(config('rss.connect_timeout'))
+                ->timeout(config('rss.timeout'))
+                ->get($url);
+
             if ($response->status() === 304) {
+                // ETags are per-URL. After a 301/308 the destination must be
+                // fetched unconditionally so the new host's XML (title, artwork,
+                // itunes:new-feed-url) is actually parsed.
+                if ($sawPermanent && $conditional) {
+                    $conditional = false;
+
+                    continue;
+                }
+
                 return [
                     'not_modified' => true,
                     'status' => 304,
@@ -47,22 +70,30 @@ final class RssFeedFetcher
                     'permanent_redirect' => $sawPermanent,
                 ];
             }
+
             if (in_array($response->status(), self::PERMANENT_REDIRECTS, true)) {
                 $url = $this->redirectUrl($url, (string) $response->header('Location'));
                 $canonicalUrl = $url;
                 $sawPermanent = true;
+                $conditional = false;
+                $hops++;
 
                 continue;
             }
+
             if (in_array($response->status(), self::TEMPORARY_REDIRECTS, true)) {
                 $url = $this->redirectUrl($url, (string) $response->header('Location'));
+                $conditional = false;
+                $hops++;
 
                 continue;
             }
+
             $response->throw();
 
             return $this->parse($response, $url, $canonicalUrl, $sawPermanent);
         }
+
         throw new RuntimeException('RSS redirect limit exceeded.');
     }
 

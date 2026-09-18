@@ -5,6 +5,7 @@ namespace Tests\Unit\Integrations;
 use App\Integrations\Rss\FeedUrlGuard;
 use App\Integrations\Rss\RssFeedFetcher;
 use App\Models\Show;
+use App\Models\ShowFeedState;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -105,5 +106,44 @@ final class RssFeedFetcherTest extends TestCase
         $this->assertTrue($result['permanent_redirect']);
         $this->assertSame('https://feeds.example.test/new.xml', $result['canonical_url']);
         $this->assertSame('Relocated', (string) $result['xml']->channel->title);
+    }
+
+    public function test_does_not_reuse_etag_after_a_permanent_redirect(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if ($request->url() === 'https://feeds.example.test/old.xml') {
+                return Http::response('', 301, ['Location' => 'https://cdn.example.test/new.xml']);
+            }
+            if ($request->hasHeader('If-None-Match') || $request->hasHeader('If-Modified-Since')) {
+                return Http::response('', 304);
+            }
+
+            return Http::response('<?xml version="1.0"?><rss><channel><title>Moved Host</title></channel></rss>', 200);
+        });
+        $guard = new class extends FeedUrlGuard
+        {
+            protected function resolve(string $host): array
+            {
+                return ['93.184.216.34'];
+            }
+        };
+        $show = new Show(['rss_url' => 'https://feeds.example.test/old.xml', 'title' => 'Show']);
+        $show->setRelation('feedState', new ShowFeedState([
+            'etag' => '"stale-from-old-host"',
+            'last_modified' => 'Wed, 01 Jan 2020 00:00:00 GMT',
+        ]));
+
+        $result = (new RssFeedFetcher($guard))->fetch($show);
+
+        $this->assertFalse($result['not_modified']);
+        $this->assertTrue($result['permanent_redirect']);
+        $this->assertSame('https://cdn.example.test/new.xml', $result['canonical_url']);
+        $this->assertSame('Moved Host', (string) $result['xml']->channel->title);
+        Http::assertSent(function (\Illuminate\Http\Client\Request $request): bool {
+            return $request->url() === 'https://cdn.example.test/new.xml'
+                && ! $request->hasHeader('If-None-Match')
+                && ! $request->hasHeader('If-Modified-Since');
+        });
     }
 }
