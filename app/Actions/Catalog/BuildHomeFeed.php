@@ -177,7 +177,7 @@ final class BuildHomeFeed
             'trending' => $this->trendingShows(),
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
-            'try_something_new' => collect(),
+            'try_something_new' => $this->unexploredCategories($userId),
             'explore_by_topic' => $this->historyTopics($userId),
             'trending_shorts' => collect(),
             'shorts_for_you' => $this->shortsForYou($userId),
@@ -197,7 +197,7 @@ final class BuildHomeFeed
             'trending' => $this->trendingShows(),
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
-            'try_something_new' => collect(),
+            'try_something_new' => $this->unexploredCategories($userId),
             'explore_by_topic' => $this->historyTopics($userId),
             'trending_shorts' => collect(),
             'shorts_for_you' => $this->shortsForYou($userId),
@@ -286,6 +286,7 @@ final class BuildHomeFeed
                 'NG' => 'nigeria podcast',
                 'GH' => 'ghana podcast',
                 'KE' => 'kenya podcast',
+                'ZA' => 'south africa podcast',
                 default => 'africa podcast',
             };
 

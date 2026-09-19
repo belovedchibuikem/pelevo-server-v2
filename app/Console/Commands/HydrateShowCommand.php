@@ -30,6 +30,25 @@ final class HydrateShowCommand extends Command
         $show = $this->findShow($needle);
         if (! $show) {
             $this->error('Show not found.');
+            $this->line('Search is case-insensitive and matches part of the title or RSS URL.');
+            $hints = Show::query()
+                ->where(function ($query) use ($needle): void {
+                    foreach (preg_split('/\s+/', $needle) ?: [] as $word) {
+                        if (mb_strlen($word) < 3) {
+                            continue;
+                        }
+                        $query->orWhereRaw($this->titleSearchSql(), [$this->like($word)]);
+                    }
+                })
+                ->orderBy('title')
+                ->limit(8)
+                ->get(['id', 'title']);
+            if ($hints->isNotEmpty()) {
+                $this->line('Closest titles in the catalog:');
+                foreach ($hints as $hint) {
+                    $this->line("  - {$hint->title} ({$hint->id})");
+                }
+            }
 
             return self::FAILURE;
         }
@@ -77,13 +96,17 @@ final class HydrateShowCommand extends Command
             return Show::query()->whereKey($needle)->first();
         }
 
+        $sql = $this->titleSearchSql();
         $exact = Show::query()->whereRaw('LOWER(title) = ?', [mb_strtolower($needle)])->first();
         if ($exact) {
             return $exact;
         }
 
         $matches = Show::query()
-            ->where('title', 'like', '%'.$needle.'%')
+            ->where(function ($query) use ($needle, $sql): void {
+                $query->whereRaw($sql, [$this->like($needle)])
+                    ->orWhereRaw($this->urlSearchSql(), [$this->like($needle)]);
+            })
             ->orderBy('title')
             ->limit(6)
             ->get();
@@ -95,6 +118,21 @@ final class HydrateShowCommand extends Command
         }
 
         return $matches->first();
+    }
+
+    private function titleSearchSql(): string
+    {
+        return DB::connection()->getDriverName() === 'pgsql' ? 'title ILIKE ?' : 'title LIKE ?';
+    }
+
+    private function urlSearchSql(): string
+    {
+        return DB::connection()->getDriverName() === 'pgsql' ? 'rss_url ILIKE ?' : 'rss_url LIKE ?';
+    }
+
+    private function like(string $needle): string
+    {
+        return '%'.str_replace(['%', '_'], ['\\%', '\\_'], $needle).'%';
     }
 
     private function refreshFromPodcastIndex(Show $show, PodcastIndexClient $client, PersistDiscoveredShow $persist): void

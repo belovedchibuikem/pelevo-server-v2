@@ -14,6 +14,7 @@ use App\Support\ApiResponse;
 use App\Support\ArtworkUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -378,13 +379,71 @@ final class CatalogController extends Controller
         $playlists = $playlistsQuery->orderBy('position')->orderBy('id')->limit($limit)->get(['id', 'title', 'description', 'artwork_url']);
         $counts = $playlists->isEmpty() ? collect() : DB::table('editorial_playlist_items')->whereIn('editorial_playlist_id', $playlists->pluck('id'))->selectRaw('editorial_playlist_id, count(*) as item_count')->groupBy('editorial_playlist_id')->pluck('item_count', 'editorial_playlist_id');
 
-        return $playlists->map(fn (object $playlist): array => [
+        $editorial = $playlists->map(fn (object $playlist): array => [
             'id' => $playlist->id,
             'title' => $this->nonEmptyText($playlist->title, 'Untitled playlist'),
             'description' => $this->nullableText($playlist->description),
             'artwork_url' => ArtworkUrl::sanitize($playlist->artwork_url),
             'item_count' => (int) ($counts[$playlist->id] ?? 0),
-        ])->values()->all();
+            'source' => 'editorial',
+        ]);
+
+        $remaining = max(0, $limit - $editorial->count());
+        $userPlaylists = $remaining === 0 ? collect() : $this->matchingPublicUserPlaylists($query, $remaining);
+
+        return $editorial->concat($userPlaylists)->values()->all();
+    }
+
+    private function matchingPublicUserPlaylists(string $query, int $limit): Collection
+    {
+        $like = '%'.$query.'%';
+        $rows = DB::table('playlists')
+            ->join('users', 'users.id', '=', 'playlists.user_id')
+            ->where('playlists.is_public', true)
+            ->where(function ($builder) use ($like): void {
+                $this->applyLikeFallback($builder, ['playlists.name', 'playlists.description'], $like);
+            })
+            ->orderByDesc('playlists.updated_at')
+            ->orderByDesc('playlists.id')
+            ->limit($limit)
+            ->get([
+                'playlists.id',
+                'playlists.name',
+                'playlists.description',
+                'playlists.artwork_url',
+                'users.name as owner_name',
+            ]);
+        if ($rows->isEmpty()) {
+            return collect();
+        }
+        $counts = DB::table('playlist_items')
+            ->whereIn('playlist_id', $rows->pluck('id'))
+            ->selectRaw('playlist_id, count(*) as item_count')
+            ->groupBy('playlist_id')
+            ->pluck('item_count', 'playlist_id');
+
+        return $rows->map(fn (object $playlist): array => [
+            'id' => $playlist->id,
+            'title' => $this->nonEmptyText($playlist->name, 'Untitled playlist'),
+            'description' => $this->nullableText($playlist->description),
+            'artwork_url' => $this->presentedSearchArtwork($playlist->artwork_url ?? null),
+            'item_count' => (int) ($counts[$playlist->id] ?? 0),
+            'source' => 'user',
+            'owner_name' => $this->nullableText($playlist->owner_name ?? null),
+        ]);
+    }
+
+    private function presentedSearchArtwork(mixed $url): ?string
+    {
+        if (! is_string($url) || trim($url) === '') {
+            return null;
+        }
+        $value = trim($url);
+        if (str_starts_with($value, '/storage/')) {
+            return url($value);
+        }
+
+        return ArtworkUrl::sanitize($value);
     }
 
     /**

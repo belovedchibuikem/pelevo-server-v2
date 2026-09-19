@@ -202,8 +202,15 @@ final class DiscoveryAndHomeTest extends TestCase
         $scienceItems = collect($this->actingAs($scienceListener, 'sanctum')->getJson('/api/v1/home/feed')->assertOk()->json('data.rails'))
             ->firstWhere('key', 'try_something_new')['items'];
 
-        $this->assertSame([], $comedyItems);
-        $this->assertSame([], $scienceItems);
+        $comedySlugs = collect($comedyItems)->pluck('slug');
+        $scienceSlugs = collect($scienceItems)->pluck('slug');
+
+        $this->assertNotEmpty($comedyItems);
+        $this->assertNotEmpty($scienceItems);
+        $this->assertFalse($comedySlugs->contains('comedy'));
+        $this->assertFalse($scienceSlugs->contains('science'));
+        $this->assertTrue($comedySlugs->contains('science'));
+        $this->assertTrue($scienceSlugs->contains('comedy'));
     }
 
     public function test_pick_for_today_uses_trending_until_the_listener_has_history(): void

@@ -258,8 +258,11 @@ Route::prefix('v1')->group(function (): void {
         Route::post('playlists', [LibraryController::class, 'storePlaylist']);
         Route::get('playlists/{playlist}', [LibraryController::class, 'showPlaylist']);
         Route::put('playlists/{playlist}', [LibraryController::class, 'updatePlaylist']);
+        Route::post('playlists/{playlist}/artwork', [LibraryController::class, 'uploadPlaylistArtwork'])->middleware('throttle:10,1');
         Route::delete('playlists/{playlist}', [LibraryController::class, 'deletePlaylist']);
         Route::post('playlists/{playlist}/items', [LibraryController::class, 'addPlaylistItem']);
+        Route::put('playlists/{playlist}/items/reorder', [LibraryController::class, 'reorderPlaylistItems']);
+        Route::delete('playlists/{playlist}/items/{episode}', [LibraryController::class, 'removePlaylistItem']);
         Route::get('collections', [LibraryController::class, 'collections']);
         Route::post('collections', [LibraryController::class, 'storeCollection']);
         Route::get('collections/{collection}', [LibraryController::class, 'showCollection']);

@@ -4,11 +4,13 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\ArtworkUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 final class LibraryController extends Controller
@@ -25,7 +27,7 @@ final class LibraryController extends Controller
             'shows_count' => DB::table('follows')->where('user_id', $userId)->count(),
             'downloads_count' => DB::table('downloads')->where('user_id', $userId)->count(),
             'recent_count' => DB::table('playback_progress')->where('user_id', $userId)->count(),
-            'playlists' => $this->presentedPlaylists($playlists),
+            'playlists' => $this->presentedPlaylists($playlists, $userId),
             'collections' => $this->presentedCollections($collections),
         ]);
     }
@@ -176,16 +178,40 @@ final class LibraryController extends Controller
 
     public function playlists(Request $request): JsonResponse
     {
+        $scope = $request->string('scope', 'mine')->toString();
+        $viewerId = $request->user()->id;
+        if ($scope === 'others') {
+            return $this->page(
+                DB::table('playlists')
+                    ->join('users', 'users.id', '=', 'playlists.user_id')
+                    ->where('playlists.is_public', true)
+                    ->where('playlists.user_id', '!=', $viewerId)
+                    ->select('playlists.*', 'users.name as owner_name')
+                    ->orderByDesc('playlists.updated_at')
+                    ->orderByDesc('playlists.id'),
+                $request,
+                fn (object $row): array => $this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0, $viewerId),
+            );
+        }
+
         return $this->page(
-            DB::table('playlists')->where('user_id', $request->user()->id)->orderByDesc('updated_at')->orderByDesc('id'),
+            DB::table('playlists')->where('user_id', $viewerId)->orderByDesc('updated_at')->orderByDesc('id'),
             $request,
-            fn (object $row): array => $this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0),
+            fn (object $row): array => $this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0, $viewerId),
         );
     }
 
     public function showPlaylist(string $playlist, Request $request): JsonResponse
     {
-        $row = DB::table('playlists')->where('id', $playlist)->where('user_id', $request->user()->id)->first();
+        $viewerId = $request->user()->id;
+        $row = DB::table('playlists')
+            ->leftJoin('users', 'users.id', '=', 'playlists.user_id')
+            ->where('playlists.id', $playlist)
+            ->where(function ($query) use ($viewerId): void {
+                $query->where('playlists.user_id', $viewerId)->orWhere('playlists.is_public', true);
+            })
+            ->select('playlists.*', 'users.name as owner_name')
+            ->first();
         if (! $row) {
             return ApiResponse::error('NOT_FOUND', 'Playlist not found.', 404);
         }
@@ -205,7 +231,7 @@ final class LibraryController extends Controller
             ]);
 
         return ApiResponse::success([
-            ...$this->presentedPlaylist($row, $items->count()),
+            ...$this->presentedPlaylist($row, $items->count(), $viewerId),
             'items' => $items->map(fn (object $item): array => $this->presentedEpisode($item, [
                 'position' => (int) $item->position,
             ]))->values()->all(),
@@ -216,9 +242,18 @@ final class LibraryController extends Controller
     {
         $data = $request->validate(['name' => ['required', 'string', 'max:100'], 'description' => ['nullable', 'string', 'max:500'], 'is_public' => ['sometimes', 'boolean']]);
         $id = (string) Str::ulid();
-        DB::table('playlists')->insert(['id' => $id, 'user_id' => $request->user()->id, 'name' => $data['name'], 'description' => $data['description'] ?? null, 'is_public' => $data['is_public'] ?? false, 'version' => 1, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('playlists')->insert([
+            'id' => $id,
+            'user_id' => $request->user()->id,
+            'name' => $data['name'],
+            'description' => $data['description'] ?? null,
+            'is_public' => $data['is_public'] ?? true,
+            'version' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
 
-        return ApiResponse::success($this->presentedPlaylist(DB::table('playlists')->find($id), 0), status: 201);
+        return ApiResponse::success($this->presentedPlaylist(DB::table('playlists')->find($id), 0, $request->user()->id), status: 201);
     }
 
     public function updatePlaylist(string $playlist, Request $request): JsonResponse
@@ -232,7 +267,58 @@ final class LibraryController extends Controller
         }
         $row = DB::table('playlists')->find($playlist);
 
-        return ApiResponse::success($this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0));
+        return ApiResponse::success($this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0, $request->user()->id));
+    }
+
+    public function uploadPlaylistArtwork(string $playlist, Request $request): JsonResponse
+    {
+        $request->validate(['artwork' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120', 'dimensions:max_width=2048,max_height=2048']]);
+        $row = DB::table('playlists')->where('id', $playlist)->where('user_id', $request->user()->id)->first();
+        if (! $row) {
+            return ApiResponse::error('NOT_FOUND', 'Playlist not found.', 404);
+        }
+        if (! function_exists('imagecreatefromstring')) {
+            return ApiResponse::error('SERVICE_DEGRADED', 'Photo processing is unavailable. Please try again later.', 503);
+        }
+        $source = imagecreatefromstring($request->file('artwork')->get());
+        if ($source === false) {
+            return ApiResponse::error('VALIDATION', 'The photo could not be read.', 422, ['artwork' => ['Choose a valid JPEG, PNG or WebP image.']]);
+        }
+        $stream = fopen('php://temp', 'w+b');
+        try {
+            if (! imagejpeg($source, $stream, 88)) {
+                return ApiResponse::error('SERVICE_DEGRADED', 'The photo could not be processed.', 503);
+            }
+            rewind($stream);
+            $path = 'playlists/'.$request->user()->id.'/'.$playlist.'/'.Str::uuid().'.jpg';
+            if (! Storage::disk('public')->put($path, $stream)) {
+                return ApiResponse::error('SERVICE_DEGRADED', 'The photo could not be stored.', 503);
+            }
+        } finally {
+            imagedestroy($source);
+            fclose($stream);
+        }
+        $url = url('/storage/'.$path);
+        try {
+            DB::table('playlists')->where('id', $row->id)->update([
+                'artwork_url' => $url,
+                'version' => ((int) $row->version) + 1,
+                'updated_at' => now(),
+            ]);
+        } catch (\Throwable $error) {
+            Storage::disk('public')->delete($path);
+            throw $error;
+        }
+        $previous = is_string($row->artwork_url ?? null) ? (string) $row->artwork_url : '';
+        $ownedPrefix = '/storage/playlists/'.$request->user()->id.'/'.$playlist.'/';
+        $previousPath = parse_url($previous, PHP_URL_PATH) ?? (str_starts_with($previous, '/storage/') ? $previous : null);
+        if (is_string($previousPath) && str_starts_with($previousPath, $ownedPrefix)
+            && preg_match('/^[a-f0-9-]{36}\.jpg$/', substr($previousPath, strlen($ownedPrefix)))) {
+            Storage::disk('public')->delete(substr($previousPath, strlen('/storage/')));
+        }
+        $fresh = DB::table('playlists')->find($playlist);
+
+        return ApiResponse::success($this->presentedPlaylist($fresh, $this->playlistCounts([$playlist])[$playlist] ?? 0, $request->user()->id));
     }
 
     public function deletePlaylist(string $playlist, Request $request): JsonResponse
@@ -262,7 +348,7 @@ final class LibraryController extends Controller
                 ->where('episode_id', $data['episode_id'])
                 ->exists();
             if ($exists) {
-                return ApiResponse::success($this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0));
+                return ApiResponse::success($this->presentedPlaylist($row, $this->playlistCounts([$row->id])[$row->id] ?? 0, $request->user()->id));
             }
             $position = (int) (DB::table('playlist_items')->where('playlist_id', $row->id)->max('position') ?? -1) + 1;
             DB::table('playlist_items')->insert([
@@ -279,7 +365,78 @@ final class LibraryController extends Controller
             ]);
             $updated = DB::table('playlists')->find($row->id);
 
-            return ApiResponse::success($this->presentedPlaylist($updated, $this->playlistCounts([$row->id])[$row->id] ?? 0));
+            return ApiResponse::success($this->presentedPlaylist($updated, $this->playlistCounts([$row->id])[$row->id] ?? 0, $request->user()->id));
+        });
+    }
+
+    public function removePlaylistItem(string $playlist, string $episode, Request $request): JsonResponse
+    {
+        $data = $request->validate(['version' => ['required', 'integer', 'min:1']]);
+
+        return DB::transaction(function () use ($playlist, $episode, $request, $data): JsonResponse {
+            $row = DB::table('playlists')->where('id', $playlist)->where('user_id', $request->user()->id)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'Playlist not found.', 404);
+            }
+            if ((int) $row->version !== (int) $data['version']) {
+                return ApiResponse::error('VERSION_CONFLICT', 'Playlist changed on another device.', 409);
+            }
+            $deleted = DB::table('playlist_items')->where('playlist_id', $row->id)->where('episode_id', $episode)->delete();
+            if (! $deleted) {
+                return ApiResponse::error('NOT_FOUND', 'Episode is not in this playlist.', 404);
+            }
+            $this->reindexPlaylistItems($row->id);
+            DB::table('playlists')->where('id', $row->id)->update([
+                'version' => $row->version + 1,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('playlists')->find($row->id);
+
+            return ApiResponse::success($this->presentedPlaylist($updated, $this->playlistCounts([$row->id])[$row->id] ?? 0, $request->user()->id));
+        });
+    }
+
+    public function reorderPlaylistItems(string $playlist, Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'version' => ['required', 'integer', 'min:1'],
+            'episode_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'episode_ids.*' => ['required', 'distinct', 'exists:episodes,id'],
+        ]);
+
+        return DB::transaction(function () use ($playlist, $request, $data): JsonResponse {
+            $row = DB::table('playlists')->where('id', $playlist)->where('user_id', $request->user()->id)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'Playlist not found.', 404);
+            }
+            if ((int) $row->version !== (int) $data['version']) {
+                return ApiResponse::error('VERSION_CONFLICT', 'Playlist changed on another device.', 409);
+            }
+            $items = DB::table('playlist_items')->where('playlist_id', $row->id)->get(['id', 'episode_id']);
+            $byEpisode = $items->keyBy(fn (object $item): string => (string) $item->episode_id);
+            $requested = collect($data['episode_ids'])->map(fn (mixed $id): string => (string) $id);
+            if ($requested->count() !== $items->count() || $requested->diff($byEpisode->keys())->isNotEmpty()) {
+                return ApiResponse::error('PLAYLIST_MISMATCH', 'Playlist items changed. Refresh and try again.', 409);
+            }
+            foreach ($items as $offset => $item) {
+                DB::table('playlist_items')->where('id', $item->id)->update([
+                    'position' => 1000 + $offset,
+                    'updated_at' => now(),
+                ]);
+            }
+            foreach ($data['episode_ids'] as $position => $episodeId) {
+                DB::table('playlist_items')->where('id', $byEpisode[(string) $episodeId]->id)->update([
+                    'position' => $position,
+                    'updated_at' => now(),
+                ]);
+            }
+            DB::table('playlists')->where('id', $row->id)->update([
+                'version' => $row->version + 1,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('playlists')->find($row->id);
+
+            return ApiResponse::success($this->presentedPlaylist($updated, $items->count(), $request->user()->id));
         });
     }
 
@@ -394,11 +551,11 @@ final class LibraryController extends Controller
      * @param  Collection<int, object>  $rows
      * @return list<array<string, mixed>>
      */
-    private function presentedPlaylists($rows): array
+    private function presentedPlaylists($rows, ?string $viewerId = null): array
     {
         $counts = $this->playlistCounts($rows->pluck('id')->all());
 
-        return $rows->map(fn (object $row): array => $this->presentedPlaylist($row, $counts[$row->id] ?? 0))->values()->all();
+        return $rows->map(fn (object $row): array => $this->presentedPlaylist($row, $counts[$row->id] ?? 0, $viewerId))->values()->all();
     }
 
     /**
@@ -412,16 +569,54 @@ final class LibraryController extends Controller
         return $rows->map(fn (object $row): array => $this->presentedCollection($row, $counts[$row->id] ?? 0))->values()->all();
     }
 
-    private function presentedPlaylist(object $row, int $itemCount): array
+    private function presentedPlaylist(object $row, int $itemCount, ?string $viewerId = null): array
     {
+        $ownerId = (string) $row->user_id;
+        $isOwner = $viewerId === null || $ownerId === $viewerId;
+
         return [
             'id' => $row->id,
             'name' => $row->name,
             'description' => $row->description,
             'is_public' => (bool) $row->is_public,
+            'artwork_url' => $this->presentedArtwork($row->artwork_url ?? null),
             'version' => (int) $row->version,
             'item_count' => $itemCount,
+            'is_owner' => $isOwner,
+            'owner_name' => isset($row->owner_name) && is_string($row->owner_name) && $row->owner_name !== ''
+                ? $row->owner_name
+                : null,
         ];
+    }
+
+    private function presentedArtwork(mixed $url): ?string
+    {
+        if (! is_string($url) || trim($url) === '') {
+            return null;
+        }
+        $value = trim($url);
+        if (str_starts_with($value, '/storage/')) {
+            return url($value);
+        }
+
+        return ArtworkUrl::sanitize($value);
+    }
+
+    private function reindexPlaylistItems(string $playlistId): void
+    {
+        $ids = DB::table('playlist_items')->where('playlist_id', $playlistId)->orderBy('position')->orderBy('id')->pluck('id');
+        foreach ($ids as $offset => $id) {
+            DB::table('playlist_items')->where('id', $id)->update([
+                'position' => 1000 + $offset,
+                'updated_at' => now(),
+            ]);
+        }
+        foreach ($ids as $position => $id) {
+            DB::table('playlist_items')->where('id', $id)->update([
+                'position' => $position,
+                'updated_at' => now(),
+            ]);
+        }
     }
 
     private function presentedCollection(object $row, int $itemCount): array

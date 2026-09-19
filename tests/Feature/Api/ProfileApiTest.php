@@ -169,4 +169,18 @@ final class ProfileApiTest extends TestCase
 
         $this->assertSame([], Storage::disk('public')->allFiles('avatars'));
     }
+
+    public function test_authenticated_password_change_keeps_the_current_session(): void
+    {
+        $user = User::factory()->create(['password' => 'Correct-Horse-9!']);
+        Sanctum::actingAs($user, ['mobile']);
+
+        $this->patchJson('/api/v1/me/password', [
+            'current_password' => 'Correct-Horse-9!',
+            'password' => 'New-Horse-Battery-9!',
+            'password_confirmation' => 'New-Horse-Battery-9!',
+        ])->assertOk()->assertJsonPath('data.password_changed', true);
+
+        $this->getJson('/api/v1/me')->assertOk()->assertJsonPath('data.id', $user->id);
+    }
 }
