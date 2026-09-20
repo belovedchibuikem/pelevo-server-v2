@@ -49,6 +49,23 @@ final class MobileInboxTest extends TestCase
         $this->getJson('/api/v1/notifications?view=mentions')->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $first);
     }
 
+    public function test_inbox_includes_episode_destination_data(): void
+    {
+        $owner = User::factory()->create();
+        $episode = (string) Str::ulid();
+        $show = (string) Str::ulid();
+        $this->notification($owner, [
+            'type' => 'new_episode',
+            'data' => json_encode(['episode_id' => $episode, 'show_id' => $show], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/notifications')
+            ->assertOk()
+            ->assertJsonPath('data.0.data.episode_id', $episode)
+            ->assertJsonPath('data.0.data.show_id', $show)
+            ->assertJsonMissingPath('data.0.deduplication_key');
+    }
+
     public function test_read_is_owner_scoped_and_retries_preserve_the_first_read_time(): void
     {
         $owner = User::factory()->create();

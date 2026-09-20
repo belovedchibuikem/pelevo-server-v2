@@ -65,7 +65,7 @@ final class InAppNotificationDelivery
                 'created_at' => now(), 'updated_at' => now(),
             ]);
             $this->receipt($userId, $message, 'delivered');
-            if ($preferences?->push_enabled) {
+            if ($preferences?->push_enabled ?? true) {
                 app(PushDispatch::class)->notifyUser($userId, $message);
             }
 

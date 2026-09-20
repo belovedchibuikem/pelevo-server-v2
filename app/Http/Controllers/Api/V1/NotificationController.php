@@ -25,7 +25,7 @@ final class NotificationController extends Controller
             ->when($view === 'mentions', fn ($q) => $q->whereIn('type', ['mention', 'follow', 'reply']))
             ->when($view === 'new_episode', fn ($q) => $q->where('type', 'new_episode'))
             ->when($view === 'broadcast', fn ($q) => $q->where('type', 'broadcast'))
-            ->select('id', 'type', 'title', 'body', 'read_at', 'dismissed_at', 'created_at')
+            ->select('id', 'type', 'title', 'body', 'data', 'read_at', 'dismissed_at', 'created_at')
             ->orderByDesc('created_at')->orderByDesc('id')->cursorPaginate($data['limit'] ?? 20);
 
         $publicItems = collect($items->items())->map(function (object $item): array {
@@ -33,6 +33,7 @@ final class NotificationController extends Controller
             foreach (['created_at', 'read_at', 'dismissed_at'] as $field) {
                 $publicItem[$field] = $item->$field === null ? null : Carbon::parse($item->$field)->toIso8601String();
             }
+            $publicItem['data'] = $this->publicNotificationData($item->data ?? null);
 
             return $publicItem;
         });
@@ -82,6 +83,31 @@ final class NotificationController extends Controller
         $count = DB::table('notifications')->where('user_id', $request->user()->id)->whereNull('dismissed_at')->update(['dismissed_at' => now(), 'updated_at' => now()]);
 
         return ApiResponse::success(['cleared' => true, 'count' => $count]);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function publicNotificationData(mixed $data): array
+    {
+        if (is_string($data) && $data !== '') {
+            $decoded = json_decode($data, true);
+            $data = is_array($decoded) ? $decoded : [];
+        }
+        if (! is_array($data)) {
+            return [];
+        }
+        $public = [];
+        foreach ($data as $key => $value) {
+            if (! is_string($key) || $value === null || $value === '') {
+                continue;
+            }
+            if (is_bool($value) || is_int($value) || is_float($value) || is_string($value)) {
+                $public[$key] = is_string($value) ? $value : (string) $value;
+            }
+        }
+
+        return $public;
     }
 
     private function mobileOptions(?string $json): array

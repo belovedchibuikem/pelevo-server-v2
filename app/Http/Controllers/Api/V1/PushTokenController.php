@@ -19,9 +19,15 @@ final class PushTokenController extends Controller
             'provider' => ['required', 'in:fcm,apns'],
             'token' => ['required', 'string', 'min:16', 'max:4096'],
         ]);
+        $deviceId = $request->header('X-Device-Id');
+        if (! is_string($deviceId) || $deviceId === '') {
+            return ApiResponse::error('FORBIDDEN', 'A registered active device is required.', 403);
+        }
         $device = Device::where('user_id', $request->user()->id)
-            ->where('device_identifier', $request->header('X-Device-Id'))
             ->whereNull('revoked_at')
+            ->where(function ($query) use ($deviceId): void {
+                $query->whereKey($deviceId)->orWhere('device_identifier', $deviceId);
+            })
             ->first();
         if (! $device) {
             return ApiResponse::error('FORBIDDEN', 'A registered active device is required.', 403);

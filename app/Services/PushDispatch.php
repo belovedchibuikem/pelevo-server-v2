@@ -15,7 +15,7 @@ final class PushDispatch
     public function notifyUser(string $userId, array $message): int
     {
         $preferences = DB::table('notification_preferences')->where('user_id', $userId)->first();
-        if ($preferences && ! ($preferences->push_enabled ?? false)) {
+        if ($preferences && ! ($preferences->push_enabled ?? true)) {
             return 0;
         }
 
@@ -50,7 +50,7 @@ final class PushDispatch
                                 'title' => $message['title'],
                                 'body' => $message['body'],
                             ],
-                            'data' => array_map('strval', $message['data'] ?? ['type' => $message['type']]),
+                            'data' => $this->dataPayload($message),
                             'android' => [
                                 'priority' => 'HIGH',
                                 'notification' => [
@@ -81,6 +81,33 @@ final class PushDispatch
         }
 
         return $sent;
+    }
+
+    /**
+     * @param  array{type: string, title?: string, body?: string, data?: array}  $message
+     * @return array<string, string>
+     */
+    private function dataPayload(array $message): array
+    {
+        $payload = array_merge(
+            ['type' => (string) $message['type']],
+            is_array($message['data'] ?? null) ? $message['data'] : [],
+        );
+        $data = [];
+        foreach ($payload as $key => $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+            if (is_bool($value)) {
+                $data[(string) $key] = $value ? '1' : '0';
+                continue;
+            }
+            if (is_scalar($value)) {
+                $data[(string) $key] = (string) $value;
+            }
+        }
+
+        return $data;
     }
 
     private function projectId(): string

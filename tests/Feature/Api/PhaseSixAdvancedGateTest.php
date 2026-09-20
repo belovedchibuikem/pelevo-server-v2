@@ -100,4 +100,19 @@ final class PhaseSixAdvancedGateTest extends TestCase
         $this->assertDatabaseHas('support_tickets', ['user_id' => $user->id, 'priority' => 'high']);
         $this->assertDatabaseHas('feedback', ['user_id' => $user->id, 'type' => 'idea']);
     }
+
+    public function test_push_token_registers_against_device_id_or_identifier(): void
+    {
+        $user = User::factory()->create();
+        $device = Device::create(['user_id' => $user->id, 'device_identifier' => 'phone-identifier', 'name' => 'Phone']);
+        $payload = ['provider' => 'fcm', 'token' => str_repeat('a', 32)];
+
+        $this->actingAs($user, 'sanctum')->postJson('/api/v1/me/push-tokens', $payload)->assertForbidden();
+        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->id)->postJson('/api/v1/me/push-tokens', $payload)
+            ->assertCreated()
+            ->assertJsonPath('data.registered', true)
+            ->assertJsonPath('data.device_id', $device->id);
+        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', 'phone-identifier')->postJson('/api/v1/me/push-tokens', $payload)->assertCreated();
+        $this->assertDatabaseCount('push_tokens', 1);
+    }
 }

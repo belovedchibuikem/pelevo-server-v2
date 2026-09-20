@@ -67,7 +67,7 @@ paths:
   /notifications:
     get:
       security: [{ bearerAuth: [] }]
-      description: 'Account-scoped records with id/type/title/body and ISO-8601 created_at/read_at/dismissed_at. Inbox excludes dismissed records; history retains them. Meta includes cursor, has_more and total unread_count for the active inbox.'
+      description: 'Account-scoped records with id/type/title/body, destination data (episode_id/show_id when present), and ISO-8601 created_at/read_at/dismissed_at. Inbox excludes dismissed records; history retains them. Meta includes cursor, has_more and total unread_count for the active inbox.'
       parameters:
         - { in: query, name: view, schema: { type: string, enum: [all, unread, mentions, history, new_episode, broadcast], default: all } }
         - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }

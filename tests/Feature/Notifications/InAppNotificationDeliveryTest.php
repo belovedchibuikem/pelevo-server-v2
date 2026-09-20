@@ -11,11 +11,13 @@ use App\Models\Episode;
 use App\Models\Show;
 use App\Models\User;
 use App\Services\InAppNotificationDelivery;
+use App\Services\PushDispatch;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use Mockery\MockInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
@@ -185,5 +187,24 @@ final class InAppNotificationDeliveryTest extends TestCase
         $this->assertNotNull(DB::table('notification_deliveries')->where('user_id', $enabled->id)->value('delivered_at'));
         $this->assertDatabaseCount('notifications', 1);
         $this->assertDatabaseCount('notification_deliveries', 2);
+    }
+
+    public function test_missing_preferences_still_dispatch_push_after_inbox_write(): void
+    {
+        $user = User::factory()->create();
+        $this->mock(PushDispatch::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('notifyUser')->once()->andReturn(1);
+        });
+        $this->assertSame('delivered', app(InAppNotificationDelivery::class)->deliver($user->id, $this->message()));
+    }
+
+    public function test_disabled_push_preference_skips_dispatch(): void
+    {
+        $user = User::factory()->create();
+        $this->preferences($user, ['push_enabled' => false]);
+        $this->mock(PushDispatch::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('notifyUser')->never();
+        });
+        $this->assertSame('delivered', app(InAppNotificationDelivery::class)->deliver($user->id, $this->message()));
     }
 }
