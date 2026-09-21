@@ -108,7 +108,7 @@ Search discovery needs live credentials on the **server**. Local `api/.env` is n
    PODCAST_INDEX_BASE_URL=https://api.podcastindex.org/api/1.0
    PODCAST_INDEX_API_KEY=
    PODCAST_INDEX_API_SECRET=
-   PODCAST_INDEX_USER_AGENT=Pelevo/1.3
+   PODCAST_INDEX_USER_AGENT="Pelevo/1.3 +https://pelevo.com"
    ```
 2. **Deploy** (deploy script runs `config:cache`). Editing `.env` without redeploy leaves empty keys baked in the config cache.
 3. Or paste the same key/secret in **Admin → Integrations → Podcast Index** → Save → Test (DB override works at runtime).

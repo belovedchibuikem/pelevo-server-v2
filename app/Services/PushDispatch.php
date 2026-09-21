@@ -16,6 +16,8 @@ final class PushDispatch
     {
         $preferences = DB::table('notification_preferences')->where('user_id', $userId)->first();
         if ($preferences && ! ($preferences->push_enabled ?? true)) {
+            Log::info('push.skipped_disabled', ['user_id' => $userId]);
+
             return 0;
         }
 
@@ -25,6 +27,8 @@ final class PushDispatch
             ->where('provider', 'fcm')
             ->get();
         if ($tokens->isEmpty()) {
+            Log::info('push.skipped_no_tokens', ['user_id' => $userId]);
+
             return 0;
         }
 
@@ -55,6 +59,10 @@ final class PushDispatch
                                 'priority' => 'HIGH',
                                 'notification' => [
                                     'channel_id' => 'pelevo_alerts',
+                                    'sound' => 'default',
+                                    'notification_priority' => 'PRIORITY_HIGH',
+                                    'default_sound' => true,
+                                    'default_vibrate_timings' => true,
                                 ],
                             ],
                             'apns' => [

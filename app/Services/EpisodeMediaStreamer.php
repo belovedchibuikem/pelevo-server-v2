@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Integrations\Rss\FeedUrlGuard;
+use App\Support\PelevoHttpUserAgent;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
 use Illuminate\Support\Facades\Http;
@@ -23,7 +24,7 @@ final class EpisodeMediaStreamer
             $this->guard->ensureSafe($url);
             ftruncate($sink, 0);
             rewind($sink);
-            $upstream = Http::withOptions(['allow_redirects' => false, 'sink' => $sink])->withHeaders(array_filter(['Range' => $range, 'Accept' => 'audio/*']))->connectTimeout(3)->timeout(60)->get($url);
+            $upstream = Http::withOptions(['allow_redirects' => false, 'sink' => $sink])->withHeaders(array_filter(['Range' => $range, 'Accept' => 'audio/*']))->withUserAgent(PelevoHttpUserAgent::crawler())->connectTimeout(3)->timeout(60)->get($url);
             if (in_array($upstream->status(), [301, 302, 303, 307, 308], true)) {
                 $location = $upstream->header('Location');
                 if (! $location) {

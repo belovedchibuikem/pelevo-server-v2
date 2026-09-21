@@ -63,6 +63,7 @@ return [
     'fcm' => [
         'server_key' => env('FCM_SERVER_KEY'),
         'credentials' => env('FCM_CREDENTIALS', storage_path('app/firebase/service-account.json')),
+        'project_id' => env('FCM_PROJECT_ID', 'pelevo-885af'),
     ],
 
 ];

@@ -31,6 +31,7 @@ final class RssFeedFetcherTest extends TestCase
         $this->assertSame('v1', $result['etag']);
         $this->assertSame('Show', (string) $result['xml']->channel->title);
         Http::assertSentCount(1);
+        Http::assertSent(fn (\Illuminate\Http\Client\Request $request): bool => $request->hasHeader('User-Agent', (string) config('rss.user_agent')));
     }
 
     public function test_follows_permanent_redirects_and_reports_the_canonical_url(): void

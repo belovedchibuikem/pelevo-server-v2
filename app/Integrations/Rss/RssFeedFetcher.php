@@ -3,6 +3,7 @@
 namespace App\Integrations\Rss;
 
 use App\Models\Show;
+use App\Support\PelevoHttpUserAgent;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -48,6 +49,7 @@ final class RssFeedFetcher
                 : ['Cache-Control' => 'no-cache', 'Pragma' => 'no-cache'];
             $response = Http::withOptions(['allow_redirects' => false])
                 ->withHeaders($headers)
+                ->withUserAgent(PelevoHttpUserAgent::crawler())
                 ->connectTimeout(config('rss.connect_timeout'))
                 ->timeout(config('rss.timeout'))
                 ->get($url);
