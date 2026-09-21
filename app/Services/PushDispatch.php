@@ -16,7 +16,7 @@ final class PushDispatch
     {
         $preferences = DB::table('notification_preferences')->where('user_id', $userId)->first();
         if ($preferences && ! ($preferences->push_enabled ?? true)) {
-            Log::info('push.skipped_disabled', ['user_id' => $userId]);
+            Log::warning('push.skipped_disabled', ['user_id' => $userId]);
 
             return 0;
         }
@@ -27,7 +27,7 @@ final class PushDispatch
             ->where('provider', 'fcm')
             ->get();
         if ($tokens->isEmpty()) {
-            Log::info('push.skipped_no_tokens', ['user_id' => $userId]);
+            Log::warning('push.skipped_no_tokens', ['user_id' => $userId]);
 
             return 0;
         }
@@ -47,40 +47,25 @@ final class PushDispatch
                 $deviceToken = Crypt::decryptString($row->token_encrypted);
                 $response = Http::withToken($accessToken)
                     ->acceptJson()
+                    ->timeout(20)
                     ->post("https://fcm.googleapis.com/v1/projects/{$projectId}/messages:send", [
-                        'message' => [
-                            'token' => $deviceToken,
-                            'notification' => [
-                                'title' => $message['title'],
-                                'body' => $message['body'],
-                            ],
-                            'data' => $this->dataPayload($message),
-                            'android' => [
-                                'priority' => 'HIGH',
-                                'notification' => [
-                                    'channel_id' => 'pelevo_alerts',
-                                    'sound' => 'default',
-                                    'notification_priority' => 'PRIORITY_HIGH',
-                                    'default_sound' => true,
-                                    'default_vibrate_timings' => true,
-                                ],
-                            ],
-                            'apns' => [
-                                'headers' => ['apns-priority' => '10'],
-                                'payload' => [
-                                    'aps' => [
-                                        'sound' => 'default',
-                                    ],
-                                ],
-                            ],
-                        ],
+                        'message' => $this->buildMessage($deviceToken, $message),
                     ]);
                 if ($response->successful()) {
                     $sent++;
-                } else {
-                    Log::warning('push.dispatch_rejected', [
-                        'status' => $response->status(),
-                        'body' => $response->json(),
+                    continue;
+                }
+                $body = $response->json();
+                Log::warning('push.dispatch_rejected', [
+                    'user_id' => $userId,
+                    'status' => $response->status(),
+                    'body' => $body,
+                ]);
+                $fcmError = is_array($body) ? ($body['error']['details'][0]['errorCode'] ?? $body['error']['status'] ?? null) : null;
+                if ($response->status() === 404 || $fcmError === 'UNREGISTERED') {
+                    DB::table('push_tokens')->where('id', $row->id)->update([
+                        'revoked_at' => now(),
+                        'updated_at' => now(),
                     ]);
                 }
             } catch (\Throwable $error) {
@@ -88,7 +73,54 @@ final class PushDispatch
             }
         }
 
+        Log::info('push.dispatched', [
+            'user_id' => $userId,
+            'type' => $message['type'] ?? null,
+            'tokens' => $tokens->count(),
+            'sent' => $sent,
+        ]);
+
         return $sent;
+    }
+
+    /**
+     * @param  array{type: string, title: string, body: string, data?: array}  $message
+     * @return array<string, mixed>
+     */
+    public function buildMessage(string $deviceToken, array $message): array
+    {
+        $title = (string) ($message['title'] ?? 'Pelevo');
+        $body = (string) ($message['body'] ?? '');
+
+        return [
+            'token' => $deviceToken,
+            'notification' => [
+                'title' => $title,
+                'body' => $body,
+            ],
+            'data' => $this->dataPayload($message),
+            'android' => [
+                'priority' => 'HIGH',
+                'notification' => [
+                    'channel_id' => 'pelevo_alerts',
+                    'sound' => 'default',
+                    'notification_priority' => 'PRIORITY_HIGH',
+                    'visibility' => 'PUBLIC',
+                ],
+            ],
+            'apns' => [
+                'headers' => ['apns-priority' => '10'],
+                'payload' => [
+                    'aps' => [
+                        'alert' => [
+                            'title' => $title,
+                            'body' => $body,
+                        ],
+                        'sound' => 'default',
+                    ],
+                ],
+            ],
+        ];
     }
 
     /**
@@ -98,7 +130,11 @@ final class PushDispatch
     private function dataPayload(array $message): array
     {
         $payload = array_merge(
-            ['type' => (string) $message['type']],
+            [
+                'type' => (string) $message['type'],
+                'title' => (string) ($message['title'] ?? 'Pelevo'),
+                'body' => (string) ($message['body'] ?? ''),
+            ],
             is_array($message['data'] ?? null) ? $message['data'] : [],
         );
         $data = [];
@@ -146,7 +182,9 @@ final class PushDispatch
 
     private function accessToken(): string
     {
-        return Cache::remember('fcm.access_token', 3000, function (): string {
+        $projectId = $this->projectId();
+
+        return Cache::remember('fcm.access_token.'.$projectId, 3000, function (): string {
             $credentials = $this->credentials();
             $email = $credentials['client_email'] ?? null;
             $privateKey = $credentials['private_key'] ?? null;

@@ -6,6 +6,7 @@ use App\Jobs\DeliverInAppNotification;
 use App\Services\PushDispatch;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 final class InAppNotificationDelivery
@@ -15,7 +16,8 @@ final class InAppNotificationDelivery
     {
         $expiresAt ??= now()->addDays(7)->toIso8601String();
 
-        return DB::transaction(function () use ($userId, $message, $expiresAt): string {
+        $shouldPush = false;
+        $state = DB::transaction(function () use ($userId, $message, $expiresAt, &$shouldPush): string {
             $user = DB::table('users')->where('id', $userId)->lockForUpdate()->first();
             if (! $user) {
                 return 'suppressed';
@@ -65,12 +67,22 @@ final class InAppNotificationDelivery
                 'created_at' => now(), 'updated_at' => now(),
             ]);
             $this->receipt($userId, $message, 'delivered');
-            if ($preferences?->push_enabled ?? true) {
-                app(PushDispatch::class)->notifyUser($userId, $message);
-            }
+            $shouldPush = $preferences?->push_enabled ?? true;
 
             return 'delivered';
         });
+        if ($shouldPush) {
+            try {
+                app(PushDispatch::class)->notifyUser($userId, $message);
+            } catch (\Throwable $error) {
+                Log::warning('push.after_inbox_failed', [
+                    'user_id' => $userId,
+                    'error' => $error->getMessage(),
+                ]);
+            }
+        }
+
+        return $state;
     }
 
     private function quietHoursEnd(?object $preferences): ?Carbon

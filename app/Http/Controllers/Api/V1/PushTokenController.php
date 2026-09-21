@@ -33,20 +33,25 @@ final class PushTokenController extends Controller
             return ApiResponse::error('FORBIDDEN', 'A registered active device is required.', 403);
         }
         $hash = hash('sha256', $data['provider'].'|'.$data['token']);
-        $id = (string) Str::ulid();
-        DB::table('push_tokens')->updateOrInsert(
-            ['token_hash' => $hash],
-            [
-                'id' => $id,
-                'user_id' => $request->user()->id,
-                'device_id' => $device->id,
-                'provider' => $data['provider'],
-                'token_encrypted' => Crypt::encryptString($data['token']),
-                'revoked_at' => null,
+        $existing = DB::table('push_tokens')->where('token_hash', $hash)->first();
+        $values = [
+            'user_id' => $request->user()->id,
+            'device_id' => $device->id,
+            'provider' => $data['provider'],
+            'token_encrypted' => Crypt::encryptString($data['token']),
+            'revoked_at' => null,
+            'updated_at' => now(),
+        ];
+        if ($existing) {
+            DB::table('push_tokens')->where('id', $existing->id)->update($values);
+        } else {
+            DB::table('push_tokens')->insert([
+                ...$values,
+                'id' => (string) Str::ulid(),
+                'token_hash' => $hash,
                 'created_at' => now(),
-                'updated_at' => now(),
-            ]
-        );
+            ]);
+        }
 
         return ApiResponse::success([
             'registered' => true,

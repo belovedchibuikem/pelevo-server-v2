@@ -18,6 +18,7 @@ final class CheckPushStatusCommand extends Command
         $exists = $path !== '' && is_file($path);
         $projectId = null;
         $complete = false;
+        $latestInboxMissingToken = false;
         if ($exists) {
             $decoded = json_decode((string) file_get_contents($path), true);
             if (is_array($decoded)) {
@@ -43,6 +44,22 @@ final class CheckPushStatusCommand extends Command
             $latest = DB::table('notifications')->where('type', 'new_episode')->orderByDesc('created_at')->first(['title', 'created_at', 'user_id']);
             if ($latest) {
                 $this->line('Latest new-episode inbox row: '.$latest->title.' at '.$latest->created_at);
+                $prefs = Schema::hasTable('notification_preferences')
+                    ? DB::table('notification_preferences')->where('user_id', $latest->user_id)->first(['push_enabled'])
+                    : null;
+                $userTokens = Schema::hasTable('push_tokens')
+                    ? DB::table('push_tokens')->where('user_id', $latest->user_id)->whereNull('revoked_at')->where('provider', 'fcm')->count()
+                    : 0;
+                $email = Schema::hasTable('users')
+                    ? DB::table('users')->where('id', $latest->user_id)->value('email')
+                    : null;
+                $this->line('That inbox user: '.($email ?: $latest->user_id)
+                    .' | push_enabled: '.($prefs === null ? 'default-true' : (($prefs->push_enabled ?? true) ? 'true' : 'false'))
+                    .' | FCM tokens: '.$userTokens);
+                if ($userTokens < 1) {
+                    $latestInboxMissingToken = true;
+                    $this->error('That listener has an inbox row but no FCM token. Lock-screen push cannot be sent until the signed-in app registers POST /api/v1/me/push-tokens.');
+                }
             } else {
                 $this->line('No new-episode inbox rows yet.');
             }
@@ -72,7 +89,11 @@ final class CheckPushStatusCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info('FCM looks configured. If a phone still stays silent, check laravel.log for push.dispatch_rejected and that the app allowed OS notifications.');
+        if ($latestInboxMissingToken) {
+            return self::FAILURE;
+        }
+
+        $this->info('FCM looks configured. Run php artisan pelevo:push-test you@email.com while the app is backgrounded, then check laravel.log for push.dispatched or push.dispatch_rejected.');
 
         return self::SUCCESS;
     }
