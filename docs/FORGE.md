@@ -176,3 +176,19 @@ That is storage-only — not “hosted on Supabase”.
 - Rotate any secrets that were pasted into chat before going live
 - Restrict Horizon to admin auth (`HORIZON_PATH=admin/horizon` already)
 - Confirm webhook URLs use `https://pelevo.com/webhooks/v1/...`
+
+## Deploy failed: `rm: cannot remove '…': Directory not empty`
+
+Forge already built the new release. It failed while deleting the previous one because Horizon still had that directory open. The site keeps serving the old `current` until a successful deploy.
+
+On the server:
+
+```bash
+cd /home/forge/pelevo.com
+php current/artisan horizon:terminate || true
+sleep 3
+pkill -f "artisan horizon" || true
+ls -la current releases
+```
+
+Do **not** `rm` the release that `current` points at. Then Redeploy in Forge. Paste the updated `deploy/forge/deploy.sh` into Forge → Deployments so later deploys stop Horizon before purge. Enable **Restart Daemons After Deployment** so Horizon comes back on the new release.

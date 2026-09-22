@@ -30,7 +30,13 @@ $php artisan migrate --force
 echo "==> Ensuring public storage link"
 $php artisan storage:link || true
 
-echo "==> Restarting Horizon"
+# Zero-downtime Forge purges previous releases immediately after this script.
+# Horizon workers still executing in the old tree make `rm` fail with
+# "Directory not empty" and Forge marks the whole deploy failed.
+echo "==> Stopping Horizon so the previous release can be deleted"
 $php artisan horizon:terminate || true
+sleep 2
+pkill -f "artisan horizon" || true
+sleep 2
 
 echo "==> Deploy complete"
