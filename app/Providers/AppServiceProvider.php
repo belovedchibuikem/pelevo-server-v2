@@ -5,8 +5,10 @@ namespace App\Providers;
 use App\Contracts\MediaProbe;
 use App\Contracts\MediaTranscoder;
 use App\Contracts\SocialIdentityVerifier;
+use App\Events\NewEpisodePublished;
 use App\Integrations\PodcastIndex\PodcastIndexAuthenticator;
 use App\Integrations\PodcastIndex\PodcastIndexClient;
+use App\Listeners\CreateNewEpisodeNotifications;
 use App\Services\FfmpegMediaTranscoder;
 use App\Services\FfprobeMediaProbe;
 use App\Services\HttpSocialIdentityVerifier;
@@ -14,6 +16,7 @@ use App\Services\IntegrationSettings;
 use App\Support\AdminAccess;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
@@ -42,6 +45,7 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Schema::defaultStringLength(191);
+        Event::listen(NewEpisodePublished::class, CreateNewEpisodeNotifications::class);
 
         if ($this->app->environment('production')) {
             URL::forceScheme('https');
