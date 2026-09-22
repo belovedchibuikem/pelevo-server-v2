@@ -18,19 +18,27 @@ final class PollDueRssFeeds extends Command
     {
         $this->backfillFeedStates();
         $released = $this->releaseStuckRunningFeeds();
-        $nudged = $this->nudgeStaleFeeds();
 
         $depth = Queue::connection()->size('rss');
-        if ($depth >= config('catalog.rss_queue_max_depth')) {
+        $maxDepth = max(20, (int) config('catalog.rss_queue_max_depth', 200));
+        $followedOnlyDepth = max(10, (int) config('catalog.rss_followed_only_depth', 40));
+        $nudged = $this->nudgeStaleFeeds($depth, $followedOnlyDepth);
+
+        if ($depth >= $maxDepth) {
             $this->warn("RSS queue backpressure active at {$depth} jobs.");
 
             return self::SUCCESS;
         }
 
-        $available = max(0, config('catalog.rss_queue_max_depth') - $depth);
-        $limit = min(config('catalog.rss_poll_batch_size'), $available);
-        $showIds = ShowFeedState::query()
-            ->where(fn ($query) => $query->whereNull('next_poll_at')->orWhere('next_poll_at', '<=', now()))
+        $available = max(0, $maxDepth - $depth);
+        $limit = min((int) config('catalog.rss_poll_batch_size', 80), $available);
+        $followedOnly = $depth >= $followedOnlyDepth;
+        $query = ShowFeedState::query()
+            ->where(fn ($query) => $query->whereNull('next_poll_at')->orWhere('next_poll_at', '<=', now()));
+        if ($followedOnly) {
+            $query->whereExists(fn ($exists) => $exists->selectRaw('1')->from('follows')->whereColumn('follows.show_id', 'show_feed_states.show_id'));
+        }
+        $showIds = $query
             ->orderByRaw('(select count(*) from follows where follows.show_id = show_feed_states.show_id) desc')
             ->orderBy('next_poll_at')
             ->orderBy('show_id')
@@ -42,7 +50,7 @@ final class PollDueRssFeeds extends Command
             HydrateRssFeed::dispatch($showId);
             $queued++;
         }
-        $this->info("Dispatched {$queued} due RSS feeds (rss depth {$depth}, due selected {$showIds->count()}, followed/stale nudged {$nudged}, stuck-running released {$released}). Laravel skips shows that already have a unique hydrate in flight.");
+        $this->info("Dispatched {$queued} due RSS feeds (rss depth {$depth}, due selected {$showIds->count()}, followed-only ".($followedOnly ? 'yes' : 'no').", stale nudged {$nudged}, stuck-running released {$released}). Laravel skips shows that already have a unique hydrate in flight.");
 
         return self::SUCCESS;
     }
@@ -63,12 +71,13 @@ final class PollDueRssFeeds extends Command
      * Followed shows must not wait a week. Also retry dead hosts, 404s, and
      * oversized feeds that older workers marked stale.
      */
-    private function nudgeStaleFeeds(): int
+    private function nudgeStaleFeeds(int $rssDepth, int $followedOnlyDepth): int
     {
-        $ids = $this->followedShowsWaitingTooLong()
-            ->merge($this->recoverableErrorShowIds())
-            ->unique()
-            ->values();
+        $ids = $this->followedShowsWaitingTooLong();
+        if ($rssDepth < $followedOnlyDepth) {
+            $ids = $ids->merge($this->recoverableErrorShowIds());
+        }
+        $ids = $ids->unique()->values();
 
         if ($ids->isEmpty()) {
             return 0;
@@ -118,7 +127,7 @@ final class PollDueRssFeeds extends Command
                     ->orWhere('last_error', $like, '%malformed%');
             })
             ->orderBy('last_failure_at')
-            ->limit(200)
+            ->limit(25)
             ->pluck('show_id');
     }
 
