@@ -615,7 +615,7 @@ final class CatalogIngestionTest extends TestCase
         );
 
         $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'pi-seeded-ep']);
-        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'failed']);
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'healthy']);
         $this->assertTrue($show->feedState()->first()->next_poll_at->lte(now()->addHours(2)));
         Event::assertDispatched(NewEpisodePublished::class);
     }
@@ -659,5 +659,68 @@ final class CatalogIngestionTest extends TestCase
         $this->artisan('pelevo:catalog-status')
             ->expectsOutputToContain('Dead Host Show')
             ->expectsOutputToContain('could not be resolved');
+    }
+
+    public function test_oversized_rss_still_hydrates_newest_complete_items(): void
+    {
+        Event::fake();
+        config()->set('services.podcast_index.enabled', false);
+        $head = '<?xml version="1.0"?><rss version="2.0"><channel><title>The Daily</title><item><guid>newest</guid><title>Newest episode</title><enclosure url="https://cdn.example.com/newest.mp3" type="audio/mpeg"/></item>';
+        $xml = $head.'<item><guid>old</guid><title>'.str_repeat('archive ', 4000).'</title><enclosure url="https://cdn.example.com/old.mp3" type="audio/mpeg"/></item></channel></rss>';
+        config()->set('rss.max_bytes', strlen($head) + 80);
+        $show = Show::create(['rss_url' => 'https://example.com/the-daily.xml', 'title' => 'The Daily']);
+        $show->feedState()->create(['state' => 'stale', 'consecutive_failures' => 5, 'next_poll_at' => now(), 'last_error' => 'RSS document exceeds the configured limit.']);
+        Http::preventStrayRequests();
+        Http::fake(['https://example.com/the-daily.xml' => Http::response($xml, 200)]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'newest', 'title' => 'Newest episode']);
+        $this->assertDatabaseMissing('episodes', ['show_id' => $show->id, 'guid' => 'old']);
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'healthy']);
+    }
+
+    public function test_poll_command_requeues_followed_show_stuck_in_week_backoff(): void
+    {
+        Bus::fake([HydrateRssFeed::class]);
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://feeds.simplecast.com/54nAGcIl', 'title' => 'The Daily']);
+        $show->feedState()->create([
+            'state' => 'stale',
+            'consecutive_failures' => 5,
+            'last_error' => 'RSS document exceeds the configured limit.',
+            'next_poll_at' => now()->addWeek(),
+        ]);
+        \Illuminate\Support\Facades\DB::table('follows')->insert([
+            'user_id' => $user->id,
+            'show_id' => $show->id,
+            'notifications_enabled' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->artisan('catalog:poll-feeds')->assertSuccessful();
+
+        $this->assertTrue($show->fresh()->feedState->next_poll_at->lte(now()->addMinute()));
+        Bus::assertDispatched(HydrateRssFeed::class, fn (HydrateRssFeed $job): bool => $job->showId === $show->id);
+    }
+
+    public function test_poll_command_releases_stuck_running_feeds(): void
+    {
+        Bus::fake([HydrateRssFeed::class]);
+        $show = Show::create(['rss_url' => 'https://example.com/stuck.xml', 'title' => 'Stuck Running']);
+        $show->feedState()->create(['state' => 'running', 'consecutive_failures' => 0, 'next_poll_at' => now()]);
+        \Illuminate\Support\Facades\DB::table('show_feed_states')->where('show_id', $show->id)->update([
+            'updated_at' => now()->subMinutes(10),
+        ]);
+
+        $this->artisan('catalog:poll-feeds')->assertSuccessful();
+
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'pending']);
+        Bus::assertDispatched(HydrateRssFeed::class, fn (HydrateRssFeed $job): bool => $job->showId === $show->id);
     }
 }

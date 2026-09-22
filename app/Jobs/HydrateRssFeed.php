@@ -28,7 +28,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
-    public int $tries = 2;
+    public int $tries = 1;
 
     public int $timeout = 180;
 
@@ -87,7 +87,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                         'last_success_at' => now(),
                         'consecutive_failures' => 0,
                         'state' => 'healthy',
-                        'next_poll_at' => now()->addHour(),
+                        'next_poll_at' => $this->nextPollAt($show),
                         'last_error' => null,
                     ]);
                     $syncRun->update([
@@ -120,7 +120,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                     'channel_synced_at' => now(),
                     'consecutive_failures' => 0,
                     'state' => 'healthy',
-                    'next_poll_at' => now()->addHour(),
+                    'next_poll_at' => $this->nextPollAt($show),
                     'last_error' => null,
                 ]);
                 $syncRun->update([
@@ -153,6 +153,9 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             }
             if ($seededEpisodes !== []) {
                 $cache->show($show->id);
+                $this->persistIndexOnlySuccess($show, $syncRun, count($seededEpisodes), $exception);
+
+                return;
             }
             $this->persistFailure($show, $syncRun, $exception);
         }
@@ -770,6 +773,45 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         $this->persistFailure($show, null, $exception);
     }
 
+    private function persistIndexOnlySuccess(Show $show, FeedSyncRun $syncRun, int $seeded, Throwable $rssError): void
+    {
+        try {
+            $show->feedState()->updateOrCreate([], [
+                'last_success_at' => now(),
+                'consecutive_failures' => 0,
+                'state' => 'healthy',
+                'next_poll_at' => $this->nextPollAt($show),
+                'last_error' => null,
+            ]);
+            $syncRun->update([
+                'state' => 'completed',
+                'new_episode_count' => $seeded,
+                'error' => CatalogText::utf8('rss_deferred: '.$rssError->getMessage(), 400),
+                'finished_at' => now(),
+            ]);
+        } catch (Throwable) {
+            //
+        }
+        Log::info('catalog.rss.deferred_after_index', [
+            'show_id' => $show->id,
+            'seeded' => $seeded,
+            'rss_error' => CatalogText::utf8($rssError->getMessage(), 200),
+        ]);
+    }
+
+    private function nextPollAt(Show $show, bool $failed = false): \Carbon\CarbonInterface
+    {
+        $followed = DB::table('follows')->where('show_id', $show->id)->exists();
+        if ($followed) {
+            return now()->addMinutes(max(5, (int) config('rss.followed_poll_minutes', 10)));
+        }
+        if ($failed) {
+            return now()->addHour();
+        }
+
+        return now()->addMinutes(max(15, (int) config('rss.unfollowed_poll_minutes', 60)));
+    }
+
     private function persistFailure(Show $show, ?FeedSyncRun $syncRun, ?Throwable $exception): void
     {
         $message = $this->safeFailureMessage($exception);
@@ -792,7 +834,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 'consecutive_failures' => $failures,
                 'state' => (! $deadHost && $failures >= config('rss.failure_stale_threshold')) ? 'stale' : 'failed',
                 'next_poll_at' => $deadHost
-                    ? now()->addHour()
+                    ? $this->nextPollAt($show, failed: true)
                     : ($failures >= config('rss.failure_stale_threshold') ? now()->addWeek() : now()->addHours(min(24, 2 ** $failures))),
                 'last_error' => $message,
             ]);

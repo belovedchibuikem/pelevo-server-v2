@@ -147,4 +147,28 @@ final class RssFeedFetcherTest extends TestCase
                 && ! $request->hasHeader('If-Modified-Since');
         });
     }
+
+    public function test_truncates_oversized_rss_at_the_last_complete_item(): void
+    {
+        $head = '<?xml version="1.0"?><rss version="2.0"><channel><title>Daily</title><item><guid>new</guid><title>Newest</title></item>';
+        $xml = $head.'<item><guid>old</guid><title>'.str_repeat('x', 5000).'</title></item></channel></rss>';
+        config()->set('rss.max_bytes', strlen($head) + 40);
+        Http::preventStrayRequests();
+        Http::fake(['https://feeds.example.test/daily.xml' => Http::response($xml, 200)]);
+        $guard = new class extends FeedUrlGuard
+        {
+            protected function resolve(string $host): array
+            {
+                return ['93.184.216.34'];
+            }
+        };
+        $show = new Show(['rss_url' => 'https://feeds.example.test/daily.xml', 'title' => 'Daily']);
+        $show->setRelation('feedState', null);
+
+        $result = (new RssFeedFetcher($guard))->fetch($show);
+
+        $this->assertFalse($result['not_modified']);
+        $this->assertSame('Newest', (string) $result['xml']->channel->item[0]->title);
+        $this->assertCount(1, $result['xml']->channel->item);
+    }
 }

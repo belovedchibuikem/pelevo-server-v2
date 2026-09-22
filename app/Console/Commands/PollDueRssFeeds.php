@@ -17,7 +17,8 @@ final class PollDueRssFeeds extends Command
     public function handle(): int
     {
         $this->backfillFeedStates();
-        $nudged = $this->nudgeDeadHostFeeds();
+        $released = $this->releaseStuckRunningFeeds();
+        $nudged = $this->nudgeStaleFeeds();
 
         $depth = Queue::connection()->size('rss');
         if ($depth >= config('catalog.rss_queue_max_depth')) {
@@ -30,6 +31,7 @@ final class PollDueRssFeeds extends Command
         $limit = min(config('catalog.rss_poll_batch_size'), $available);
         $showIds = ShowFeedState::query()
             ->where(fn ($query) => $query->whereNull('next_poll_at')->orWhere('next_poll_at', '<=', now()))
+            ->orderByRaw('(select count(*) from follows where follows.show_id = show_feed_states.show_id) desc')
             ->orderBy('next_poll_at')
             ->orderBy('show_id')
             ->limit($limit)
@@ -40,19 +42,64 @@ final class PollDueRssFeeds extends Command
             HydrateRssFeed::dispatch($showId);
             $queued++;
         }
-        $this->info("Dispatched {$queued} due RSS feeds (rss depth {$depth}, due selected {$showIds->count()}, dead-host nudged {$nudged}). Laravel skips shows that already have a unique hydrate in flight.");
+        $this->info("Dispatched {$queued} due RSS feeds (rss depth {$depth}, due selected {$showIds->count()}, followed/stale nudged {$nudged}, stuck-running released {$released}). Laravel skips shows that already have a unique hydrate in flight.");
 
         return self::SUCCESS;
     }
 
+    private function releaseStuckRunningFeeds(): int
+    {
+        return (int) DB::table('show_feed_states')
+            ->where('state', 'running')
+            ->where('updated_at', '<', now()->subMinutes(5))
+            ->update([
+                'state' => 'pending',
+                'next_poll_at' => now(),
+                'updated_at' => now(),
+            ]);
+    }
+
     /**
-     * Feeds whose host vanished (DNS NXDOMAIN) were backing off for up to a
-     * week, so Podcast Index never got a chance to supply the moved URL.
+     * Followed shows must not wait a week. Also retry dead hosts, 404s, and
+     * oversized feeds that older workers marked stale.
      */
-    private function nudgeDeadHostFeeds(): int
+    private function nudgeStaleFeeds(): int
+    {
+        $ids = $this->followedShowsWaitingTooLong()
+            ->merge($this->recoverableErrorShowIds())
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return 0;
+        }
+
+        return (int) DB::table('show_feed_states')
+            ->whereIn('show_id', $ids)
+            ->update([
+                'next_poll_at' => now(),
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function followedShowsWaitingTooLong()
+    {
+        return DB::table('show_feed_states')
+            ->whereIn('state', ['failed', 'stale'])
+            ->where('next_poll_at', '>', now()->addMinutes(20))
+            ->whereExists(function ($query): void {
+                $query->selectRaw('1')->from('follows')->whereColumn('follows.show_id', 'show_feed_states.show_id');
+            })
+            ->orderBy('next_poll_at')
+            ->limit(200)
+            ->pluck('show_id');
+    }
+
+    private function recoverableErrorShowIds()
     {
         $like = DB::connection()->getDriverName() === 'pgsql' ? 'ilike' : 'like';
-        $ids = DB::table('show_feed_states')
+
+        return DB::table('show_feed_states')
             ->whereIn('state', ['failed', 'stale'])
             ->where('next_poll_at', '>', now()->addHours(2))
             ->where(function ($query) use ($like): void {
@@ -61,23 +108,18 @@ final class PollDueRssFeeds extends Command
                     ->orWhere('last_error', $like, '%cURL error 6%')
                     ->orWhere('last_error', $like, '%cURL error 7%')
                     ->orWhere('last_error', $like, '%RSS feed returned HTTP 404%')
+                    ->orWhere('last_error', $like, '%RSS feed returned status code 404%')
+                    ->orWhere('last_error', $like, '%HTTP request returned status code 404%')
                     ->orWhere('last_error', $like, '%RSS feed returned HTTP 410%')
-                    ->orWhere('last_error', $like, '%RSS feed returned HTTP 403%');
+                    ->orWhere('last_error', $like, '%HTTP request returned status code 410%')
+                    ->orWhere('last_error', $like, '%RSS feed returned HTTP 403%')
+                    ->orWhere('last_error', $like, '%HTTP request returned status code 403%')
+                    ->orWhere('last_error', $like, '%exceeds the configured limit%')
+                    ->orWhere('last_error', $like, '%malformed%');
             })
             ->orderBy('last_failure_at')
-            ->limit(100)
+            ->limit(200)
             ->pluck('show_id');
-
-        if ($ids->isEmpty()) {
-            return 0;
-        }
-
-        return DB::table('show_feed_states')
-            ->whereIn('show_id', $ids)
-            ->update([
-                'next_poll_at' => now(),
-                'updated_at' => now(),
-            ]);
     }
 
     private function backfillFeedStates(): void
