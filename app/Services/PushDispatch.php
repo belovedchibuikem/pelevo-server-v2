@@ -112,12 +112,6 @@ final class PushDispatch
             'data' => $this->dataPayload($message),
             'android' => [
                 'priority' => 'HIGH',
-                'notification' => [
-                    'channel_id' => 'pelevo_alerts',
-                    'sound' => 'default',
-                    'notification_priority' => 'PRIORITY_HIGH',
-                    'visibility' => 'PUBLIC',
-                ],
             ],
             'apns' => [
                 'headers' => ['apns-priority' => '10'],
@@ -169,7 +163,7 @@ final class PushDispatch
     private function sentCacheKey(string $userId, array $message): ?string
     {
         $key = $message['key'] ?? null;
-        if (! is_string($key) || $key === '') {
+        if (! is_string($key) || ! str_starts_with($key, 'new-episode:')) {
             return null;
         }
 

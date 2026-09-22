@@ -23,7 +23,7 @@ final class PushDispatchTest extends TestCase
         $this->assertSame('Episode title', $message['notification']['title']);
         $this->assertSame('A new episode is available.', $message['notification']['body']);
         $this->assertSame('HIGH', $message['android']['priority']);
-        $this->assertSame('pelevo_alerts', $message['android']['notification']['channel_id']);
+        $this->assertArrayNotHasKey('notification', $message['android']);
         $this->assertSame('new_episode', $message['data']['type']);
         $this->assertSame('ep-1', $message['data']['episode_id']);
         $this->assertSame('show-1', $message['data']['show_id']);

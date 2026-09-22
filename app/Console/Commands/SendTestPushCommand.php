@@ -43,7 +43,6 @@ final class SendTestPushCommand extends Command
             $data = json_decode((string) $latest->data, true);
             $message = [
                 'type' => 'new_episode',
-                'key' => 'push-test:'.$latest->id,
                 'title' => $latest->title,
                 'body' => $latest->body,
                 'data' => is_array($data) ? $data : ['type' => 'new_episode'],
