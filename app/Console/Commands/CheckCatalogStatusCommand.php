@@ -85,6 +85,8 @@ final class CheckCatalogStatusCommand extends Command
             $this->line('Newest episode row: '.$latestEpisode->title.' at '.$latestEpisode->created_at);
         }
 
+        $this->printShowsMissingUpdates();
+
         $failedHydrates = Schema::hasTable('failed_jobs')
             ? DB::table('failed_jobs')->where('payload', 'like', '%HydrateRssFeed%')->orderByDesc('failed_at')->limit(5)->get(['id', 'queue', 'failed_at', 'exception'])
             : collect();
@@ -109,9 +111,70 @@ final class CheckCatalogStatusCommand extends Command
             $healthy = false;
         }
         if ($healthy) {
-            $this->info('Core path looks up. If a specific show is stale, run: php artisan catalog:poll-feeds && php artisan pelevo:hydrate-show "Show Title"');
+            $this->info('Core path looks up. catalog:poll-feeds already runs every 5 minutes; dead hosts now retry hourly via Podcast Index.');
         }
 
         return $healthy ? self::SUCCESS : self::FAILURE;
+    }
+
+    private function printShowsMissingUpdates(): void
+    {
+        if (! Schema::hasTable('show_feed_states') || ! Schema::hasTable('shows')) {
+            return;
+        }
+
+        $rows = DB::table('show_feed_states as sfs')
+            ->join('shows', 'shows.id', '=', 'sfs.show_id')
+            ->where(function ($query): void {
+                $query->whereIn('sfs.state', ['failed', 'stale'])
+                    ->orWhereNotNull('sfs.last_error');
+            })
+            ->select([
+                'shows.id',
+                'shows.title',
+                'shows.rss_url',
+                'sfs.state',
+                'sfs.last_error',
+                'sfs.last_success_at',
+                'sfs.next_poll_at',
+            ])
+            ->selectSub(
+                Schema::hasTable('follows')
+                    ? DB::table('follows')->selectRaw('count(*)')->whereColumn('follows.show_id', 'shows.id')
+                    : DB::query()->selectRaw('0'),
+                'followers'
+            )
+            ->selectSub(
+                Schema::hasTable('episodes')
+                    ? DB::table('episodes')->select('title')->whereColumn('episodes.show_id', 'shows.id')->orderByDesc('published_at')->orderByDesc('created_at')->limit(1)
+                    : DB::query()->selectRaw('null'),
+                'newest_episode'
+            )
+            ->orderByDesc('followers')
+            ->orderByDesc('sfs.last_failure_at')
+            ->limit(40)
+            ->get();
+
+        if ($rows->isEmpty()) {
+            $this->info('No failed/stale feeds. Shows that other apps already have are not sitting in a dead-host error state.');
+
+            return;
+        }
+
+        $this->warn('Shows not updating in Pelevo (failed/stale RSS). Followed shows are listed first. This is not Spotify cache — these feeds never completed a successful parse.');
+        foreach ($rows as $row) {
+            $this->line(sprintf(
+                '%s  followers=%s  state=%s  newest=%s',
+                $row->title,
+                $row->followers,
+                $row->state,
+                $row->newest_episode ?: '(none)'
+            ));
+            $this->line('  rss: '.$row->rss_url);
+            $this->line('  last success: '.($row->last_success_at ?: 'never').'  next poll: '.($row->next_poll_at ?: 'due'));
+            if (filled($row->last_error)) {
+                $this->line('  error: '.str_replace(["\n", "\r"], ' ', (string) $row->last_error));
+            }
+        }
     }
 }

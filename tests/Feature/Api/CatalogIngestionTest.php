@@ -4,9 +4,12 @@ namespace Tests\Feature\Api;
 
 use App\Actions\Catalog\InvalidateDiscoveryCache;
 use App\Actions\Catalog\PersistDiscoveredShow;
+use App\Events\NewEpisodePublished;
+use App\Integrations\Rss\FeedUrlGuard;
 use App\Integrations\Rss\RssFeedFetcher;
 use App\Jobs\HydrateRssFeed;
 use App\Models\Show;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Event;
@@ -466,6 +469,7 @@ final class CatalogIngestionTest extends TestCase
     public function test_missing_rss_feed_is_marked_failed_without_retry_throw(): void
     {
         Event::fake();
+        config()->set('services.podcast_index.enabled', false);
         $show = Show::create(['rss_url' => 'https://example.com/gone.xml', 'title' => 'Gone Show']);
         $show->feedState()->create(['state' => 'pending', 'next_poll_at' => now()]);
         Http::preventStrayRequests();
@@ -479,5 +483,181 @@ final class CatalogIngestionTest extends TestCase
 
         $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'failed']);
         $this->assertDatabaseHas('feed_sync_runs', ['show_id' => $show->id, 'state' => 'failed', 'error' => 'RSS feed returned HTTP 404.']);
+    }
+
+    public function test_unresolved_host_refreshes_feed_url_from_podcast_index(): void
+    {
+        Event::fake();
+        config()->set('services.podcast_index.enabled', true);
+        config()->set('services.podcast_index.api_key', 'key');
+        config()->set('services.podcast_index.api_secret', 'secret');
+        $this->app->instance(FeedUrlGuard::class, new class extends FeedUrlGuard
+        {
+            protected function resolve(string $host): array
+            {
+                return str_contains($host, 'vanished-host.example') ? [] : ['93.184.216.34'];
+            }
+        });
+
+        $show = Show::create([
+            'rss_url' => 'https://vanished-host.example/feed.xml',
+            'title' => 'Moved Show',
+        ]);
+        $show->feedState()->create(['state' => 'failed', 'consecutive_failures' => 4, 'next_poll_at' => now(), 'last_error' => 'Feed host could not be resolved.']);
+        \Illuminate\Support\Facades\DB::table('show_external_ids')->insert([
+            'show_id' => $show->id,
+            'provider' => 'podcast_index',
+            'external_id' => '88088',
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.podcastindex.org/api/1.0/episodes/byfeedid*' => Http::response(['items' => []]),
+            'api.podcastindex.org/api/1.0/podcasts/byfeedid*' => Http::response([
+                'status' => 'true',
+                'feed' => [
+                    'id' => 88088,
+                    'url' => 'https://example.com/relocated.xml',
+                    'title' => 'Moved Show',
+                    'description' => 'Now on a new host',
+                    'artwork' => 'https://cdn.example.com/cover.jpg',
+                    'image' => 'https://cdn.example.com/cover.jpg',
+                ],
+            ]),
+            'https://example.com/relocated.xml' => Http::response(<<<'XML'
+                <?xml version="1.0"?>
+                <rss version="2.0">
+                  <channel>
+                    <title>Moved Show</title>
+                    <item>
+                      <guid>relocated-1</guid>
+                      <title>Episode after the move</title>
+                      <enclosure url="https://cdn.example.com/relocated-1.mp3" type="audio/mpeg"/>
+                      <pubDate>Wed, 16 Sep 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                XML, 200),
+        ]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('shows', [
+            'id' => $show->id,
+            'rss_url' => 'https://example.com/relocated.xml',
+        ]);
+        $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'relocated-1']);
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'healthy']);
+        Event::assertDispatched(NewEpisodePublished::class);
+    }
+
+    public function test_unresolved_host_still_notifies_podcast_index_seeded_episodes(): void
+    {
+        Event::fake([NewEpisodePublished::class]);
+        config()->set('services.podcast_index.enabled', true);
+        config()->set('services.podcast_index.api_key', 'key');
+        config()->set('services.podcast_index.api_secret', 'secret');
+        $this->app->instance(FeedUrlGuard::class, new class extends FeedUrlGuard
+        {
+            protected function resolve(string $host): array
+            {
+                return [];
+            }
+        });
+
+        $show = Show::create([
+            'rss_url' => 'https://vanished-host.example/feed.xml',
+            'title' => 'Still Dead Show',
+        ]);
+        $show->feedState()->create(['state' => 'failed', 'consecutive_failures' => 1, 'next_poll_at' => now()]);
+        \Illuminate\Support\Facades\DB::table('show_external_ids')->insert([
+            'show_id' => $show->id,
+            'provider' => 'podcast_index',
+            'external_id' => '99099',
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.podcastindex.org/api/1.0/episodes/byfeedid*' => Http::response([
+                'items' => [[
+                    'id' => 44,
+                    'guid' => 'pi-seeded-ep',
+                    'title' => 'Already on other apps',
+                    'enclosureUrl' => 'https://cdn.example.com/seeded.mp3',
+                    'datePublished' => 1727000000,
+                    'duration' => 120,
+                ]],
+            ]),
+            'api.podcastindex.org/api/1.0/podcasts/byfeedid*' => Http::response([
+                'status' => 'true',
+                'feed' => [
+                    'id' => 99099,
+                    'url' => 'https://vanished-host.example/feed.xml',
+                    'title' => 'Still Dead Show',
+                ],
+            ]),
+            'api.podcastindex.org/api/1.0/podcasts/byfeedurl*' => Http::response([
+                'status' => 'true',
+                'feed' => [
+                    'id' => 99099,
+                    'url' => 'https://vanished-host.example/feed.xml',
+                    'title' => 'Still Dead Show',
+                ],
+            ]),
+        ]);
+
+        (new HydrateRssFeed($show->id))->handle(
+            app(RssFeedFetcher::class),
+            app(InvalidateDiscoveryCache::class),
+            app(\App\Integrations\PodcastIndex\PodcastIndexClient::class),
+        );
+
+        $this->assertDatabaseHas('episodes', ['show_id' => $show->id, 'guid' => 'pi-seeded-ep']);
+        $this->assertDatabaseHas('show_feed_states', ['show_id' => $show->id, 'state' => 'failed']);
+        $this->assertTrue($show->feedState()->first()->next_poll_at->lte(now()->addHours(2)));
+        Event::assertDispatched(NewEpisodePublished::class);
+    }
+
+    public function test_poll_command_requeues_unresolved_host_feeds_stuck_in_backoff(): void
+    {
+        Bus::fake([HydrateRssFeed::class]);
+        $show = Show::create(['rss_url' => 'https://vanished-host.example/feed.xml', 'title' => 'Dead Host Show']);
+        $show->feedState()->create([
+            'state' => 'stale',
+            'consecutive_failures' => 8,
+            'last_error' => 'Feed host could not be resolved.',
+            'next_poll_at' => now()->addWeek(),
+            'last_failure_at' => now()->subDays(2),
+        ]);
+
+        $this->artisan('catalog:poll-feeds')->assertSuccessful();
+
+        $this->assertTrue($show->fresh()->feedState->next_poll_at->lte(now()->addMinute()));
+        Bus::assertDispatched(HydrateRssFeed::class, fn (HydrateRssFeed $job): bool => $job->showId === $show->id);
+    }
+
+    public function test_catalog_status_prints_failed_shows(): void
+    {
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://vanished-host.example/feed.xml', 'title' => 'Dead Host Show']);
+        $show->feedState()->create([
+            'state' => 'failed',
+            'consecutive_failures' => 3,
+            'last_error' => 'Feed host could not be resolved.',
+            'next_poll_at' => now()->addWeek(),
+        ]);
+        \Illuminate\Support\Facades\DB::table('follows')->insert([
+            'user_id' => $user->id,
+            'show_id' => $show->id,
+            'notifications_enabled' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->artisan('pelevo:catalog-status')
+            ->expectsOutputToContain('Dead Host Show')
+            ->expectsOutputToContain('could not be resolved');
     }
 }

@@ -79,6 +79,19 @@ final class PodcastIndexClient
         ], $useCache);
     }
 
+    /**
+     * Current feed metadata looked up by the publisher RSS URL (including a
+     * dead/legacy URL that Podcast Index still maps to the new host).
+     *
+     * @return array{status?: string, feed?: array<string, mixed>}
+     */
+    public function podcastByFeedUrl(string $feedUrl, bool $useCache = false): array
+    {
+        return $this->get('podcasts/byfeedurl', [
+            'url' => $feedUrl,
+        ], $useCache);
+    }
+
     private function get(string $path, array $query, bool $useCache = true, ?int $timeoutSeconds = null, int $retries = 1): array
     {
         if (! config('services.podcast_index.enabled')) {

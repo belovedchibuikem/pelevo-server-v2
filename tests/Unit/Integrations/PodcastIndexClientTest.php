@@ -61,4 +61,20 @@ final class PodcastIndexClientTest extends TestCase
                 && str_contains($url, 'since=-2592000');
         });
     }
+
+    public function test_podcast_by_feed_url_queries_the_official_endpoint(): void
+    {
+        Http::fake([
+            'api.podcastindex.org/api/1.0/podcasts/byfeedurl*' => Http::response(['status' => 'true', 'feed' => ['id' => 1]], 200),
+        ]);
+
+        app(PodcastIndexClient::class)->podcastByFeedUrl('https://vanished-host.example/feed.xml', useCache: false);
+
+        Http::assertSent(function ($request): bool {
+            $url = $request->url();
+
+            return str_contains($url, '/api/1.0/podcasts/byfeedurl')
+                && str_contains($url, 'vanished-host.example');
+        });
+    }
 }

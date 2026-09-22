@@ -17,6 +17,7 @@ final class PollDueRssFeeds extends Command
     public function handle(): int
     {
         $this->backfillFeedStates();
+        $nudged = $this->nudgeDeadHostFeeds();
 
         $depth = Queue::connection()->size('rss');
         if ($depth >= config('catalog.rss_queue_max_depth')) {
@@ -39,9 +40,44 @@ final class PollDueRssFeeds extends Command
             HydrateRssFeed::dispatch($showId);
             $queued++;
         }
-        $this->info("Dispatched {$queued} due RSS feeds (rss depth {$depth}, due selected {$showIds->count()}). Laravel skips shows that already have a unique hydrate in flight.");
+        $this->info("Dispatched {$queued} due RSS feeds (rss depth {$depth}, due selected {$showIds->count()}, dead-host nudged {$nudged}). Laravel skips shows that already have a unique hydrate in flight.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Feeds whose host vanished (DNS NXDOMAIN) were backing off for up to a
+     * week, so Podcast Index never got a chance to supply the moved URL.
+     */
+    private function nudgeDeadHostFeeds(): int
+    {
+        $like = DB::connection()->getDriverName() === 'pgsql' ? 'ilike' : 'like';
+        $ids = DB::table('show_feed_states')
+            ->whereIn('state', ['failed', 'stale'])
+            ->where('next_poll_at', '>', now()->addHours(2))
+            ->where(function ($query) use ($like): void {
+                $query->where('last_error', $like, '%could not be resolved%')
+                    ->orWhere('last_error', $like, '%could not resolve host%')
+                    ->orWhere('last_error', $like, '%cURL error 6%')
+                    ->orWhere('last_error', $like, '%cURL error 7%')
+                    ->orWhere('last_error', $like, '%RSS feed returned HTTP 404%')
+                    ->orWhere('last_error', $like, '%RSS feed returned HTTP 410%')
+                    ->orWhere('last_error', $like, '%RSS feed returned HTTP 403%');
+            })
+            ->orderBy('last_failure_at')
+            ->limit(100)
+            ->pluck('show_id');
+
+        if ($ids->isEmpty()) {
+            return 0;
+        }
+
+        return DB::table('show_feed_states')
+            ->whereIn('show_id', $ids)
+            ->update([
+                'next_poll_at' => now(),
+                'updated_at' => now(),
+            ]);
     }
 
     private function backfillFeedStates(): void

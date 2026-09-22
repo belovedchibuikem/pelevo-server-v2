@@ -8,6 +8,7 @@ use App\Events\NewEpisodePublished;
 use App\Integrations\PodcastIndex\PodcastIndexClient;
 use App\Integrations\PodcastIndex\PodcastIndexException;
 use App\Integrations\Rss\RssFeedFetcher;
+use App\Integrations\Rss\UnsafeFeedUrlException;
 use App\Models\Episode;
 use App\Models\FeedSyncRun;
 use App\Models\Show;
@@ -16,6 +17,7 @@ use App\Support\CatalogText;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -58,6 +60,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             'started_at' => now(),
         ]);
 
+        $seededEpisodes = [];
         try {
             // Seed a modest Podcast Index page first so the detail screen can
             // populate while RSS continues for full archives (including 2K+).
@@ -145,6 +148,12 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 'show_id' => $this->showId,
                 'message' => CatalogText::utf8($exception->getMessage(), 400),
             ]);
+            foreach ($seededEpisodes as $episode) {
+                NewEpisodePublished::dispatch($episode);
+            }
+            if ($seededEpisodes !== []) {
+                $cache->show($show->id);
+            }
             $this->persistFailure($show, $syncRun, $exception);
         }
     }
@@ -398,12 +407,9 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             ->where('show_id', $show->id)
             ->where('provider', 'podcast_index')
             ->value('external_id');
-        if (! is_string($feedId) || $feedId === '') {
-            return false;
-        }
 
         try {
-            $payload = $client->podcastByFeedId($feedId, useCache: false);
+            $feed = $this->podcastIndexFeedRecord($client, $show, is_string($feedId) ? $feedId : null);
         } catch (PodcastIndexException $exception) {
             Log::info('catalog.podcast_index.feed_url_refresh_skipped', [
                 'show_id' => $show->id,
@@ -414,7 +420,6 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             return false;
         }
 
-        $feed = $payload['feed'] ?? null;
         if (! is_array($feed)) {
             return false;
         }
@@ -432,6 +437,31 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         ]);
 
         return true;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function podcastIndexFeedRecord(PodcastIndexClient $client, Show $show, ?string $feedId): ?array
+    {
+        $feed = null;
+        if (is_string($feedId) && $feedId !== '') {
+            $payload = $client->podcastByFeedId($feedId, useCache: false);
+            $candidate = $payload['feed'] ?? null;
+            if (is_array($candidate)) {
+                $feed = $candidate;
+            }
+        }
+
+        $newUrl = is_array($feed) ? ($feed['url'] ?? $feed['originalUrl'] ?? null) : null;
+        if (is_string($newUrl) && $newUrl !== '' && $newUrl !== $show->rss_url) {
+            return $feed;
+        }
+
+        $payload = $client->podcastByFeedUrl($show->rss_url, useCache: false);
+        $candidate = $payload['feed'] ?? null;
+
+        return is_array($candidate) ? $candidate : $feed;
     }
 
     private function declaredNewFeedUrl(\SimpleXMLElement $xml, RssFeedFetcher $fetcher): ?string
@@ -756,11 +786,14 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         try {
             $state = $show->feedState()->firstOrCreate([], ['state' => 'failed']);
             $failures = $state->consecutive_failures + 1;
+            $deadHost = $this->isDeadFeedHost($exception);
             $state->update([
                 'last_failure_at' => now(),
                 'consecutive_failures' => $failures,
-                'state' => $failures >= config('rss.failure_stale_threshold') ? 'stale' : 'failed',
-                'next_poll_at' => $failures >= config('rss.failure_stale_threshold') ? now()->addWeek() : now()->addHours(min(24, 2 ** $failures)),
+                'state' => (! $deadHost && $failures >= config('rss.failure_stale_threshold')) ? 'stale' : 'failed',
+                'next_poll_at' => $deadHost
+                    ? now()->addHour()
+                    : ($failures >= config('rss.failure_stale_threshold') ? now()->addWeek() : now()->addHours(min(24, 2 ** $failures))),
                 'last_error' => $message,
             ]);
         } catch (Throwable) {
@@ -770,12 +803,43 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
 
     private function isPermanentFeedFailure(Throwable $exception): bool
     {
+        if ($this->isDeadFeedHost($exception)) {
+            return true;
+        }
         if (! $exception instanceof RequestException) {
             return false;
         }
-        $status = $exception->response?->status();
 
-        return in_array($status, [404, 410, 403], true);
+        return in_array($exception->response?->status(), [404, 410, 403], true);
+    }
+
+    private function isDeadFeedHost(?Throwable $exception): bool
+    {
+        if ($exception instanceof UnsafeFeedUrlException || $exception instanceof ConnectionException) {
+            return true;
+        }
+        if ($exception instanceof RequestException && in_array($exception->response?->status(), [404, 410, 403], true)) {
+            return true;
+        }
+        $message = strtolower((string) $exception?->getMessage());
+        foreach ([
+            'could not resolve host',
+            'could not be resolved',
+            'curl error 6',
+            'curl error 7',
+            'name or service not known',
+            'nodename nor servname',
+            'getaddrinfo',
+            'failed to connect',
+            'connection refused',
+            'no such host',
+        ] as $marker) {
+            if (str_contains($message, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function safeFailureMessage(?Throwable $exception): string
