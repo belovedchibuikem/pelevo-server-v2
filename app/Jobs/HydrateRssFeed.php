@@ -26,11 +26,11 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
-    public int $tries = 4;
+    public int $tries = 2;
 
     public int $timeout = 180;
 
-    public int $uniqueFor = 600;
+    public int $uniqueFor = 180;
 
     public array $backoff = [30, 120, 600];
 
@@ -141,22 +141,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 'show_id' => $this->showId,
                 'message' => CatalogText::utf8($exception->getMessage(), 400),
             ]);
-            if ($this->isPermanentFeedFailure($exception)) {
-                $this->persistFailure($show, $syncRun, $exception);
-
-                return;
-            }
-            try {
-                $syncRun->update([
-                    'state' => 'failed',
-                    'error' => $this->safeFailureMessage($exception),
-                    'finished_at' => now(),
-                ]);
-            } catch (Throwable) {
-                //
-            }
-
-            throw $exception;
+            $this->persistFailure($show, $syncRun, $exception);
         }
     }
 

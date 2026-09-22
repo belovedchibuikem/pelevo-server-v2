@@ -34,8 +34,12 @@ final class PollDueRssFeeds extends Command
             ->limit($limit)
             ->pluck('show_id');
 
-        $showIds->each(fn (string $showId) => HydrateRssFeed::dispatch($showId));
-        $this->info("Queued {$showIds->count()} due RSS feeds.");
+        $queued = 0;
+        foreach ($showIds as $showId) {
+            HydrateRssFeed::dispatch($showId);
+            $queued++;
+        }
+        $this->info("Dispatched {$queued} due RSS feeds (rss depth {$depth}, due selected {$showIds->count()}). Laravel skips shows that already have a unique hydrate in flight.");
 
         return self::SUCCESS;
     }
