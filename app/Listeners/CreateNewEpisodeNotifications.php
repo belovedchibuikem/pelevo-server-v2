@@ -7,12 +7,17 @@ use App\Services\InAppNotificationDelivery;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 final class CreateNewEpisodeNotifications implements ShouldQueue
 {
     use InteractsWithQueue;
 
     public int $tries = 3;
+
+    public int $timeout = 120;
+
+    public string $queue = 'notifications';
 
     public array $backoff = [10, 60, 300];
 
@@ -21,10 +26,17 @@ final class CreateNewEpisodeNotifications implements ShouldQueue
         if (! config('features.notifications')) {
             return;
         }
-        DB::table('follows')->leftJoin('notification_preferences', 'notification_preferences.user_id', '=', 'follows.user_id')->where('follows.show_id', $event->episode->show_id)->where('follows.notifications_enabled', true)->where(fn ($query) => $query->whereNull('notification_preferences.new_episodes')->orWhere('notification_preferences.new_episodes', true))->select('follows.user_id')->orderBy('follows.user_id')->chunk(500, function ($followers) use ($event): void {
+        $followersNotified = 0;
+        DB::table('follows')->leftJoin('notification_preferences', 'notification_preferences.user_id', '=', 'follows.user_id')->where('follows.show_id', $event->episode->show_id)->where('follows.notifications_enabled', true)->where(fn ($query) => $query->whereNull('notification_preferences.new_episodes')->orWhere('notification_preferences.new_episodes', true))->select('follows.user_id')->orderBy('follows.user_id')->chunk(500, function ($followers) use ($event, &$followersNotified): void {
             foreach ($followers as $follower) {
                 app(InAppNotificationDelivery::class)->deliver($follower->user_id, ['type' => 'new_episode', 'key' => 'new-episode:'.$event->episode->id, 'title' => $event->episode->title, 'body' => 'A new episode is available.', 'data' => ['episode_id' => $event->episode->id, 'show_id' => $event->episode->show_id]]);
+                $followersNotified++;
             }
         });
+        Log::info('push.episode_fanout', [
+            'episode_id' => $event->episode->id,
+            'show_id' => $event->episode->show_id,
+            'followers' => $followersNotified,
+        ]);
     }
 }

@@ -3,10 +3,9 @@
 namespace App\Services;
 
 use App\Jobs\DeliverInAppNotification;
-use App\Services\PushDispatch;
+use App\Jobs\DispatchUserPush;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 final class InAppNotificationDelivery
@@ -16,16 +15,19 @@ final class InAppNotificationDelivery
     {
         $expiresAt ??= now()->addDays(7)->toIso8601String();
 
-        $shouldPush = false;
-        $state = DB::transaction(function () use ($userId, $message, $expiresAt, &$shouldPush): string {
+        return DB::transaction(function () use ($userId, $message, $expiresAt): string {
             $user = DB::table('users')->where('id', $userId)->lockForUpdate()->first();
             if (! $user) {
                 return 'suppressed';
             }
+            $preferences = DB::table('notification_preferences')->where('user_id', $userId)->first();
             if (DB::table('notifications')->where('user_id', $userId)->where('deduplication_key', $message['key'])->exists()) {
+                if ($message['type'] === 'new_episode' && ($preferences?->push_enabled ?? true)) {
+                    DispatchUserPush::dispatch($userId, $message);
+                }
+
                 return 'delivered';
             }
-            $preferences = DB::table('notification_preferences')->where('user_id', $userId)->first();
             $options = json_decode($preferences?->mobile_options ?? '{}', true, flags: JSON_THROW_ON_ERROR);
             $allowed = config('features.notifications') && $user->status === 'active'
                 && ($options['in_app_enabled'] ?? true)
@@ -67,22 +69,12 @@ final class InAppNotificationDelivery
                 'created_at' => now(), 'updated_at' => now(),
             ]);
             $this->receipt($userId, $message, 'delivered');
-            $shouldPush = $preferences?->push_enabled ?? true;
+            if ($preferences?->push_enabled ?? true) {
+                DispatchUserPush::dispatch($userId, $message);
+            }
 
             return 'delivered';
         });
-        if ($shouldPush) {
-            try {
-                app(PushDispatch::class)->notifyUser($userId, $message);
-            } catch (\Throwable $error) {
-                Log::warning('push.after_inbox_failed', [
-                    'user_id' => $userId,
-                    'error' => $error->getMessage(),
-                ]);
-            }
-        }
-
-        return $state;
     }
 
     private function quietHoursEnd(?object $preferences): ?Carbon

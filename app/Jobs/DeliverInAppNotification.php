@@ -20,7 +20,7 @@ final class DeliverInAppNotification implements ShouldQueue
 
     public function __construct(public readonly string $userId, public readonly array $message, public readonly string $expiresAt)
     {
-        $this->onConnection('database')->onQueue('notifications')->afterCommit();
+        $this->onQueue('notifications')->afterCommit();
     }
 
     /**

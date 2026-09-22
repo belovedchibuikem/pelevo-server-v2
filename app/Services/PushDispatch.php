@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 final class PushDispatch
@@ -30,6 +31,13 @@ final class PushDispatch
             Log::warning('push.skipped_no_tokens', ['user_id' => $userId]);
 
             return 0;
+        }
+
+        $sentKey = $this->sentCacheKey($userId, $message);
+        if ($sentKey !== null && Cache::get($sentKey)) {
+            Log::info('push.skipped_already_sent', ['user_id' => $userId, 'key' => $message['key'] ?? null]);
+
+            return 1;
         }
 
         try {
@@ -79,6 +87,9 @@ final class PushDispatch
             'tokens' => $tokens->count(),
             'sent' => $sent,
         ]);
+        if ($sent > 0 && $sentKey !== null) {
+            Cache::put($sentKey, 1, now()->addDay());
+        }
 
         return $sent;
     }
@@ -89,8 +100,8 @@ final class PushDispatch
      */
     public function buildMessage(string $deviceToken, array $message): array
     {
-        $title = (string) ($message['title'] ?? 'Pelevo');
-        $body = (string) ($message['body'] ?? '');
+        $title = Str::limit((string) ($message['title'] ?? 'Pelevo'), 100, '');
+        $body = Str::limit((string) ($message['body'] ?? ''), 180, '');
 
         return [
             'token' => $deviceToken,
@@ -152,6 +163,17 @@ final class PushDispatch
         }
 
         return $data;
+    }
+
+    /** @param array{key?: string} $message */
+    private function sentCacheKey(string $userId, array $message): ?string
+    {
+        $key = $message['key'] ?? null;
+        if (! is_string($key) || $key === '') {
+            return null;
+        }
+
+        return 'push.sent:'.$userId.':'.$key;
     }
 
     private function projectId(): string

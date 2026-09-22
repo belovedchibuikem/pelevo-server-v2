@@ -5,19 +5,18 @@ namespace Tests\Feature\Notifications;
 use App\Events\NewEpisodePublished;
 use App\Jobs\DeliverInAppNotification;
 use App\Jobs\DispatchNotificationBroadcast;
+use App\Jobs\DispatchUserPush;
 use App\Listeners\CreateNewEpisodeNotifications;
 use App\Models\Admin;
 use App\Models\Episode;
 use App\Models\Show;
 use App\Models\User;
 use App\Services\InAppNotificationDelivery;
-use App\Services\PushDispatch;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
-use Mockery\MockInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
@@ -89,7 +88,7 @@ final class InAppNotificationDeliveryTest extends TestCase
         $this->assertSame('deferred', app(InAppNotificationDelivery::class)->deliver($user->id, $this->message()));
         $this->assertDatabaseCount('notifications', 0);
         Queue::assertPushed(DeliverInAppNotification::class, function ($job) use ($resume): bool {
-            return $job->connection === 'database' && $job->queue === 'notifications' && $job->afterCommit === true
+            return $job->queue === 'notifications' && $job->afterCommit === true
                 && $job->delay->format('Y-m-d H:i:s') === $resume;
         });
     }
@@ -191,20 +190,33 @@ final class InAppNotificationDeliveryTest extends TestCase
 
     public function test_missing_preferences_still_dispatch_push_after_inbox_write(): void
     {
+        Queue::fake([DispatchUserPush::class]);
         $user = User::factory()->create();
-        $this->mock(PushDispatch::class, function (MockInterface $mock): void {
-            $mock->shouldReceive('notifyUser')->once()->andReturn(1);
-        });
         $this->assertSame('delivered', app(InAppNotificationDelivery::class)->deliver($user->id, $this->message()));
+        Queue::assertPushed(DispatchUserPush::class, 1);
     }
 
     public function test_disabled_push_preference_skips_dispatch(): void
     {
+        Queue::fake([DispatchUserPush::class]);
         $user = User::factory()->create();
         $this->preferences($user, ['push_enabled' => false]);
-        $this->mock(PushDispatch::class, function (MockInterface $mock): void {
-            $mock->shouldReceive('notifyUser')->never();
-        });
         $this->assertSame('delivered', app(InAppNotificationDelivery::class)->deliver($user->id, $this->message()));
+        Queue::assertNothingPushed();
+    }
+
+    public function test_duplicate_new_episode_delivery_still_queues_lock_screen_push(): void
+    {
+        Queue::fake([DispatchUserPush::class]);
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.test/feed', 'title' => 'Test show']);
+        $episode = Episode::create(['show_id' => $show->id, 'guid' => 'one', 'title' => 'Episode', 'audio_url' => 'https://example.test/audio']);
+        $user->followedShows()->attach($show);
+        $message = ['type' => 'new_episode', 'key' => 'new-episode:'.$episode->id, 'title' => $episode->title, 'body' => 'A new episode is available.', 'data' => ['episode_id' => $episode->id, 'show_id' => $show->id]];
+        $delivery = app(InAppNotificationDelivery::class);
+        $this->assertSame('delivered', $delivery->deliver($user->id, $message));
+        $this->assertSame('delivered', $delivery->deliver($user->id, $message));
+        $this->assertDatabaseCount('notifications', 1);
+        Queue::assertPushed(DispatchUserPush::class, 2);
     }
 }
