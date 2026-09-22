@@ -61,7 +61,8 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         try {
             // Seed a modest Podcast Index page first so the detail screen can
             // populate while RSS continues for full archives (including 2K+).
-            $seeded = $this->seedFromPodcastIndex($show, $podcastIndex);
+            $seededEpisodes = $this->seedFromPodcastIndex($show, $podcastIndex);
+            $seeded = count($seededEpisodes);
 
             $originalRssUrl = $show->rss_url;
             try {
@@ -94,7 +95,10 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                         'finished_at' => now(),
                     ]);
                 });
-                if ($urlChanged || $show->rss_url !== $originalRssUrl) {
+                foreach ($seededEpisodes as $episode) {
+                    NewEpisodePublished::dispatch($episode);
+                }
+                if ($urlChanged || $show->rss_url !== $originalRssUrl || $seededEpisodes !== []) {
                     $cache->show($show->id);
                 }
 
@@ -130,7 +134,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 ];
             });
 
-            foreach ($outcome['episodes'] as $episode) {
+            foreach (array_merge($seededEpisodes, $outcome['episodes']) as $episode) {
                 NewEpisodePublished::dispatch($episode);
             }
             if ($outcome['episodes'] !== [] || $seeded > 0 || $outcome['catalog_changed']) {
@@ -148,12 +152,14 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
     /**
      * Page through Podcast Index episodes with a small max and optional `since`
      * to stay under rate limits. PI hard-caps at 1000 newest items and has no
-     * older-than cursor, so RSS remains the source for full archives.
+     * older-than cursor, so RSS fills the full archive.
+     *
+     * @return list<Episode>
      */
-    private function seedFromPodcastIndex(Show $show, PodcastIndexClient $client): int
+    private function seedFromPodcastIndex(Show $show, PodcastIndexClient $client): array
     {
         if (! config('services.podcast_index.enabled')) {
-            return 0;
+            return [];
         }
 
         $feedId = DB::table('show_external_ids')
@@ -162,7 +168,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             ->value('external_id');
 
         if (! is_string($feedId) || $feedId === '') {
-            return 0;
+            return [];
         }
 
         $pageSize = max(1, min((int) config('services.podcast_index.episode_page_size', 100), 1000));
@@ -171,7 +177,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             $since = $show->feedState->last_success_at->getTimestamp();
         }
 
-        $imported = 0;
+        $created = [];
 
         try {
             // One modest page for seed / incremental `since` updates. PI hard-caps
@@ -179,7 +185,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             $payload = $client->episodesByFeedId($feedId, $pageSize, $since, useCache: false);
             $items = $payload['items'] ?? [];
             if (! is_array($items) || $items === []) {
-                return 0;
+                return [];
             }
 
             foreach ($items as $item) {
@@ -191,8 +197,9 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                     continue;
                 }
                 try {
-                    if ($this->upsertPodcastIndexEpisode($show, $item, $guid)) {
-                        $imported++;
+                    $episode = $this->upsertPodcastIndexEpisode($show, $item, $guid);
+                    if ($episode !== null) {
+                        $created[] = $episode;
                     }
                 } catch (Throwable $exception) {
                     Log::warning('catalog.rss.episode_upsert_failed', [
@@ -210,7 +217,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             ]);
         }
 
-        return $imported;
+        return $created;
     }
 
     private function podcastIndexGuid(array $item): string
@@ -227,11 +234,11 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         return hash('sha256', CatalogText::utf8(($item['title'] ?? '').'|'.($item['enclosureUrl'] ?? '').'|'.($item['datePublished'] ?? '')));
     }
 
-    private function upsertPodcastIndexEpisode(Show $show, array $item, string $guid): bool
+    private function upsertPodcastIndexEpisode(Show $show, array $item, string $guid): ?Episode
     {
         $audioUrl = filter_var($item['enclosureUrl'] ?? null, FILTER_VALIDATE_URL);
         if (! is_string($audioUrl) || ! str_starts_with($audioUrl, 'https://')) {
-            return false;
+            return null;
         }
 
         $published = ((int) ($item['datePublished'] ?? 0)) > 0
@@ -254,7 +261,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
             ]
         );
 
-        return $episode->wasRecentlyCreated;
+        return $episode->wasRecentlyCreated ? $episode : null;
     }
 
     private function upsertRssItems(Show $show, \SimpleXMLElement $xml): array
@@ -358,7 +365,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
 
     private function channelRefreshDue(Show $show): bool
     {
-        $hours = max(1, (int) config('rss.channel_refresh_hours', 24));
+        $hours = max(1, (int) config('rss.channel_refresh_hours', 1));
         $synced = $show->feedState?->channel_synced_at;
 
         return $synced === null || $synced->lte(now()->subHours($hours));
