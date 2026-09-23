@@ -14,7 +14,7 @@ use Throwable;
 
 final class IntegrationSettings
 {
-    /** @return array<string, array{group:string,title:string,description:string,fields:array<int, array{name:string,label:string,type:string,secret?:bool,options?:array<int,string>}>,config:array<string,string>}> */
+    /** @return array<string, array{group:string,title:string,description:string,fields:array<int, array{name:string,label:string,type:string,secret?:bool,options?:array<int,string>,option_labels?:array<string,string>}>,config:array<string,string>}> */
     public function catalog(): array
     {
         return [
@@ -40,13 +40,13 @@ final class IntegrationSettings
                 ['name' => 'ffmpeg_binary', 'label' => 'ffmpeg path', 'type' => 'text'],
                 ['name' => 'ffprobe_binary', 'label' => 'ffprobe path', 'type' => 'text'],
             ], 'config' => ['ffmpeg_binary' => 'media.ffmpeg_binary', 'ffprobe_binary' => 'media.ffprobe_binary']],
-            'smtp' => ['group' => 'Email', 'title' => 'SMTP', 'description' => 'Admin password resets, claim codes, and operator mail. Blank secret fields keep the currently stored value.', 'fields' => [
+            'smtp' => ['group' => 'Email', 'title' => 'SMTP', 'description' => 'Admin password resets, claim codes, and operator mail. Blank secret fields keep the currently stored value. TLS on port 587 is STARTTLS (scheme smtp), not a tls:// DSN.', 'fields' => [
                 ['name' => 'mailer', 'label' => 'Mailer', 'type' => 'select', 'options' => ['smtp', 'log', 'array']],
                 ['name' => 'host', 'label' => 'Host', 'type' => 'text'],
                 ['name' => 'port', 'label' => 'Port', 'type' => 'number'],
                 ['name' => 'username', 'label' => 'Username', 'type' => 'text'],
                 ['name' => 'password', 'label' => 'Password', 'type' => 'password', 'secret' => true],
-                ['name' => 'scheme', 'label' => 'Encryption', 'type' => 'select', 'options' => ['', 'tls', 'smtps']],
+                ['name' => 'scheme', 'label' => 'Encryption', 'type' => 'select', 'options' => ['smtp', 'smtps'], 'option_labels' => ['smtp' => 'TLS / STARTTLS (port 587)', 'smtps' => 'SSL / SMTPS (port 465)']],
                 ['name' => 'from_address', 'label' => 'From address', 'type' => 'text'],
                 ['name' => 'from_name', 'label' => 'From name', 'type' => 'text'],
             ], 'config' => ['mailer' => 'mail.default', 'host' => 'mail.mailers.smtp.host', 'port' => 'mail.mailers.smtp.port', 'username' => 'mail.mailers.smtp.username', 'password' => 'mail.mailers.smtp.password', 'scheme' => 'mail.mailers.smtp.scheme', 'from_address' => 'mail.from.address', 'from_name' => 'mail.from.name']],
@@ -102,6 +102,9 @@ final class IntegrationSettings
                     if ($field === 'port') {
                         $value = (int) $value;
                     }
+                    if ($provider === 'smtp' && $field === 'scheme') {
+                        $value = $this->normalizeSmtpScheme((string) $value);
+                    }
                     config([$key => $value]);
                 }
                 if ($provider === 'paypal' && filled(config('services.paypal.payout_token'))) {
@@ -135,6 +138,9 @@ final class IntegrationSettings
             foreach ($definition['fields'] as $field) {
                 $envValue = config($definition['config'][$field['name']]);
                 $value = $stored[$field['name']] ?? $envValue;
+                if ($provider === 'smtp' && $field['name'] === 'scheme') {
+                    $value = $this->normalizeSmtpScheme((string) ($value ?? ''));
+                }
                 $secret = (bool) ($field['secret'] ?? false);
                 $configured = filled($value);
                 $fields[] = [
@@ -176,6 +182,9 @@ final class IntegrationSettings
                 continue;
             }
             $payload[$name] = $incoming[$name] ?? null;
+        }
+        if ($provider === 'smtp') {
+            $payload['scheme'] = $this->normalizeSmtpScheme((string) ($payload['scheme'] ?? ''));
         }
         DB::table('integration_settings')->updateOrInsert(['provider' => $provider], ['payload_encrypted' => Crypt::encryptString(json_encode($payload, JSON_THROW_ON_ERROR)), 'updated_by' => $adminId, 'reason' => $reason, 'updated_at' => now(), 'created_at' => DB::table('integration_settings')->where('provider', $provider)->value('created_at') ?? now()]);
         $this->applyToConfig();
@@ -303,8 +312,18 @@ final class IntegrationSettings
 
             return ['ok' => true, 'message' => 'The mailer accepted a test message for '.auth('admin')->user()?->email.'.'];
         } catch (Throwable $exception) {
-            return ['ok' => false, 'message' => $exception->getMessage()];
+            $message = trim($exception->getMessage());
+
+            return ['ok' => false, 'message' => $message !== '' ? $message : $exception::class.' was thrown while talking to the SMTP host.'];
         }
+    }
+
+    private function normalizeSmtpScheme(string $scheme): string
+    {
+        return match (strtolower(trim($scheme))) {
+            'smtps', 'ssl' => 'smtps',
+            default => 'smtp',
+        };
     }
 
     /** @return array{ok:bool,message:string} */

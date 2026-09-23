@@ -49,8 +49,9 @@ final class IntegrationSettingsTest extends TestCase
         Mail::fake();
         $this->putJson('/api/admin/v1/integrations/smtp', [
             'reason' => 'Point operator mail at the log mailer for local verification.',
-            'values' => ['mailer' => 'array', 'host' => '127.0.0.1', 'port' => '2525', 'username' => 'pelevo', 'password' => 'mail-secret', 'scheme' => '', 'from_address' => 'ops@pelevo.test', 'from_name' => 'Pelevo'],
+            'values' => ['mailer' => 'array', 'host' => '127.0.0.1', 'port' => '2525', 'username' => 'pelevo', 'password' => 'mail-secret', 'scheme' => 'tls', 'from_address' => 'ops@pelevo.test', 'from_name' => 'Pelevo'],
         ])->assertOk();
+        $this->assertSame('smtp', config('mail.mailers.smtp.scheme'));
         $this->postJson('/api/admin/v1/integrations/smtp/test')->assertOk()->assertJsonPath('data.ok', true);
         $this->postJson('/api/admin/v1/integrations/mux/test')->assertOk()->assertJsonPath('data.ok', false);
         Http::fake(['https://api.mux.com/*' => Http::response(['data' => []], 200)]);

@@ -1,7 +1,7 @@
 import { Head, Link, router } from '@inertiajs/react';
 import { useMemo, useState, type FormEvent } from 'react';
 
-type Field = { name: string; label: string; type: string; options?: string[]; secret?: boolean; configured: boolean; hint: string | null; value: string };
+type Field = { name: string; label: string; type: string; options?: string[]; option_labels?: Record<string, string>; secret?: boolean; configured: boolean; hint: string | null; value: string };
 type Integration = { provider: string; group: string; title: string; description: string; fields: Field[]; source: string; last_tested_at?: string | null; last_test_state?: string | null; last_test_message?: string | null };
 
 export default function Integrations({ integrations, freshAt }: { integrations: Integration[]; freshAt: string }) {
@@ -53,8 +53,9 @@ function ProviderCard({ item }: { item: Integration }) {
       const response = await send('POST', `/api/admin/v1/integrations/${item.provider}/test`, {});
       const body = await response.json();
       setStepUp(response.status === 403);
-      const result = body.data ?? {};
-      setMessage({ ok: Boolean(result.ok), text: result.message || body.error?.message || 'Test finished.' });
+      const result = body.data && typeof body.data === 'object' ? body.data : {};
+      const text = result.message || body.error?.message || (typeof body.message === 'string' ? body.message : '') || `Test failed (HTTP ${response.status}).`;
+      setMessage({ ok: Boolean(response.ok && result.ok), text });
     } catch { setMessage({ ok: false, text: 'The probe could not run. Check network access from this server.' }); }
     finally { setBusy(null); }
   };
@@ -69,7 +70,7 @@ function ProviderCard({ item }: { item: Integration }) {
     </div>
     <form onSubmit={save} className="mt-5 grid gap-4 sm:grid-cols-2">
       {item.fields.map(field => <label className="grid gap-2 text-sm" key={field.name}>{field.label}
-        {field.type === 'select' ? <select name={field.name} defaultValue={field.value} className={input}>{field.options?.map(option => <option value={option} key={option}>{option === '' ? 'None' : option === '1' ? 'Enabled' : option === '0' ? 'Disabled' : option}</option>)}</select>
+        {field.type === 'select' ? <select name={field.name} defaultValue={field.value} className={input}>{field.options?.map(option => <option value={option} key={option}>{field.option_labels?.[option] ?? (option === '' ? 'None' : option === '1' ? 'Enabled' : option === '0' ? 'Disabled' : option)}</option>)}</select>
           : <input name={field.name} type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'} defaultValue={field.type === 'password' ? '' : field.value} placeholder={field.hint ?? undefined} autoComplete="off" className={input} />}
         {field.hint && <span className="text-xs text-slate-500">{field.hint}</span>}
       </label>)}
