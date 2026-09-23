@@ -163,14 +163,16 @@ final class AlertMailGateTest extends TestCase
             actionLabel: 'Open Pelevo',
             actionUrl: 'https://pelevo.com',
         ))->render();
-        $this->assertStringContainsString('PELEVO', $notice);
+        $this->assertStringContainsString('cid:pelevo-logo@pelevo', $notice);
+        $this->assertStringContainsString('alt="Pelevo"', $notice);
         $this->assertStringContainsString('Please resume playback.', $notice);
         $this->assertStringContainsString('https://pelevo.com', $notice);
 
         $digest = (new DigestMail([
             ['title' => 'Lagos after dark', 'body' => 'A new episode is available.'],
         ], 'Tuesday Sep 22'))->render();
-        $this->assertStringContainsString('PELEVO', $digest);
+        $this->assertStringContainsString('cid:pelevo-logo@pelevo', $digest);
+        $this->assertStringContainsString('alt="Pelevo"', $digest);
         $this->assertStringContainsString('Lagos after dark', $digest);
         $this->assertStringContainsString('Catch up on Pelevo', $digest);
     }

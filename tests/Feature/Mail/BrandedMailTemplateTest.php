@@ -19,7 +19,9 @@ final class BrandedMailTemplateTest extends TestCase
     public function test_transactional_templates_include_pelevo_branding_and_payload(): void
     {
         $otp = (new OneTimeCode('482910', 'login'))->render();
-        $this->assertStringContainsString('PELEVO', $otp);
+        $this->assertStringContainsString('cid:pelevo-logo@pelevo', $otp);
+        $this->assertStringContainsString('alt="Pelevo"', $otp);
+        $this->assertStringContainsString('African podcasts, finally home.', $otp);
         $this->assertStringContainsString('482910', $otp);
         $this->assertStringContainsString('sign-in code', $otp);
 
@@ -40,6 +42,8 @@ final class BrandedMailTemplateTest extends TestCase
         $test = (new SmtpConnectionTest('bulk.smtp.mailtrap.io', 2525, 'info@pelevo.com', 'Wednesday, Sep 23, 2026 1:51 PM'))->render();
         $this->assertStringContainsString('mail connection is working', $test);
         $this->assertStringContainsString('bulk.smtp.mailtrap.io:2525', $test);
+        $this->assertStringContainsString('cid:pelevo-logo@pelevo', $test);
+        $this->assertStringContainsString('alt="Pelevo"', $test);
         $this->assertStringContainsString('African podcasts, finally home.', $test);
     }
 
@@ -49,7 +53,8 @@ final class BrandedMailTemplateTest extends TestCase
         $episode = Episode::create(['show_id' => $show->id, 'guid' => 'ep-mail', 'title' => 'Lagos after dark', 'audio_url' => 'https://example.com/ep.mp3', 'duration_seconds' => 1860, 'description' => 'A night walk through the city.']);
         $html = (new NewEpisodeAlert($episode->load('show')))->render();
 
-        $this->assertStringContainsString('PELEVO', $html);
+        $this->assertStringContainsString('cid:pelevo-logo@pelevo', $html);
+        $this->assertStringContainsString('alt="Pelevo"', $html);
         $this->assertStringContainsString('The Daily Africa', $html);
         $this->assertStringContainsString('Lagos after dark', $html);
         $this->assertStringContainsString('Amina Bello', $html);

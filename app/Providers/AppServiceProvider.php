@@ -14,8 +14,10 @@ use App\Services\FfprobeMediaProbe;
 use App\Services\HttpSocialIdentityVerifier;
 use App\Services\IntegrationSettings;
 use App\Support\AdminAccess;
+use App\Support\PelevoMailBrand;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Mail\Events\MessageSending;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Mail;
@@ -48,6 +50,7 @@ class AppServiceProvider extends ServiceProvider
     {
         Schema::defaultStringLength(191);
         Event::listen(NewEpisodePublished::class, CreateNewEpisodeNotifications::class);
+        Event::listen(MessageSending::class, [PelevoMailBrand::class, 'embed']);
         Event::listen(JobProcessing::class, function (): void {
             try {
                 app(IntegrationSettings::class)->applyToConfig();

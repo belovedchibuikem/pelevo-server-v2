@@ -15,8 +15,8 @@
         <td align="center">
             <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #d7e2de;">
                 <tr>
-                    <td style="background:#06201c;padding:28px 32px 24px;">
-                        <p style="margin:0 0 8px;font-size:11px;letter-spacing:.28em;font-weight:700;color:#14b8a6;">PELEVO</p>
+                    <td align="center" style="background:#000000;padding:28px 32px 22px;">
+                        <img src="{{ \App\Support\PelevoMailBrand::htmlSrc() }}" alt="Pelevo" width="132" height="132" style="display:block;margin:0 auto 12px;border:0;outline:none;text-decoration:none;">
                         <p style="margin:0;font-size:13px;color:#9ad7ce;">African podcasts, finally home.</p>
                     </td>
                 </tr>
