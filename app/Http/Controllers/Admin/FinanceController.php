@@ -6,7 +6,9 @@ use App\Actions\Finance\ReverseLedgerTransaction;
 use App\Http\Controllers\Controller;
 use App\Jobs\DispatchWithdrawal;
 use App\Jobs\RunReconciliation;
+use App\Mail\PelevoNotice;
 use App\Models\ConfigurationVersion;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -68,6 +70,9 @@ final class FinanceController extends Controller
             DB::table('withdrawals')->where('id', $withdrawal)->update(['state' => $data['state'], 'provider_reference' => $data['provider_reference'] ?? $row->provider_reference, 'failure_reason' => in_array($data['state'], ['failed', 'rejected'], true) ? $data['reason'] : null, 'processed_at' => in_array($data['state'], ['paid', 'failed', 'rejected', 'reversed'], true) ? now() : null, 'updated_at' => now()]);
             if ($data['state'] === 'approved') {
                 DispatchWithdrawal::dispatch($withdrawal)->afterCommit();
+            }
+            if (in_array($data['state'], ['paid', 'failed', 'rejected'], true)) {
+                $this->notifyWithdrawal((string) $row->user_id, $data['state'], (int) $row->coins, $data['reason']);
             }
             $this->audit($request, 'withdrawal.'.$data['state'], 'App\\Models\\Withdrawal', $withdrawal, $data['reason'], ['from' => $row->state, 'to' => $data['state']]);
 
@@ -318,6 +323,20 @@ final class FinanceController extends Controller
             'settlements' => DB::table('provider_settlements')->latest('business_date')->limit(20)->get(),
             'freshAt' => now()->toIso8601String(),
         ];
+    }
+
+    private function notifyWithdrawal(string $userId, string $state, int $coins, string $reason): void
+    {
+        $paid = $state === 'paid';
+        app(MailPreference::class)->queueToUser($userId, new PelevoNotice(
+            subjectLine: $paid ? 'Your Pelevo withdrawal was paid' : 'Your Pelevo withdrawal did not go through',
+            eyebrow: 'Wallet',
+            heading: $paid ? 'Withdrawal paid' : 'Withdrawal '.$state,
+            intro: $paid
+                ? 'We sent your withdrawal of '.$coins.' coins.'
+                : 'Your withdrawal of '.$coins.' coins was marked '.$state.'.',
+            detail: $paid ? null : $reason,
+        ));
     }
 
     private function audit(Request $request, string $action, string $type, string $id, string $reason, array $after): void

@@ -25,6 +25,7 @@ use App\Http\Controllers\Admin\OperationsController;
 use App\Http\Controllers\Admin\SupportWorkspaceController;
 use App\Http\Controllers\Admin\UserOperationsController;
 use App\Http\Controllers\Admin\WorkspaceToolsController;
+use App\Http\Controllers\Api\V1\PrivacyRequestController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\ShareRedirectController;
 use App\Http\Controllers\WebhookController;
@@ -42,6 +43,11 @@ Route::get('/s/{token}', [ShareRedirectController::class, 'show'])
     ->where('token', '[A-Za-z0-9]{16,64}')
     ->middleware('throttle:60,1')
     ->name('share.open');
+
+Route::get('/data-exports/{export}', [PrivacyRequestController::class, 'publicDownload'])
+    ->whereUlid('export')
+    ->middleware(['signed', 'throttle:30,1'])
+    ->name('data-export.download');
 
 Route::get('/episodes/{episode}', [ShareRedirectController::class, 'episode'])
     ->whereUlid('episode')

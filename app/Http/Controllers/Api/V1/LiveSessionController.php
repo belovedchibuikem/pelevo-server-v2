@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Mail\PelevoNotice;
 use App\Models\CreatorProfile;
+use App\Services\InAppNotificationDelivery;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -53,14 +56,24 @@ class LiveSessionController extends Controller
         });
         if ($data['state'] === 'live' && $row->show_id) {
             $followers = DB::table('follows')->where('show_id', $row->show_id)->where('notifications_enabled', true)->pluck('user_id');
+            $alertFooter = 'You received this because Email Notifications is on in Pelevo. Turn it off in Settings to stop these emails.';
             foreach ($followers as $userId) {
-                app(\App\Services\InAppNotificationDelivery::class)->deliver((string) $userId, [
+                app(InAppNotificationDelivery::class)->deliver((string) $userId, [
                     'type' => 'live',
                     'key' => 'live:'.$session,
                     'title' => 'Live now: '.$row->title,
                     'body' => 'A followed show started a live session.',
                     'data' => ['live_session_id' => $session, 'show_id' => $row->show_id],
                 ]);
+                app(MailPreference::class)->queueAlert((string) $userId, new PelevoNotice(
+                    subjectLine: 'Live now: '.$row->title,
+                    eyebrow: 'Live',
+                    heading: $row->title.' is live',
+                    intro: 'A show you follow just went live on Pelevo.',
+                    actionLabel: 'Open Pelevo',
+                    actionUrl: config('app.url'),
+                    footerNote: $alertFooter,
+                ));
             }
         }
 

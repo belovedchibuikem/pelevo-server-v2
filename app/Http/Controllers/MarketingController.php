@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\PelevoNotice;
+use App\Services\MailPreference;
 use App\Support\MarketingLegal;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -80,6 +82,21 @@ final class MarketingController extends Controller
             'updated_at' => now(),
         ]);
         Cache::forget('admin:module-counts:support');
+        $mail = app(MailPreference::class);
+        $mail->queueTransactional($data['email'], new PelevoNotice(
+            subjectLine: 'We received your message to Pelevo',
+            eyebrow: 'Contact',
+            heading: 'Thanks, we have your note',
+            intro: 'Hi '.$data['name'].', the Pelevo team received your message and will reply to this email.',
+            detail: $data['subject']."\n\n".$data['message'],
+        ));
+        $mail->queueTransactional(config('mail.from.address'), new PelevoNotice(
+            subjectLine: 'Website contact: '.$data['subject'],
+            eyebrow: 'Operations',
+            heading: 'New website contact',
+            intro: $data['name'].' ('.$data['email'].', '.$data['audience'].') sent a message from pelevo.com.',
+            detail: $data['message'],
+        ));
 
         return back()->with('status', 'Thank you. A member of the Pelevo team will reply to the email you provided.');
     }

@@ -3,8 +3,10 @@
 namespace App\Jobs;
 
 use App\Actions\Finance\PostLedgerTransaction;
+use App\Mail\PelevoNotice;
 use App\Models\FinancialAccount;
 use App\Models\User;
+use App\Services\MailPreference;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -44,6 +46,18 @@ final class QualifyReferrals implements ShouldBeUnique, ShouldQueue
                         DB::table('referral_rewards')->insertOrIgnore(['id' => (string) Str::ulid(), 'referral_id' => $locked->id, 'user_id' => $user->id, 'ledger_transaction_id' => $tx->id, 'coins' => $coins, 'idempotency_key' => $key, 'created_at' => now(), 'updated_at' => now()]);
                     }
                     DB::table('referrals')->where('id', $locked->id)->update(['state' => 'qualified', 'qualified_at' => now(), 'updated_at' => now()]);
+                    app(MailPreference::class)->queueToUser((string) $locked->referrer_id, new PelevoNotice(
+                        subjectLine: 'Your Pelevo referral earned coins',
+                        eyebrow: 'Referrals',
+                        heading: 'Referral reward credited',
+                        intro: 'Someone you invited qualified. We added '.$program->referrer_reward.' coins to your wallet.',
+                    ));
+                    app(MailPreference::class)->queueToUser((string) $locked->referred_id, new PelevoNotice(
+                        subjectLine: 'Your Pelevo welcome reward is in',
+                        eyebrow: 'Referrals',
+                        heading: 'Welcome reward credited',
+                        intro: 'Your referral has qualified. We added '.$program->referred_reward.' coins to your wallet.',
+                    ));
                 }, 3);
             }
         });

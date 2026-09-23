@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\Actions\Finance\ReverseLedgerTransaction;
+use App\Mail\PelevoNotice;
+use App\Services\MailPreference;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -49,5 +51,16 @@ final class DispatchCreatorPayout implements ShouldBeUnique, ShouldQueue
             }
             DB::table('creator_payouts')->where('id', $locked->id)->update(['state' => 'processing', 'provider_reference' => $response->json('reference'), 'updated_at' => now()]);
         }, 3);
+        $amount = number_format(((int) $payout->amount_minor) / 100, 2).' '.strtoupper((string) $payout->currency);
+        $failed = ! $response->successful();
+        app(MailPreference::class)->queueToCreator((string) $payout->creator_profile_id, new PelevoNotice(
+            subjectLine: $failed ? 'Your Pelevo creator payout failed' : 'Your Pelevo creator payout is on the way',
+            eyebrow: 'Creator payout',
+            heading: $failed ? 'Payout failed' : 'Payout processing',
+            intro: $failed
+                ? 'We could not send your payout of '.$amount.'. The amount remains available for a later payout.'
+                : 'We sent your payout of '.$amount.' to your saved payout method.',
+            detail: $failed ? 'Provider rejected dispatch.' : null,
+        ));
     }
 }

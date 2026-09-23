@@ -24,7 +24,7 @@ final class NotificationPreferencesTest extends TestCase
 
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/notification-preferences')->assertOk()
             ->assertJsonPath('data.user_id', $user->id)->assertJsonPath('data.version', 0)
-            ->assertJsonPath('data.options.email_enabled', false)->assertJsonPath('data.options.summary_days', [])
+            ->assertJsonPath('data.options.email_enabled', true)->assertJsonPath('data.options.summary_days', [])
             ->assertJsonPath('data.options.summary_time', null)->assertJsonPath('data.delivery_status', 'in_app_policy_enabled');
         $this->assertDatabaseCount('notification_preferences', 0);
     }

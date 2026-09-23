@@ -113,7 +113,7 @@ final class NotificationController extends Controller
     private function mobileOptions(?string $json): array
     {
         return array_replace([
-            'in_app_enabled' => true, 'email_enabled' => false, 'badge_enabled' => true,
+            'in_app_enabled' => true, 'email_enabled' => true, 'badge_enabled' => true,
             'high_priority_only' => false, 'types' => ['new_episodes', 'downloads', 'reminders', 'mentions', 'achievements'],
             'summary_time' => null, 'summary_days' => [], 'summary_include' => [],
         ], $json === null ? [] : json_decode($json, true, flags: JSON_THROW_ON_ERROR));

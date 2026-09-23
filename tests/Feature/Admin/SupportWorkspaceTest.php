@@ -8,6 +8,7 @@ use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -19,6 +20,7 @@ class SupportWorkspaceTest extends TestCase
 
     public function test_ticket_detail_notes_assignment_and_conflicting_edits_preserve_history(): void
     {
+        Mail::fake();
         $this->withoutVite();
         $this->seed(DatabaseSeeder::class);
         $admin = Admin::create(['name' => 'Support', 'email' => 'ticket@example.test', 'password' => 'Admin-password-9!', 'status' => 'active', 'mfa_secret' => 'JBSWY3DPEHPK3PXP', 'mfa_confirmed_at' => now()]);

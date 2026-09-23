@@ -16,7 +16,9 @@ use App\Services\IntegrationSettings;
 use App\Support\AdminAccess;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\URL;
@@ -46,6 +48,14 @@ class AppServiceProvider extends ServiceProvider
     {
         Schema::defaultStringLength(191);
         Event::listen(NewEpisodePublished::class, CreateNewEpisodeNotifications::class);
+        Event::listen(JobProcessing::class, function (): void {
+            try {
+                app(IntegrationSettings::class)->applyToConfig();
+                Mail::purge();
+            } catch (\Throwable) {
+                // Queue workers must keep running if the overlay is temporarily unavailable.
+            }
+        });
 
         if ($this->app->environment('production')) {
             URL::forceScheme('https');

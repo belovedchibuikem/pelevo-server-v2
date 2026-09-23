@@ -2,11 +2,14 @@
 
 namespace App\Jobs;
 
+use App\Mail\PelevoNotice;
+use App\Services\MailPreference;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 
 final class PrepareDataExport implements ShouldBeUnique, ShouldQueue
 {
@@ -33,5 +36,15 @@ final class PrepareDataExport implements ShouldBeUnique, ShouldQueue
         $disk = config('exports.user_disk');
         Storage::disk($disk)->put($path, json_encode($payload, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
         DB::table('data_export_requests')->where('id', $request->id)->update(['state' => 'completed', 'disk' => $disk, 'path' => $path, 'expires_at' => now()->addHours(config('exports.retention_hours')), 'completed_at' => now(), 'updated_at' => now()]);
+        $expires = now()->addHours(config('exports.retention_hours'));
+        $downloadUrl = URL::temporarySignedRoute('data-export.download', $expires, ['export' => $request->id]);
+        app(MailPreference::class)->queueToUser((string) $request->user_id, new PelevoNotice(
+            subjectLine: 'Your Pelevo data export is ready',
+            eyebrow: 'Privacy',
+            heading: 'Download your Pelevo data',
+            intro: 'Your export is ready. This signed link expires in '.config('exports.retention_hours').' hours.',
+            actionLabel: 'Download export',
+            actionUrl: $downloadUrl,
+        ));
     }
 }

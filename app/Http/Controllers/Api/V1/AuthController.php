@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Actions\Identity\IssueMobileSession;
 use App\Http\Controllers\Controller;
+use App\Mail\PelevoNotice;
 use App\Models\Device;
 use App\Models\RefreshToken;
 use App\Models\User;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,6 +25,14 @@ final class AuthController extends Controller
 
         return DB::transaction(function () use ($data, $request, $sessions): JsonResponse {
             $user = User::create(['name' => $data['name'], 'handle' => $data['handle'] ?? null, 'email' => Str::lower($data['email']), 'password' => $data['password']]);
+            app(MailPreference::class)->queueTransactional($user->email, new PelevoNotice(
+                subjectLine: 'Welcome to Pelevo',
+                eyebrow: 'Welcome',
+                heading: 'Your Nigerian podcast home',
+                intro: 'Hi '.$user->name.', your Pelevo account is ready. Follow shows you love and we will email you when new episodes drop, as long as Email Notifications stays on.',
+                actionLabel: 'Open Pelevo',
+                actionUrl: config('app.url'),
+            ));
 
             return ApiResponse::success($sessions->handle($user, $request, $data['device_name']), status: 201);
         });

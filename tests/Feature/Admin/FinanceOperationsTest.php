@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
@@ -19,6 +20,7 @@ final class FinanceOperationsTest extends TestCase
 
     public function test_payout_destination_is_verified_encrypted_and_rejected_withdrawal_releases_reservation(): void
     {
+        Mail::fake();
         config()->set(['finance.public_enabled' => true, 'services.paystack.payout_verification_url' => 'https://paystack.test/resolve']);
         Http::preventStrayRequests();
         Http::fake(['https://paystack.test/resolve' => Http::response(['verified' => true, 'reference' => 'resolve-1', 'account_name' => 'Verified Person'])]);
@@ -86,6 +88,7 @@ final class FinanceOperationsTest extends TestCase
 
     public function test_signed_payout_webhook_reconciles_once_and_replay_has_no_second_effect(): void
     {
+        Mail::fake();
         config()->set('services.paystack.webhook_secret', 'webhook-secret');
         $user = User::factory()->create();
         $method = (string) Str::ulid();

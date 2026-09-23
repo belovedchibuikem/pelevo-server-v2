@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Actions\Finance\ActivatePremiumPayment;
 use App\Actions\Finance\ReverseLedgerTransaction;
+use App\Mail\PelevoNotice;
+use App\Services\MailPreference;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -74,7 +76,8 @@ final class WebhookController extends Controller
         }
         $states = ['transfer.success' => 'paid', 'transfer.failed' => 'failed', 'transfer.reversed' => 'reversed'];
         if ($reference && isset($states[$payload['type'] ?? ''])) {
-            DB::transaction(function () use ($reference, $states, $payload, $reverse): void {
+            $withdrawalMail = null;
+            DB::transaction(function () use ($reference, $states, $payload, $reverse, &$withdrawalMail): void {
                 $withdrawal = DB::table('withdrawals')->where('provider_reference', $reference)->lockForUpdate()->first();
                 if (! $withdrawal) {
                     return;
@@ -84,10 +87,27 @@ final class WebhookController extends Controller
                     $reverse->handle($withdrawal->ledger_transaction_id, 'withdrawal-release:'.$withdrawal->id, 'Provider webhook reported '.$state.'.');
                 }
                 DB::table('withdrawals')->where('id', $withdrawal->id)->update(['state' => $state, 'failure_reason' => $state === 'failed' ? (data_get($payload, 'data.reason') ?? 'Provider failure.') : null, 'processed_at' => now(), 'updated_at' => now()]);
+                if (in_array($state, ['paid', 'failed'], true)) {
+                    $withdrawalMail = [$withdrawal->user_id, $state, (int) $withdrawal->coins, $state === 'failed' ? (string) (data_get($payload, 'data.reason') ?? 'Provider failure.') : null];
+                }
             }, 3);
+            if (is_array($withdrawalMail)) {
+                [$userId, $state, $coins, $reason] = $withdrawalMail;
+                $paid = $state === 'paid';
+                app(MailPreference::class)->queueToUser((string) $userId, new PelevoNotice(
+                    subjectLine: $paid ? 'Your Pelevo withdrawal was paid' : 'Your Pelevo withdrawal did not go through',
+                    eyebrow: 'Wallet',
+                    heading: $paid ? 'Withdrawal paid' : 'Withdrawal failed',
+                    intro: $paid
+                        ? 'We sent your withdrawal of '.$coins.' coins.'
+                        : 'Your withdrawal of '.$coins.' coins could not be completed.',
+                    detail: $paid ? null : $reason,
+                ));
+            }
         }
         if ($reference && isset($states[$payload['type'] ?? ''])) {
-            DB::transaction(function () use ($reference, $states, $payload, $reverse): void {
+            $payoutMail = null;
+            DB::transaction(function () use ($reference, $states, $payload, $reverse, &$payoutMail): void {
                 $payout = DB::table('creator_payouts')->where('provider_reference', $reference)->lockForUpdate()->first();
                 if (! $payout) {
                     return;
@@ -97,7 +117,24 @@ final class WebhookController extends Controller
                     $reverse->handle($payout->ledger_transaction_id, 'creator-payout-release:'.$payout->id, 'Provider webhook reported '.$state.'.');
                 }
                 DB::table('creator_payouts')->where('id', $payout->id)->update(['state' => $state, 'failure_reason' => $state === 'failed' ? (data_get($payload, 'data.reason') ?? 'Provider failure.') : null, 'processed_at' => now(), 'updated_at' => now()]);
+                if (in_array($state, ['paid', 'failed'], true)) {
+                    $payoutMail = [$payout->creator_profile_id, $state, (int) $payout->amount_minor, (string) $payout->currency, $state === 'failed' ? (string) (data_get($payload, 'data.reason') ?? 'Provider failure.') : null];
+                }
             }, 3);
+            if (is_array($payoutMail)) {
+                [$creatorProfileId, $state, $amountMinor, $currency, $reason] = $payoutMail;
+                $amount = number_format($amountMinor / 100, 2).' '.strtoupper($currency);
+                $paid = $state === 'paid';
+                app(MailPreference::class)->queueToCreator((string) $creatorProfileId, new PelevoNotice(
+                    subjectLine: $paid ? 'Your Pelevo creator payout was paid' : 'Your Pelevo creator payout failed',
+                    eyebrow: 'Creator payout',
+                    heading: $paid ? 'Payout paid' : 'Payout failed',
+                    intro: $paid
+                        ? 'Your payout of '.$amount.' has been paid.'
+                        : 'Your payout of '.$amount.' could not be completed.',
+                    detail: $paid ? null : $reason,
+                ));
+            }
         }
         DB::table('provider_webhook_events')->where('id', $id)->update(['state' => 'processed', 'processed_at' => now(), 'updated_at' => now()]);
 

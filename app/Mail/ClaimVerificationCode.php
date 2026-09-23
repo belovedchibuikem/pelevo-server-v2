@@ -5,7 +5,6 @@ namespace App\Mail;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
-use Illuminate\Mail\Mailables\Attachment;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
@@ -14,38 +13,37 @@ class ClaimVerificationCode extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 
-    /**
-     * Create a new message instance.
-     */
-    public function __construct(public readonly string $code, public readonly string $showTitle) {}
+    public function __construct(
+        public readonly string $code,
+        public readonly string $showTitle,
+        public readonly ?string $artworkUrl = null,
+        public readonly ?string $author = null,
+    ) {}
 
-    /**
-     * Get the message envelope.
-     */
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Claim Verification Code',
+            subject: 'Verify your Pelevo claim for '.$this->showTitle,
         );
     }
 
-    /**
-     * Get the message content definition.
-     */
     public function content(): Content
     {
         return new Content(
-            markdown: 'mail.claim-verification',
+            html: 'mail.claim',
+            text: 'mail.claim-text',
+            with: [
+                'artworkUrl' => $this->httpsUrl($this->artworkUrl),
+            ],
         );
     }
 
-    /**
-     * Get the attachments for the message.
-     *
-     * @return array<int, Attachment>
-     */
-    public function attachments(): array
+    private function httpsUrl(?string $url): ?string
     {
-        return [];
+        if (! is_string($url) || $url === '' || ! str_starts_with($url, 'https://')) {
+            return null;
+        }
+
+        return $url;
     }
 }

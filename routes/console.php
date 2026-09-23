@@ -2,6 +2,7 @@
 
 use App\Jobs\AccrueReelRevenue;
 use App\Jobs\DispatchNotificationBroadcast;
+use App\Jobs\SendNotificationDigests;
 use App\Jobs\ExpireClaims;
 use App\Jobs\MaterializeHomeFeed;
 use App\Jobs\MaterializeRecommendations;
@@ -80,6 +81,12 @@ Schedule::call(function (): void {
 Schedule::call(function (): void {
     DB::table('notification_broadcasts')->where('state', 'scheduled')->where('scheduled_at', '<=', now())->limit(100)->pluck('id')->each(fn (string $id) => DispatchNotificationBroadcast::dispatch($id));
 })->name('dispatch-notification-broadcasts')->everyMinute()->onOneServer()->withoutOverlapping(5);
+
+Schedule::job(new SendNotificationDigests, 'notifications')
+    ->name('send-notification-digests')
+    ->everyFifteenMinutes()
+    ->onOneServer()
+    ->withoutOverlapping(10);
 
 Schedule::call(function (): void {
     DB::table('premium_entitlements')->where('state', 'active')->whereNotNull('ends_at')->where('ends_at', '<=', now())->update(['state' => 'expired', 'updated_at' => now()]);

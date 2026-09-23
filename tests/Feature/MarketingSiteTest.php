@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
 
@@ -34,6 +35,7 @@ final class MarketingSiteTest extends TestCase
 
     public function test_contact_form_persists_an_inquiry(): void
     {
+        Mail::fake();
         $this->withoutVite();
         $this->from('/contact')->post('/contact', [
             'name' => 'Ada Lovelace',

@@ -15,6 +15,7 @@ use App\Services\InAppNotificationDelivery;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -132,6 +133,7 @@ final class InAppNotificationDeliveryTest extends TestCase
 
     public function test_episode_producer_respects_category_priority_and_follow_changes(): void
     {
+        Mail::fake();
         Queue::fake([DeliverInAppNotification::class]);
         $this->travelTo(now()->setTime(23, 0));
         $user = User::factory()->create();
@@ -160,6 +162,7 @@ final class InAppNotificationDeliveryTest extends TestCase
 
     public function test_broadcast_receipts_distinguish_suppressed_deferred_and_delivered(): void
     {
+        Mail::fake();
         $this->travelTo(now()->setTime(23, 0));
         Queue::fake([DeliverInAppNotification::class]);
         $enabled = User::factory()->create();

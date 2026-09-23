@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\Actions\Finance\ReverseLedgerTransaction;
+use App\Mail\PelevoNotice;
+use App\Services\MailPreference;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -49,6 +51,13 @@ final class DispatchWithdrawal implements ShouldBeUnique, ShouldQueue
                 DB::table('withdrawals')->where('id', $withdrawal->id)->lockForUpdate()->update(['state' => 'failed', 'failure_reason' => 'Provider rejected dispatch.', 'processed_at' => now(), 'updated_at' => now()]);
                 $reverse->handle($withdrawal->ledger_transaction_id, 'withdrawal-release:'.$withdrawal->id, 'Provider rejected withdrawal dispatch.');
             }, 3);
+            app(MailPreference::class)->queueToUser((string) $withdrawal->user_id, new PelevoNotice(
+                subjectLine: 'Your Pelevo withdrawal did not go through',
+                eyebrow: 'Wallet',
+                heading: 'Withdrawal failed',
+                intro: 'Your withdrawal of '.$withdrawal->coins.' coins could not be sent. The coins have been returned to your wallet.',
+                detail: 'Provider rejected dispatch.',
+            ));
 
             return;
         }

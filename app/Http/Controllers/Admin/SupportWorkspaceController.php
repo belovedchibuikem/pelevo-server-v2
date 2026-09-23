@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Mail\PelevoNotice;
 use App\Services\InAppNotificationDelivery;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -68,6 +70,13 @@ class SupportWorkspaceController extends Controller
                 $replyId = (string) Str::ulid();
                 DB::table('support_ticket_notes')->insert(['id' => $replyId, 'support_ticket_id' => $ticket, 'admin_id' => $request->user('admin')->id, 'body' => $data['reply'], 'public_reply' => true, 'created_at' => now()]);
                 app(InAppNotificationDelivery::class)->deliver($row->user_id, ['type' => 'support_reply', 'key' => 'support-reply:'.$replyId, 'title' => $row->subject, 'body' => $data['reply'], 'data' => ['support_ticket_id' => $ticket]]);
+                app(MailPreference::class)->queueToUser((string) $row->user_id, new PelevoNotice(
+                    subjectLine: 'Pelevo support: '.$row->subject,
+                    eyebrow: 'Support',
+                    heading: 'A reply on your support ticket',
+                    intro: 'The Pelevo team replied to “'.$row->subject.'”.',
+                    detail: $data['reply'],
+                ));
             }
             $audit = (string) Str::ulid();
             DB::table('audit_logs')->insert(['id' => $audit, 'admin_id' => $request->user('admin')->id, 'subject_type' => 'App\\Models\\SupportTicket', 'subject_id' => $ticket, 'action' => 'support.updated', 'reason' => $data['reason'], 'before' => json_encode(['state' => $row->state, 'priority' => $row->priority, 'assigned_admin_id' => $row->assigned_admin_id, 'version' => $row->version]), 'after' => json_encode($values), 'created_at' => now(), 'updated_at' => now()]);

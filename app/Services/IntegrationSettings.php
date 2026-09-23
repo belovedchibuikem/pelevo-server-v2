@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Integrations\PodcastIndex\PodcastIndexClient;
 use App\Integrations\PodcastIndex\PodcastIndexException;
+use App\Mail\SmtpConnectionTest;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -328,12 +329,12 @@ final class IntegrationSettings
         }
 
         try {
-            Mail::mailer($mailer)->raw(
-                "This is a Pelevo SMTP test.\n\nIf this message arrived, the saved host, port, username, and password were accepted.\n\nSent at ".now()->toIso8601String()." from ".(string) config('mail.from.address').'.',
-                function ($message) use ($to): void {
-                    $message->to($to)->subject('Pelevo SMTP test');
-                }
-            );
+            Mail::mailer($mailer)->to($to)->send(new SmtpConnectionTest(
+                $host,
+                $port,
+                (string) config('mail.from.address'),
+                now()->timezone(config('app.timezone'))->toDayDateTimeString(),
+            ));
         } catch (Throwable $exception) {
             return ['ok' => false, 'message' => $this->smtpFailureMessage($exception, $host, $port)];
         }
@@ -359,8 +360,16 @@ final class IntegrationSettings
         }
 
         $detail = trim($errstr) !== '' ? $errstr : 'connection timed out';
+        $hint = '';
+        if ($port === 587) {
+            $alternate = @fsockopen($host, 2525, $alternateErrno, $alternateError, 3.0);
+            if ($alternate !== false) {
+                fclose($alternate);
+                $hint = ' Port 2525 is reachable from this machine. Change Port to 2525, keep TLS / STARTTLS, save, and send the test again.';
+            }
+        }
 
-        return "Could not reach {$host}:{$port} in 5 seconds ({$detail}). Outbound port {$port} is often blocked on local WAMP or by the ISP.";
+        return "Could not reach {$host}:{$port} in 5 seconds ({$detail}). Outbound port {$port} is often blocked on local WAMP or by the ISP.".$hint;
     }
 
     private function smtpFailureMessage(Throwable $exception, string $host, int $port): string

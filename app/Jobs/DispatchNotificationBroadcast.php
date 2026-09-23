@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Mail\PelevoNotice;
 use App\Models\User;
 use App\Services\InAppNotificationDelivery;
+use App\Services\MailPreference;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -42,8 +44,16 @@ final class DispatchNotificationBroadcast implements ShouldBeUnique, ShouldQueue
         }
         $audience = json_decode($broadcast->audience, true) ?: [];
         User::query()->where('status', 'active')->when(isset($audience['country']), fn ($q) => $q->where('country_code', $audience['country']))->select('id')->chunkById(200, function ($users) use ($broadcast, $template): void {
+            $mail = app(MailPreference::class);
             foreach ($users as $user) {
                 app(InAppNotificationDelivery::class)->deliver($user->id, ['type' => 'broadcast', 'key' => 'broadcast:'.$broadcast->id, 'title' => $template->title, 'body' => $template->body, 'data' => ['broadcast_id' => $broadcast->id]]);
+                $mail->queueAlert($user->id, new PelevoNotice(
+                    subjectLine: $template->title,
+                    eyebrow: 'Pelevo',
+                    heading: $template->title,
+                    intro: $template->body,
+                    footerNote: 'You received this because Email Notifications is on in Pelevo. Turn it off in Settings to stop these emails.',
+                ));
             }
         });
         DB::table('notification_broadcasts')->where('id', $broadcast->id)->update(['state' => 'completed', 'updated_at' => now()]);

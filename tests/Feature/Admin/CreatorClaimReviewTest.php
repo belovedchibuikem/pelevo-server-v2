@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -18,6 +19,7 @@ final class CreatorClaimReviewTest extends TestCase
 
     public function test_admin_queue_detail_live_evidence_decision_and_audit_are_complete(): void
     {
+        Mail::fake();
         Http::fake(['https://example.com/*' => Http::response('<?xml version="1.0"?><rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><description>PELEVO-VERIFY-CODE</description><itunes:owner><itunes:email>private@example.com</itunes:email></itunes:owner></channel></rss>')]);
         $admin = $this->adminWithClaimPermission();
         [$claimId] = $this->claim('review');
@@ -35,6 +37,7 @@ final class CreatorClaimReviewTest extends TestCase
 
     public function test_admin_cannot_approve_unverified_description_and_duplicate_opens_dispute(): void
     {
+        Mail::fake();
         $admin = $this->adminWithClaimPermission();
         [$first, $show] = $this->claim('review');
         [$second] = $this->claim('review', $show);

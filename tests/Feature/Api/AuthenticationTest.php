@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\Api;
 
+use App\Mail\PelevoNotice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
 
 final class AuthenticationTest extends TestCase
@@ -12,10 +14,12 @@ final class AuthenticationTest extends TestCase
 
     public function test_registration_issues_device_bound_rotating_tokens(): void
     {
+        Mail::fake();
         $response = $this->withHeaders(['X-Device-Id' => 'flutter-test-device'])->postJson('/api/v1/auth/register', ['name' => 'Ada', 'email' => 'ada@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Ada phone']);
         $response->assertCreated()->assertJsonPath('ok', true)->assertJsonStructure(['data' => ['access_token', 'refresh_token', 'device_id'], 'request_id']);
         $this->assertDatabaseCount('refresh_tokens', 1);
         $this->assertDatabaseMissing('refresh_tokens', ['token_hash' => $response->json('data.refresh_token')]);
+        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.com') && $mail->heading === 'Your Nigerian podcast home');
     }
 
     public function test_validation_uses_stable_envelope(): void
@@ -25,6 +29,7 @@ final class AuthenticationTest extends TestCase
 
     public function test_registration_saves_username_and_rejects_duplicates(): void
     {
+        Mail::fake();
         User::factory()->create(['handle' => 'taken_name']);
         $payload = ['name' => 'Ada', 'handle' => 'taken_name', 'email' => 'new-listener@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Phone'];
 
@@ -38,6 +43,7 @@ final class AuthenticationTest extends TestCase
 
     public function test_mobile_token_reaches_me(): void
     {
+        Mail::fake();
         $registration = $this->withHeaders(['X-Device-Id' => 'test-device'])->postJson('/api/v1/auth/register', ['name' => 'Ada', 'email' => 'ada@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'phone']);
         $this->withToken($registration->json('data.access_token'))->getJson('/api/v1/me')->assertOk()->assertJsonPath('data.email', 'ada@example.com');
     }

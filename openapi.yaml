@@ -9,7 +9,7 @@ paths:
     get:
       security: [{ bearerAuth: [] }]
       responses:
-        '200': { description: 'Typed data: user_id, version, new_episodes, push_enabled, nullable HH:mm quiet_hours_start/end, IANA timezone, options and delivery_status (in_app_policy_enabled when notifications are enabled, otherwise preferences_only). Options include in_app_enabled/email_enabled/badge_enabled/high_priority_only booleans; types; nullable HH:mm summary_time; summary_days (0=Sunday through 6=Saturday); summary_include. Email defaults false and no summary days are assumed. Existing in-app producers enforce channel, priority and quiet hours; new episodes also enforce category and follow preferences. Deferred delivery requires the database notifications queue worker. This status does not attest worker health or enable push, email, badges or summary generation.' }
+        '200': { description: 'Typed data: user_id, version, new_episodes, push_enabled, nullable HH:mm quiet_hours_start/end, IANA timezone, options and delivery_status (in_app_policy_enabled when notifications are enabled, otherwise preferences_only). Options include in_app_enabled/email_enabled/badge_enabled/high_priority_only booleans; types; nullable HH:mm summary_time; summary_days (0=Sunday through 6=Saturday); summary_include. Email defaults true. When email_enabled is on, Pelevo sends new-episode, live, broadcast, and scheduled-summary mail; OTP, password, claim, support, payout, export, and deletion mail still send when email is off. Deferred in-app delivery requires the database notifications queue worker. This status does not attest worker health or enable device push.' }
         '401': { description: Authentication required }
     patch:
       security: [{ bearerAuth: [] }]

@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Integrations\Rss\RssOwnershipInspector;
 use App\Mail\ClaimVerificationCode;
+use App\Mail\PelevoNotice;
 use App\Models\Show;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -75,7 +77,7 @@ final class ClaimReviewController extends Controller
             DB::table('claim_challenges')->insert(['id' => (string) Str::ulid(), 'show_claim_id' => $row->id, 'type' => 'email', 'destination_encrypted' => encrypt($ownership['email']), 'destination_masked' => RssOwnershipInspector::mask($ownership['email']), 'code_hash' => hash('sha256', $plain), 'max_attempts' => config('claims.max_attempts'), 'expires_at' => $expires, 'created_at' => now(), 'updated_at' => now()]);
             $this->audit($request, 'claim.code_reissued', 'App\\Models\\ShowClaim', $row->id, $data['reason'], [], ['expires_at' => $expires]);
         });
-        Mail::to($ownership['email'])->queue((new ClaimVerificationCode($plain, $show->title))->afterCommit());
+        Mail::to($ownership['email'])->queue((new ClaimVerificationCode($plain, $show->title, $show->artwork_url, $show->author))->afterCommit());
 
         return ApiResponse::success(['claim_id' => $row->id, 'masked_destination' => RssOwnershipInspector::mask($ownership['email']), 'challenge_expires_at' => $expires->toIso8601String()]);
     }
@@ -106,6 +108,19 @@ final class ClaimReviewController extends Controller
             $reviewId = (string) Str::ulid();
             DB::table('claim_reviews')->insert(['id' => $reviewId, 'show_claim_id' => $claim, 'admin_id' => auth('admin')->id(), 'decision' => $data['decision'], 'reason' => $data['reason'], 'evidence' => json_encode($data['evidence'] ?? [], JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
             $this->audit($request, 'claim.'.$data['decision'], 'App\\Models\\ShowClaim', $claim, $data['reason'], ['state' => $record->state], ['state' => $state]);
+            if (in_array($data['decision'], ['approved', 'rejected'], true)) {
+                $showTitle = (string) (DB::table('shows')->where('id', $record->show_id)->value('title') ?: 'your show');
+                $approved = $data['decision'] === 'approved';
+                app(MailPreference::class)->queueToCreator((string) $record->creator_profile_id, new PelevoNotice(
+                    subjectLine: $approved ? 'Your Pelevo show claim was approved' : 'Your Pelevo show claim was not approved',
+                    eyebrow: 'Creator claim',
+                    heading: $approved ? 'You now own this show on Pelevo' : 'This claim was not approved',
+                    intro: $approved
+                        ? 'We verified your claim on “'.$showTitle.'”. You can manage it from Creator Studio.'
+                        : 'We could not approve your claim on “'.$showTitle.'”.',
+                    detail: $data['reason'],
+                ));
+            }
 
             return ApiResponse::success(['claim_id' => $claim, 'state' => $state, 'audit_reference' => $reviewId]);
         });
