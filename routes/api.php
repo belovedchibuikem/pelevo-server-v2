@@ -298,5 +298,5 @@ Route::prefix('v1')->group(function (): void {
 });
 Route::get('v1/live', [PublicLiveController::class, 'index']);
 Route::get('v1/live/{session}', [PublicLiveController::class, 'show']);
-Route::put('v1/uploads/{upload}/content', [MediaUploadController::class, 'put'])->middleware(['signed', 'throttle:60,1'])->name('api.uploads.put');
+Route::put('v1/uploads/{upload}/content', [MediaUploadController::class, 'put'])->middleware(['signed:relative', 'throttle:60,1'])->name('api.uploads.put');
 Route::get('readiness', fn () => ApiResponse::success(['database' => DB::select('select 1') ? 'ok' : 'failed', 'cache' => Cache::put('readiness', true, 5) ? 'ok' : 'failed']))->middleware('auth:sanctum');

@@ -114,4 +114,28 @@ final class MediaUploadPipelineTest extends TestCase
         Storage::disk('supabase')->assertExists("reels/{$reel}/thumbnail.jpg");
         $this->assertDatabaseHas('reel_media', ['reel_id' => $reel, 'processing_state' => 'ready', 'transcoded_path' => "reels/{$reel}/video.mp4"]);
     }
+
+    public function test_local_upload_url_is_host_relative_so_the_app_can_put_to_its_api_origin(): void
+    {
+        config(['app.url' => 'http://localhost:8000']);
+        Storage::fake('local');
+        $user = User::factory()->create();
+        $bytes = "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+        $created = $this->actingAs($user, 'sanctum')->postJson('/api/v1/uploads', ['mime' => 'video/mp4', 'size' => strlen($bytes), 'checksum_sha256' => hash('sha256', $bytes)])->assertCreated()->json('data');
+
+        $this->assertNull(parse_url($created['upload_url'], PHP_URL_HOST));
+        $this->assertStringStartsWith('/api/v1/uploads/'.$created['id'].'/content?', $created['upload_url']);
+    }
+
+    public function test_signed_put_still_works_when_the_app_puts_to_a_different_api_host(): void
+    {
+        config(['app.url' => 'http://localhost:8000']);
+        Storage::fake('local');
+        $user = User::factory()->create();
+        $bytes = "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+        $created = $this->actingAs($user, 'sanctum')->postJson('/api/v1/uploads', ['mime' => 'video/mp4', 'size' => strlen($bytes), 'checksum_sha256' => hash('sha256', $bytes)])->assertCreated()->json('data');
+        $rewritten = 'http://10.0.2.2:8000'.$created['upload_url'];
+
+        $this->call('PUT', $rewritten, [], [], [], ['CONTENT_TYPE' => 'video/mp4', 'HTTP_HOST' => '10.0.2.2:8000'], $bytes)->assertOk()->assertJsonPath('data.state', 'uploaded');
+    }
 }

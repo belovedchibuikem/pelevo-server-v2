@@ -32,7 +32,7 @@ final class MediaUploadController extends Controller
         ]);
         $upload->update(['path' => 'reel-uploads/'.$request->user()->id.'/'.$upload->id]);
         $directUpload = $upload->disk === 'local'
-            ? ['url' => URL::temporarySignedRoute('api.uploads.put', $upload->expires_at, ['upload' => $upload->id]), 'headers' => ['Content-Type' => $upload->expected_mime]]
+            ? ['url' => URL::temporarySignedRoute('api.uploads.put', $upload->expires_at, ['upload' => $upload->id], absolute: false), 'headers' => ['Content-Type' => $upload->expected_mime]]
             : Storage::disk($upload->disk)->temporaryUploadUrl($upload->path, $upload->expires_at, ['ContentType' => $upload->expected_mime]);
 
         return ApiResponse::success(['id' => $upload->id, 'state' => $upload->state, 'upload_url' => $directUpload['url'], 'upload_headers' => $directUpload['headers'], 'expires_at' => $upload->expires_at], status: 201);
@@ -43,7 +43,8 @@ final class MediaUploadController extends Controller
         if ($upload->state !== 'pending' || $upload->expires_at->isPast()) {
             return ApiResponse::error('UPLOAD_EXPIRED', 'The upload URL is no longer valid.', 410);
         }
-        if ($request->header('Content-Type') !== $upload->expected_mime) {
+        $contentType = strtolower(trim(explode(';', (string) $request->header('Content-Type'))[0]));
+        if ($contentType !== strtolower($upload->expected_mime)) {
             return ApiResponse::error('VALIDATION', 'The content type does not match the upload request.', 422, ['content_type' => ['Content type mismatch.']]);
         }
         $stream = $request->getContent(true);
@@ -100,7 +101,11 @@ final class MediaUploadController extends Controller
             return ApiResponse::error('VALIDATION', 'The upload checksum does not match.', 422, ['checksum_sha256' => ['Checksum mismatch.']]);
         }
         $upload->update(['state' => 'queued', 'checksum_sha256' => $checksum]);
-        ProcessReelUpload::dispatch($upload->id);
+        if (config('media.process_inline')) {
+            ProcessReelUpload::dispatchSync($upload->id);
+        } else {
+            ProcessReelUpload::dispatch($upload->id);
+        }
 
         return ApiResponse::success(['id' => $upload->id, 'state' => 'queued'], status: 202);
     }
