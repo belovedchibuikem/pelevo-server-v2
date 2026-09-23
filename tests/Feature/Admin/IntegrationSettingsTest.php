@@ -52,7 +52,11 @@ final class IntegrationSettingsTest extends TestCase
             'values' => ['mailer' => 'array', 'host' => '127.0.0.1', 'port' => '2525', 'username' => 'pelevo', 'password' => 'mail-secret', 'scheme' => 'tls', 'from_address' => 'ops@pelevo.test', 'from_name' => 'Pelevo'],
         ])->assertOk();
         $this->assertSame('smtp', config('mail.mailers.smtp.scheme'));
-        $this->postJson('/api/admin/v1/integrations/smtp/test')->assertOk()->assertJsonPath('data.ok', true);
+        $this->postJson('/api/admin/v1/integrations/smtp/test')->assertOk()->assertJsonPath('data.ok', false);
+        $this->postJson('/api/admin/v1/integrations/smtp/test', ['to' => 'ops@pelevo.test'])
+            ->assertOk()
+            ->assertJsonPath('data.ok', false)
+            ->assertJsonPath('data.message', 'The array mailer does not send through Mailtrap. Set Mailer to smtp, save, then send the test again.');
         $this->postJson('/api/admin/v1/integrations/mux/test')->assertOk()->assertJsonPath('data.ok', false);
         Http::fake(['https://api.mux.com/*' => Http::response(['data' => []], 200)]);
         $this->putJson('/api/admin/v1/integrations/mux', [

@@ -40,7 +40,7 @@ final class IntegrationSettings
                 ['name' => 'ffmpeg_binary', 'label' => 'ffmpeg path', 'type' => 'text'],
                 ['name' => 'ffprobe_binary', 'label' => 'ffprobe path', 'type' => 'text'],
             ], 'config' => ['ffmpeg_binary' => 'media.ffmpeg_binary', 'ffprobe_binary' => 'media.ffprobe_binary']],
-            'smtp' => ['group' => 'Email', 'title' => 'SMTP', 'description' => 'Admin password resets, claim codes, and operator mail. Blank secret fields keep the currently stored value. TLS on port 587 is STARTTLS (scheme smtp), not a tls:// DSN.', 'fields' => [
+            'smtp' => ['group' => 'Email', 'title' => 'SMTP', 'description' => 'Admin password resets, claim codes, and operator mail. Save credentials, then send a test message to an inbox you can open. TLS on port 587 is STARTTLS.', 'fields' => [
                 ['name' => 'mailer', 'label' => 'Mailer', 'type' => 'select', 'options' => ['smtp', 'log', 'array']],
                 ['name' => 'host', 'label' => 'Host', 'type' => 'text'],
                 ['name' => 'port', 'label' => 'Port', 'type' => 'number'],
@@ -191,7 +191,7 @@ final class IntegrationSettings
     }
 
     /** @return array{ok:bool,message:string} */
-    public function test(string $provider): array
+    public function test(string $provider, array $options = []): array
     {
         $this->applyToConfig();
         $result = match ($provider) {
@@ -199,7 +199,7 @@ final class IntegrationSettings
             'ai' => $this->testAi(),
             'mux' => $this->testMux(),
             'ffmpeg' => $this->testFfmpeg(),
-            'smtp' => $this->testSmtp(),
+            'smtp' => $this->testSmtp($options),
             'paystack' => $this->testHttpBearer((string) config('services.paystack.checkout_token'), 'https://api.paystack.co/bank?perPage=1', 'Paystack'),
             'flutterwave' => $this->testHttpBearer((string) config('services.flutterwave.checkout_token'), 'https://api.flutterwave.com/v3/banks/NG', 'Flutterwave'),
             'paypal' => $this->testPaypal(),
@@ -303,19 +303,81 @@ final class IntegrationSettings
     }
 
     /** @return array{ok:bool,message:string} */
-    private function testSmtp(): array
+    private function testSmtp(array $options = []): array
     {
-        try {
-            Mail::raw('Pelevo SMTP connectivity probe.', function ($message): void {
-                $message->to((string) (auth('admin')->user()?->email ?? config('mail.from.address')))->subject('Pelevo SMTP test');
-            });
-
-            return ['ok' => true, 'message' => 'The mailer accepted a test message for '.auth('admin')->user()?->email.'.'];
-        } catch (Throwable $exception) {
-            $message = trim($exception->getMessage());
-
-            return ['ok' => false, 'message' => $message !== '' ? $message : $exception::class.' was thrown while talking to the SMTP host.'];
+        $to = strtolower(trim((string) ($options['to'] ?? '')));
+        if ($to === '' || ! filter_var($to, FILTER_VALIDATE_EMAIL)) {
+            return ['ok' => false, 'message' => 'Enter the email address that should receive the test message.'];
         }
+
+        $mailer = (string) config('mail.default');
+        if (! in_array($mailer, ['smtp', 'log', 'array'], true)) {
+            return ['ok' => false, 'message' => 'Mailer must be smtp, log, or array.'];
+        }
+
+        $host = (string) config('mail.mailers.smtp.host');
+        $port = (int) config('mail.mailers.smtp.port');
+
+        if ($mailer === 'smtp') {
+            config(['mail.mailers.smtp.timeout' => 8]);
+            $unreachable = $this->probeSmtpSocket($host, $port);
+            if ($unreachable !== null) {
+                return ['ok' => false, 'message' => $unreachable];
+            }
+            Mail::purge('smtp');
+        }
+
+        try {
+            Mail::mailer($mailer)->raw(
+                "This is a Pelevo SMTP test.\n\nIf this message arrived, the saved host, port, username, and password were accepted.\n\nSent at ".now()->toIso8601String()." from ".(string) config('mail.from.address').'.',
+                function ($message) use ($to): void {
+                    $message->to($to)->subject('Pelevo SMTP test');
+                }
+            );
+        } catch (Throwable $exception) {
+            return ['ok' => false, 'message' => $this->smtpFailureMessage($exception, $host, $port)];
+        }
+
+        if ($mailer !== 'smtp') {
+            return ['ok' => false, 'message' => 'The '.$mailer.' mailer does not send through Mailtrap. Set Mailer to smtp, save, then send the test again.'];
+        }
+
+        return ['ok' => true, 'message' => 'Test email accepted by '.$host.' for '.$to.'. Open that inbox and spam folder to confirm it arrived.'];
+    }
+
+    private function probeSmtpSocket(string $host, int $port): ?string
+    {
+        if ($host === '' || $port < 1) {
+            return 'SMTP host or port is missing.';
+        }
+
+        $socket = @fsockopen($host, $port, $errno, $errstr, 5.0);
+        if ($socket !== false) {
+            fclose($socket);
+
+            return null;
+        }
+
+        $detail = trim($errstr) !== '' ? $errstr : 'connection timed out';
+
+        return "Could not reach {$host}:{$port} in 5 seconds ({$detail}). Outbound port {$port} is often blocked on local WAMP or by the ISP.";
+    }
+
+    private function smtpFailureMessage(Throwable $exception, string $host, int $port): string
+    {
+        $message = trim($exception->getMessage());
+        $lower = strtolower($message);
+        if ($message === '') {
+            $message = $exception::class.' while talking to '.$host.':'.$port;
+        }
+        if (str_contains($lower, 'timed out') || str_contains($lower, 'timeout')) {
+            return "Timed out talking to {$host}:{$port}. ".$message;
+        }
+        if (str_contains($lower, 'authentication') || str_contains($lower, '535') || str_contains($lower, '534')) {
+            return 'Mailtrap rejected the username or password. Username should be api and the password should be the Bulk Stream token. '.$message;
+        }
+
+        return $message;
     }
 
     private function normalizeSmtpScheme(string $scheme): string
