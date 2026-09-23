@@ -3,22 +3,22 @@
 namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
-use Illuminate\Queue\SerializesModels;
 
-class ClaimVerificationCode extends Mailable implements ShouldQueue
+class ClaimVerificationCode extends Mailable
 {
-    use Queueable, SerializesModels;
+    use Queueable;
 
     public function __construct(
         public readonly string $code,
         public readonly string $showTitle,
         public readonly ?string $artworkUrl = null,
         public readonly ?string $author = null,
-    ) {}
+    ) {
+        $this->afterCommit();
+    }
 
     public function envelope(): Envelope
     {

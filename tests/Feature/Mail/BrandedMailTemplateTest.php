@@ -40,6 +40,7 @@ final class BrandedMailTemplateTest extends TestCase
         $test = (new SmtpConnectionTest('bulk.smtp.mailtrap.io', 2525, 'info@pelevo.com', 'Wednesday, Sep 23, 2026 1:51 PM'))->render();
         $this->assertStringContainsString('mail connection is working', $test);
         $this->assertStringContainsString('bulk.smtp.mailtrap.io:2525', $test);
+        $this->assertStringContainsString('African podcasts, finally home.', $test);
     }
 
     public function test_new_episode_alert_includes_artwork_title_and_artist(): void

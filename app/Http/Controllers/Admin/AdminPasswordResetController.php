@@ -5,10 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Mail\AdminPasswordReset;
 use App\Models\Admin;
+use App\Services\MailPreference;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 use Inertia\Inertia;
@@ -29,7 +29,7 @@ final class AdminPasswordResetController extends Controller
             DB::table('admin_password_reset_tokens')->where('admin_id', $admin->id)->whereNull('consumed_at')->update(['consumed_at' => now(), 'updated_at' => now()]);
             $token = Str::random(80);
             DB::table('admin_password_reset_tokens')->insert(['id' => (string) Str::ulid(), 'admin_id' => $admin->id, 'token_hash' => hash('sha256', $token), 'expires_at' => now()->addMinutes(30), 'created_at' => now(), 'updated_at' => now()]);
-            Mail::to($admin->email)->queue((new AdminPasswordReset($token))->afterCommit());
+            app(MailPreference::class)->queueTransactional($admin->email, new AdminPasswordReset($token));
         }
 
         return back()->with('status', 'If an active administrator account matches, a reset link has been sent.');

@@ -35,7 +35,7 @@ final class MailPreference
         if (! $this->alertsEnabled($userId)) {
             return;
         }
-        $this->queueTransactional($this->emailFor($userId), $mail);
+        $this->dispatch($this->emailFor($userId), $mail, true);
     }
 
     public function queueToUser(string $userId, Mailable $mail): void
@@ -53,15 +53,32 @@ final class MailPreference
 
     public function queueTransactional(?string $email, Mailable $mail): void
     {
+        $this->dispatch($email, $mail, false);
+    }
+
+    private function dispatch(?string $email, Mailable $mail, bool $queue): void
+    {
         $email = $this->normalize($email);
         if ($email === null) {
             return;
         }
         try {
-            Mail::to($email)->queue($mail);
+            if (! Mail::isFake()) {
+                app(IntegrationSettings::class)->applyToConfig();
+                if (! config('mail.mailers.smtp.timeout')) {
+                    config(['mail.mailers.smtp.timeout' => 15]);
+                }
+                if (! $queue) {
+                    Mail::purge('smtp');
+                }
+            }
+            $pending = Mail::to($email);
+            $queue ? $pending->queue($mail) : $pending->sendNow($mail);
         } catch (\Throwable $error) {
-            Log::warning('mail.queue_failed', [
+            Log::warning($queue ? 'mail.queue_failed' : 'mail.send_failed', [
                 'error' => $error->getMessage(),
+                'mail' => $mail::class,
+                'to' => $email,
             ]);
         }
     }

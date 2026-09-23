@@ -7,11 +7,11 @@ use App\Http\Controllers\Controller;
 use App\Mail\OneTimeCode;
 use App\Models\RefreshToken;
 use App\Models\User;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 
@@ -22,7 +22,7 @@ final class PasswordController extends Controller
         $data = $request->validate(['email' => ['required', 'email']]);
         $email = Str::lower($data['email']);
         if (User::where('email', $email)->exists()) {
-            Mail::to($email)->queue((new OneTimeCode($codes->issue($email, 'password_reset'), 'password_reset'))->afterCommit());
+            app(MailPreference::class)->queueTransactional($email, new OneTimeCode($codes->issue($email, 'password_reset'), 'password_reset'));
         }
 
         return ApiResponse::success(['accepted' => true]);

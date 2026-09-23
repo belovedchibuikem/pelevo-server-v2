@@ -23,19 +23,22 @@ final class AuthController extends Controller
     {
         $data = $request->validate(['name' => ['required', 'string', 'max:100'], 'handle' => ['sometimes', 'nullable', 'alpha_dash:ascii', 'min:3', 'max:30', 'unique:users,handle'], 'email' => ['required', 'email', 'max:254', 'unique:users'], 'password' => ['required', 'confirmed', Password::defaults()], 'device_name' => ['required', 'string', 'max:100']]);
 
-        return DB::transaction(function () use ($data, $request, $sessions): JsonResponse {
+        $result = DB::transaction(function () use ($data, $request, $sessions): array {
             $user = User::create(['name' => $data['name'], 'handle' => $data['handle'] ?? null, 'email' => Str::lower($data['email']), 'password' => $data['password']]);
-            app(MailPreference::class)->queueTransactional($user->email, new PelevoNotice(
-                subjectLine: 'Welcome to Pelevo',
-                eyebrow: 'Welcome',
-                heading: 'Your Nigerian podcast home',
-                intro: 'Hi '.$user->name.', your Pelevo account is ready. Follow shows you love and we will email you when new episodes drop, as long as Email Notifications stays on.',
-                actionLabel: 'Open Pelevo',
-                actionUrl: config('app.url'),
-            ));
 
-            return ApiResponse::success($sessions->handle($user, $request, $data['device_name']), status: 201);
+            return [$user, $sessions->handle($user, $request, $data['device_name'])];
         });
+        [$user, $session] = $result;
+        app(MailPreference::class)->queueTransactional($user->email, new PelevoNotice(
+            subjectLine: 'Welcome to Pelevo',
+            eyebrow: 'Welcome',
+            heading: 'Your African podcast home',
+            intro: 'Hi '.$user->name.', your Pelevo account is ready. Follow shows you love and we will email you when new episodes drop, as long as Email Notifications stays on.',
+            actionLabel: 'Open Pelevo',
+            actionUrl: config('app.url'),
+        ));
+
+        return ApiResponse::success($session, status: 201);
     }
 
     public function login(Request $request, IssueMobileSession $sessions): JsonResponse

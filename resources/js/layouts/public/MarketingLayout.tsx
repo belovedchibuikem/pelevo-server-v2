@@ -59,7 +59,7 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
             <img className="mkt-logo-img mkt-logo-img-footer" src="/images/brand/logo-footer.png" alt="Pelevo" width={148} height={148} />
           </Link>
           <p style={{ marginTop: 14, maxWidth: 360 }}>
-            Pelevo — built for Nigerian podcasts, and the people who make them worth listening to.
+            Pelevo — built for African podcasts, and the people who make them worth listening to.
           </p>
         </div>
         <div>

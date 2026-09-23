@@ -17,7 +17,7 @@
                 <tr>
                     <td style="background:#06201c;padding:28px 32px 24px;">
                         <p style="margin:0 0 8px;font-size:11px;letter-spacing:.28em;font-weight:700;color:#14b8a6;">PELEVO</p>
-                        <p style="margin:0;font-size:13px;color:#9ad7ce;">Nigerian podcasts, finally home.</p>
+                        <p style="margin:0;font-size:13px;color:#9ad7ce;">African podcasts, finally home.</p>
                     </td>
                 </tr>
                 <tr>

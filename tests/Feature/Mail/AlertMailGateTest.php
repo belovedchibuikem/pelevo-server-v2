@@ -127,7 +127,7 @@ final class AlertMailGateTest extends TestCase
             'password_confirmation' => 'Correct-Horse-9!',
             'device_name' => 'Phone',
         ])->assertCreated();
-        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada-mail@example.com') && $mail->heading === 'Your Nigerian podcast home');
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada-mail@example.com') && $mail->heading === 'Your African podcast home');
 
         $this->from('/contact')->post('/contact', [
             'name' => 'Ada Lovelace',
@@ -137,17 +137,17 @@ final class AlertMailGateTest extends TestCase
             'message' => 'How long does RSS verification take?',
             'company_website' => '',
         ])->assertRedirect('/contact');
-        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.test') && $mail->heading === 'Thanks, we have your note');
-        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->heading === 'New website contact');
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.test') && $mail->heading === 'Thanks, we have your note');
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->heading === 'New website contact');
 
         $user = User::factory()->create(['password' => 'Correct-Horse-9!']);
         Sanctum::actingAs($user, ['mobile']);
         $export = $this->postJson('/api/v1/me/data-export')->assertAccepted()->json('data.id');
         (new PrepareDataExport($export))->handle();
-        Mail::assertQueued(PelevoNotice::class, function (PelevoNotice $mail) use ($user): bool {
+        Mail::assertSent(PelevoNotice::class, function (PelevoNotice $mail) use ($user): bool {
             return $mail->hasTo($user->email) && $mail->heading === 'Download your Pelevo data' && is_string($mail->actionUrl);
         });
-        $download = collect(Mail::queued(PelevoNotice::class))->first(fn (PelevoNotice $mail): bool => $mail->heading === 'Download your Pelevo data');
+        $download = collect(Mail::sent(PelevoNotice::class))->first(fn (PelevoNotice $mail): bool => $mail->heading === 'Download your Pelevo data');
         $this->get($download->actionUrl)->assertOk()->assertHeader('cache-control', 'no-store, private');
         $this->get('/data-exports/'.$export)->assertForbidden();
     }

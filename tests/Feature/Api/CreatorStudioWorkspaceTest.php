@@ -24,7 +24,7 @@ final class CreatorStudioWorkspaceTest extends TestCase
     public function test_claim_status_and_reissued_code_are_private_expiring_and_owned(): void
     {
         Mail::fake();
-        Http::fake(['https://example.com/*' => Http::response($this->rss())]);
+        Http::fake(['https://example.com/*' => fn () => Http::response($this->rss())]);
         $owner = User::factory()->create();
         $other = User::factory()->create();
         $show = Show::create(['rss_url' => 'https://example.com/status.xml', 'title' => 'Status']);
@@ -35,7 +35,7 @@ final class CreatorStudioWorkspaceTest extends TestCase
         $this->actingAs($owner, 'sanctum')->postJson("/api/v1/claims/{$claim}/challenge")->assertAccepted()->assertJsonPath('data.masked_destination', 'o****@example.com');
         $this->assertDatabaseCount('claim_challenges', 2);
         $this->assertDatabaseMissing('claim_challenges', ['show_claim_id' => $claim, 'consumed_at' => null, 'attempts' => 1]);
-        Mail::assertQueued(ClaimVerificationCode::class, 2);
+        Mail::assertSent(ClaimVerificationCode::class, 2);
     }
 
     public function test_verified_owner_and_studio_member_receive_scoped_creator_reads(): void

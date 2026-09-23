@@ -40,7 +40,7 @@ export default function Home() {
 
   return (
     <main>
-      <Head title="Pelevo — Nigerian podcasts, finally home.">
+      <Head title="Pelevo — African podcasts, finally home.">
         <meta
           name="description"
           content="Discover the shows Nigerians are actually talking about, support the creators behind them, and never lose a good episode in a WhatsApp forward again."
@@ -53,8 +53,8 @@ export default function Home() {
             <span className="mkt-proof-avatars" aria-hidden="true"><i /><i /><i /></span>
             <span>First 500 founders circle · Nigeria</span>
           </div>
-          <p className="mkt-kicker">Nigerian podcasts, finally home</p>
-          <h1>Nigerian podcasts,<br /><em>finally home.</em></h1>
+          <p className="mkt-kicker">African podcasts, finally home</p>
+          <h1>African podcasts,<br /><em>finally home.</em></h1>
           <p className="mkt-lede">
             Discover the shows Nigerians are actually talking about, support the creators behind them,
             and never lose a good episode in a WhatsApp forward again.

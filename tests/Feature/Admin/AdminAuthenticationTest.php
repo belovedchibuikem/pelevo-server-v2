@@ -102,7 +102,7 @@ final class AdminAuthenticationTest extends TestCase
         $unknown = $this->post('/admin/forgot-password', ['email' => 'missing@example.com'])->assertSessionHas('status');
         $this->assertSame($known->getSession()->get('status'), $unknown->getSession()->get('status'));
         $token = null;
-        Mail::assertQueued(AdminPasswordReset::class, function (AdminPasswordReset $mail) use (&$token, $admin): bool {
+        Mail::assertSent(AdminPasswordReset::class, function (AdminPasswordReset $mail) use (&$token, $admin): bool {
             $token = $mail->token;
 
             return $mail->hasTo($admin->email);

@@ -3,17 +3,18 @@
 namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
-use Illuminate\Queue\SerializesModels;
 
-class OneTimeCode extends Mailable implements ShouldQueue
+class OneTimeCode extends Mailable
 {
-    use Queueable, SerializesModels;
+    use Queueable;
 
-    public function __construct(public readonly string $code, public readonly string $purpose) {}
+    public function __construct(public readonly string $code, public readonly string $purpose)
+    {
+        $this->afterCommit();
+    }
 
     public function envelope(): Envelope
     {

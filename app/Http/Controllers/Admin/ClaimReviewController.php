@@ -12,7 +12,6 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
 final class ClaimReviewController extends Controller
@@ -77,7 +76,7 @@ final class ClaimReviewController extends Controller
             DB::table('claim_challenges')->insert(['id' => (string) Str::ulid(), 'show_claim_id' => $row->id, 'type' => 'email', 'destination_encrypted' => encrypt($ownership['email']), 'destination_masked' => RssOwnershipInspector::mask($ownership['email']), 'code_hash' => hash('sha256', $plain), 'max_attempts' => config('claims.max_attempts'), 'expires_at' => $expires, 'created_at' => now(), 'updated_at' => now()]);
             $this->audit($request, 'claim.code_reissued', 'App\\Models\\ShowClaim', $row->id, $data['reason'], [], ['expires_at' => $expires]);
         });
-        Mail::to($ownership['email'])->queue((new ClaimVerificationCode($plain, $show->title, $show->artwork_url, $show->author))->afterCommit());
+        app(MailPreference::class)->queueTransactional($ownership['email'], new ClaimVerificationCode($plain, $show->title, $show->artwork_url, $show->author));
 
         return ApiResponse::success(['claim_id' => $row->id, 'masked_destination' => RssOwnershipInspector::mask($ownership['email']), 'challenge_expires_at' => $expires->toIso8601String()]);
     }

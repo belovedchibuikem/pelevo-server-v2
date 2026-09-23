@@ -28,7 +28,8 @@ final class IdentityLifecycleTest extends TestCase
 
         $this->postJson('/api/v1/auth/otp/send', ['email' => $user->email, 'purpose' => 'login'])
             ->assertOk()->assertJsonPath('data.accepted', true);
-        Mail::assertQueued(OneTimeCode::class, fn (OneTimeCode $mail): bool => $mail->hasTo($user->email));
+        Mail::assertSent(OneTimeCode::class, fn (OneTimeCode $mail): bool => $mail->hasTo($user->email));
+        Mail::assertNotQueued(OneTimeCode::class);
         $row = DB::table('one_time_codes')->where('destination', $user->email)->first();
         $this->assertNotNull($row);
         $this->assertNotSame('000000', $row->code_hash);
@@ -97,16 +98,16 @@ final class IdentityLifecycleTest extends TestCase
         Storage::disk('local')->assertExists('private/exports/'.$export->json('data.id').'.json');
         $status = $this->getJson('/api/v1/me/data-export/'.$export->json('data.id'))->assertOk();
         $this->get($status->json('data.download_url'))->assertOk()->assertHeader('cache-control', 'no-store, private');
-        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($user->email) && $mail->heading === 'Download your Pelevo data');
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($user->email) && $mail->heading === 'Download your Pelevo data');
 
         $deletion = $this->postJson('/api/v1/me/delete', ['password' => 'Correct-Horse-9!', 'reason' => 'Leaving'])->assertAccepted();
         Queue::assertPushed(ProcessAccountDeletion::class);
-        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($user->email) && $mail->heading === 'We will delete your account in 30 days');
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($user->email) && $mail->heading === 'We will delete your account in 30 days');
         DB::table('account_deletion_requests')->where('id', $deletion->json('data.id'))->update(['scheduled_for' => now()->subSecond()]);
         (new ProcessAccountDeletion($deletion->json('data.id')))->handle();
         $this->assertDatabaseHas('users', ['id' => $user->id, 'status' => 'deleted', 'name' => 'Deleted user']);
         $this->assertDatabaseHas('account_deletion_requests', ['id' => $deletion->json('data.id'), 'state' => 'completed']);
-        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($user->email) && $mail->heading === 'Your Pelevo account is gone');
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($user->email) && $mail->heading === 'Your Pelevo account is gone');
     }
 
     public function test_connected_accounts_cannot_be_removed_by_another_user(): void

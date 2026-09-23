@@ -7,10 +7,10 @@ use App\Actions\Identity\OneTimeCodeService;
 use App\Http\Controllers\Controller;
 use App\Mail\OneTimeCode;
 use App\Models\User;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
 final class OtpController extends Controller
@@ -20,7 +20,7 @@ final class OtpController extends Controller
         $data = $request->validate(['email' => ['required', 'email'], 'purpose' => ['required', 'in:login,password_reset']]);
         $email = Str::lower($data['email']);
         if (User::where('email', $email)->exists()) {
-            Mail::to($email)->queue((new OneTimeCode($codes->issue($email, $data['purpose']), $data['purpose']))->afterCommit());
+            app(MailPreference::class)->queueTransactional($email, new OneTimeCode($codes->issue($email, $data['purpose']), $data['purpose']));
         }
 
         return ApiResponse::success(['accepted' => true]);

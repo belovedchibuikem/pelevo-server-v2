@@ -24,7 +24,7 @@ final class CreatorClaimGateTest extends TestCase
     public function test_email_owner_is_masked_mailed_attempt_limited_and_never_exposed(): void
     {
         Mail::fake();
-        Http::fake(['https://example.com/*' => Http::response($this->rss('owner@example.com'))]);
+        Http::fake(['https://example.com/*' => fn () => Http::response($this->rss('owner@example.com'))]);
         $user = User::factory()->create();
         $show = Show::create(['rss_url' => 'https://example.com/owner.xml', 'title' => 'Owned Show']);
 
@@ -34,7 +34,8 @@ final class CreatorClaimGateTest extends TestCase
         $claimId = $response->json('data.claim_id');
         $challenge = DB::table('claim_challenges')->where('show_claim_id', $claimId)->first();
         $this->assertStringNotContainsString('owner@example.com', $challenge->destination_encrypted);
-        Mail::assertQueued(ClaimVerificationCode::class, fn (ClaimVerificationCode $mail) => $mail->hasTo('owner@example.com'));
+        Mail::assertSent(ClaimVerificationCode::class, fn (ClaimVerificationCode $mail) => $mail->hasTo('owner@example.com'));
+        Mail::assertNotQueued(ClaimVerificationCode::class);
 
         foreach (range(1, 5) as $attempt) {
             $this->actingAs($user, 'sanctum')->postJson("/api/v1/claims/{$claimId}/verify", ['code' => '000000'])->assertUnprocessable();
@@ -46,7 +47,7 @@ final class CreatorClaimGateTest extends TestCase
     public function test_first_valid_email_claim_wins_and_duplicate_becomes_dispute(): void
     {
         Mail::fake();
-        Http::fake(['https://example.com/*' => Http::response($this->rss('owner@example.com'))]);
+        Http::fake(['https://example.com/*' => fn () => Http::response($this->rss('owner@example.com'))]);
         $show = Show::create(['rss_url' => 'https://example.com/race.xml', 'title' => 'Race']);
         $users = [User::factory()->create(), User::factory()->create()];
         $claims = [];
@@ -54,8 +55,8 @@ final class CreatorClaimGateTest extends TestCase
         foreach ($users as $user) {
             $claims[] = $this->actingAs($user, 'sanctum')->postJson("/api/v1/shows/{$show->id}/claims", ['method' => 'email'])->json('data.claim_id');
         }
-        Mail::assertQueued(ClaimVerificationCode::class, 2);
-        Mail::assertQueued(ClaimVerificationCode::class, function (ClaimVerificationCode $mail) use (&$codes): bool {
+        Mail::assertSent(ClaimVerificationCode::class, 2);
+        Mail::assertSent(ClaimVerificationCode::class, function (ClaimVerificationCode $mail) use (&$codes): bool {
             $codes[] = $mail->code;
 
             return true;
@@ -97,12 +98,12 @@ final class CreatorClaimGateTest extends TestCase
     public function test_expiry_job_and_creator_access_refresh_immediately_after_verification(): void
     {
         Mail::fake();
-        Http::fake(['https://example.com/*' => Http::response($this->rss('owner@example.com'))]);
+        Http::fake(['https://example.com/*' => fn () => Http::response($this->rss('owner@example.com'))]);
         $user = User::factory()->create();
         $show = Show::create(['rss_url' => 'https://example.com/access.xml', 'title' => 'Access']);
         $claimId = $this->actingAs($user, 'sanctum')->postJson("/api/v1/shows/{$show->id}/claims", ['method' => 'email'])->json('data.claim_id');
         $code = null;
-        Mail::assertQueued(ClaimVerificationCode::class, function (ClaimVerificationCode $mail) use (&$code): bool {
+        Mail::assertSent(ClaimVerificationCode::class, function (ClaimVerificationCode $mail) use (&$code): bool {
             $code = $mail->code;
 
             return true;

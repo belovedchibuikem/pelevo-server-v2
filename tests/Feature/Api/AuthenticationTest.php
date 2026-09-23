@@ -19,7 +19,7 @@ final class AuthenticationTest extends TestCase
         $response->assertCreated()->assertJsonPath('ok', true)->assertJsonStructure(['data' => ['access_token', 'refresh_token', 'device_id'], 'request_id']);
         $this->assertDatabaseCount('refresh_tokens', 1);
         $this->assertDatabaseMissing('refresh_tokens', ['token_hash' => $response->json('data.refresh_token')]);
-        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.com') && $mail->heading === 'Your Nigerian podcast home');
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.com') && $mail->heading === 'Your African podcast home');
     }
 
     public function test_validation_uses_stable_envelope(): void

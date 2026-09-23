@@ -8,12 +8,12 @@ use App\Jobs\VerifyDescriptionClaim;
 use App\Mail\ClaimVerificationCode;
 use App\Models\CreatorProfile;
 use App\Models\Show;
+use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
 final class CreatorController extends Controller
@@ -47,7 +47,7 @@ final class CreatorController extends Controller
             DB::table('claim_challenges')->where('show_claim_id', $row->id)->whereNull('consumed_at')->update(['consumed_at' => now(), 'updated_at' => now()]);
             DB::table('claim_challenges')->insert(['id' => (string) Str::ulid(), 'show_claim_id' => $row->id, 'type' => 'email', 'destination_encrypted' => encrypt($ownership['email']), 'destination_masked' => RssOwnershipInspector::mask($ownership['email']), 'code_hash' => hash('sha256', $plain), 'max_attempts' => config('claims.max_attempts'), 'expires_at' => $expires, 'created_at' => now(), 'updated_at' => now()]);
         });
-        Mail::to($ownership['email'])->queue((new ClaimVerificationCode($plain, $show->title, $show->artwork_url, $show->author))->afterCommit());
+        app(MailPreference::class)->queueTransactional($ownership['email'], new ClaimVerificationCode($plain, $show->title, $show->artwork_url, $show->author));
 
         return ApiResponse::success(['claim_id' => $row->id, 'masked_destination' => RssOwnershipInspector::mask($ownership['email']), 'challenge_expires_at' => $expires->toIso8601String()], status: 202);
     }
@@ -69,7 +69,7 @@ final class CreatorController extends Controller
             DB::table('claim_challenges')->insert(['id' => (string) Str::ulid(), 'show_claim_id' => $id, 'type' => $data['method'], 'destination_encrypted' => encrypt($data['method'] === 'email' ? $ownership['email'] : $plain), 'destination_masked' => $data['method'] === 'email' ? RssOwnershipInspector::mask($ownership['email']) : null, 'code_hash' => hash('sha256', $plain), 'max_attempts' => config('claims.max_attempts'), 'expires_at' => $challengeExpires, 'created_at' => now(), 'updated_at' => now()]);
         });
         if ($data['method'] === 'email') {
-            Mail::to($ownership['email'])->queue((new ClaimVerificationCode($plain, $show->title, $show->artwork_url, $show->author))->afterCommit());
+            app(MailPreference::class)->queueTransactional($ownership['email'], new ClaimVerificationCode($plain, $show->title, $show->artwork_url, $show->author));
         }
 
         return ApiResponse::success(['claim_id' => $id, 'state' => 'pending', 'masked_destination' => $data['method'] === 'email' ? RssOwnershipInspector::mask($ownership['email']) : null, 'challenge' => $data['method'] === 'description' ? $plain : null, 'expires_at' => $claimExpires->toIso8601String(), 'challenge_expires_at' => $challengeExpires->toIso8601String()], status: 201);
