@@ -41,6 +41,7 @@ use App\Http\Controllers\Api\V1\QueueController;
 use App\Http\Controllers\Api\V1\ReelController;
 use App\Http\Controllers\Api\V1\ReelDraftController;
 use App\Http\Controllers\Api\V1\ReelEngagementController;
+use App\Http\Controllers\Api\V1\ReelMediaController;
 use App\Http\Controllers\Api\V1\ReelMonetizationController;
 use App\Http\Controllers\Api\V1\SearchHistoryController;
 use App\Http\Controllers\Api\V1\ShowReviewController;
@@ -220,6 +221,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('reels/{reel}/related-show', [ReelController::class, 'relatedShow']);
         Route::post('reels', [ReelController::class, 'store'])->middleware('not.sanctioned');
         Route::post('reels/{reel}/episode-links', [ReelController::class, 'linkEpisode']);
+        Route::post('reels/{reel}/cover', [ReelController::class, 'cover'])->middleware('not.sanctioned');
         Route::post('uploads', [MediaUploadController::class, 'store'])->middleware('not.sanctioned');
         Route::get('uploads/{upload}', [MediaUploadController::class, 'show']);
         Route::post('uploads/{upload}/complete', [MediaUploadController::class, 'complete']);
@@ -299,4 +301,6 @@ Route::prefix('v1')->group(function (): void {
 Route::get('v1/live', [PublicLiveController::class, 'index']);
 Route::get('v1/live/{session}', [PublicLiveController::class, 'show']);
 Route::put('v1/uploads/{upload}/content', [MediaUploadController::class, 'put'])->middleware(['signed:relative', 'throttle:60,1'])->name('api.uploads.put');
+Route::get('v1/reels/{reel}/video', [ReelMediaController::class, 'video'])->middleware(['signed:relative', 'throttle:120,1'])->name('api.reels.video');
+Route::get('v1/reels/{reel}/thumbnail', [ReelMediaController::class, 'thumbnail'])->middleware(['signed:relative', 'throttle:120,1'])->name('api.reels.thumbnail');
 Route::get('readiness', fn () => ApiResponse::success(['database' => DB::select('select 1') ? 'ok' : 'failed', 'cache' => Cache::put('readiness', true, 5) ? 'ok' : 'failed']))->middleware('auth:sanctum');

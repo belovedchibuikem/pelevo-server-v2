@@ -44,7 +44,7 @@ final class MediaUploadPipelineTest extends TestCase
         {
             public function inspect(string $absolutePath): array
             {
-                return ['duration_ms' => 60001, 'mime' => 'video/mp4', 'width' => 1080, 'height' => 1920];
+                return ['duration_ms' => 180001, 'mime' => 'video/mp4', 'width' => 1080, 'height' => 1920];
             }
         };
 
@@ -65,7 +65,7 @@ final class MediaUploadPipelineTest extends TestCase
         Queue::assertPushed(TranscodeReelMedia::class);
     }
 
-    public function test_transcode_completion_moves_reel_to_pending_review(): void
+    public function test_transcode_completion_publishes_the_reel(): void
     {
         Storage::fake('local');
         $user = User::factory()->create();
@@ -83,7 +83,7 @@ final class MediaUploadPipelineTest extends TestCase
             }
         };
         (new TranscodeReelMedia($reel))->handle($transcoder);
-        $this->assertDatabaseHas('reels', ['id' => $reel, 'state' => 'pending_review']);
+        $this->assertDatabaseHas('reels', ['id' => $reel, 'state' => 'published']);
         $this->assertDatabaseHas('reel_media', ['reel_id' => $reel, 'processing_state' => 'ready']);
     }
 

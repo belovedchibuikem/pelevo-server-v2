@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Jobs\TranscodeReelMedia;
 use App\Models\CreatorProfile;
 use App\Support\ApiResponse;
+use App\Support\ReelLimits;
+use App\Support\ReelPlayback;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -42,8 +44,8 @@ final class ReelController extends Controller
                 abort(409, 'The processed upload is unavailable.');
             }
             $probe = json_decode($upload->probe, true, flags: JSON_THROW_ON_ERROR);
-            if (($probe['duration_ms'] ?? PHP_INT_MAX) > config('media.max_reel_duration_ms')) {
-                abort(422, 'Reels may not exceed 60 seconds.');
+            if (($probe['duration_ms'] ?? PHP_INT_MAX) > ReelLimits::maxDurationMs()) {
+                abort(422, ReelLimits::tooLongMessage());
             }
             $id = $data['draft_id'] ?? (string) Str::ulid();
             $reelData = collect($data)->except(['upload_id', 'draft_id'])->all();
@@ -70,7 +72,7 @@ final class ReelController extends Controller
         if (! $row) {
             return ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
         }
-        $presented = $this->presentPublishedReels([$row], $request->user()->id);
+        $presented = $this->presentPublishedReels([$row], $request->user()->id, $request);
         if ($presented === []) {
             return ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
         }
@@ -88,6 +90,30 @@ final class ReelController extends Controller
         Cache::forget('reel:'.$reel);
 
         return ApiResponse::success(['linked' => true]);
+    }
+
+    public function cover(string $reel, Request $request): JsonResponse
+    {
+        $creator = CreatorProfile::where('user_id', $request->user()->id)->first();
+        $row = $creator ? DB::table('reels')->where('id', $reel)->where('creator_profile_id', $creator->id)->first() : null;
+        if (! $row) {
+            return ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
+        }
+        $data = $request->validate([
+            'cover' => ['required', 'file', 'max:8192', 'mimetypes:image/jpeg,image/png,image/webp,image/jpg'],
+        ]);
+        $disk = (string) config('media.upload_disk', 'local');
+        $stored = $data['cover']->store('reels/'.$reel, $disk);
+        DB::table('reel_media')->where('reel_id', $reel)->update([
+            'thumbnail_path' => $stored,
+            'updated_at' => now(),
+        ]);
+        Cache::forget('reel:'.$reel);
+
+        return ApiResponse::success([
+            'id' => $reel,
+            'thumbnail_path' => ReelPlayback::thumbnailUrl($reel, $request),
+        ]);
     }
 
     public function relatedShow(string $reel): JsonResponse
@@ -117,14 +143,14 @@ final class ReelController extends Controller
         }
         $items = $query->orderByDesc('reels.id')->cursorPaginate(min($request->integer('limit', 20), 50));
 
-        return ApiResponse::success($this->presentPublishedReels($items->items(), $request->user()->id), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()]);
+        return ApiResponse::success($this->presentPublishedReels($items->items(), $request->user()->id, $request), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()]);
     }
 
     /**
      * @param  iterable<int, object>  $rows
      * @return list<array<string, mixed>>
      */
-    private function presentPublishedReels(iterable $rows, string $userId): array
+    private function presentPublishedReels(iterable $rows, string $userId, Request $request): array
     {
         $items = collect($rows)->values();
         if ($items->isEmpty()) {
@@ -134,7 +160,7 @@ final class ReelController extends Controller
         $creatorIds = $items->pluck('creator_profile_id')->unique()->values()->all();
         $episodeIds = $items->pluck('episode_id')->filter()->unique()->values()->all();
         $creators = DB::table('creator_profiles')->leftJoin('users', 'users.id', '=', 'creator_profiles.user_id')->whereIn('creator_profiles.id', $creatorIds)->select('creator_profiles.id', 'creator_profiles.display_name', 'users.handle')->get()->keyBy('id');
-        $thumbnails = DB::table('reel_media')->whereIn('reel_id', $ids)->orderByDesc('created_at')->get(['reel_id', 'thumbnail_path'])->unique('reel_id')->keyBy('reel_id');
+        $thumbnails = DB::table('reel_media')->whereIn('reel_id', $ids)->orderByDesc('created_at')->get(['reel_id', 'thumbnail_path', 'transcoded_path'])->unique('reel_id')->keyBy('reel_id');
         $likes = DB::table('reel_engagements')->whereIn('reel_id', $ids)->where('liked', true)->selectRaw('reel_id, count(*) as aggregate')->groupBy('reel_id')->pluck('aggregate', 'reel_id');
         $saves = DB::table('reel_engagements')->whereIn('reel_id', $ids)->where('saved', true)->selectRaw('reel_id, count(*) as aggregate')->groupBy('reel_id')->pluck('aggregate', 'reel_id');
         $comments = DB::table('comments')->where('commentable_type', 'reel')->whereIn('commentable_id', $ids)->whereNull('hidden_at')->selectRaw('commentable_id, count(*) as aggregate')->groupBy('commentable_id')->pluck('aggregate', 'commentable_id');
@@ -142,18 +168,28 @@ final class ReelController extends Controller
         $following = DB::table('creator_followers')->where('user_id', $userId)->whereIn('creator_profile_id', $creatorIds)->pluck('creator_profile_id')->all();
         $episodes = $episodeIds === [] ? collect() : DB::table('episodes')->whereIn('id', $episodeIds)->pluck('title', 'id');
 
-        return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $mine, $following, $episodes): ?array {
+        return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $mine, $following, $episodes, $request): ?array {
             $creator = $creators->get($row->creator_profile_id);
             if (! is_string($creator?->display_name) || $creator->display_name === '') {
                 return null;
             }
             $engagement = $mine->get($row->id);
+            $media = $thumbnails->get($row->id);
+            $storedMedia = is_string($row->media_url) ? $row->media_url : null;
+            $storedThumb = is_string($media?->thumbnail_path) ? $media->thumbnail_path : null;
+            $hasFile = is_string($media?->transcoded_path) && $media->transcoded_path !== '';
+            $mediaUrl = $storedMedia !== null && $storedMedia !== ''
+                ? ReelPlayback::resolve($storedMedia, ReelPlayback::videoUrl((string) $row->id, $request))
+                : ($hasFile ? ReelPlayback::videoUrl((string) $row->id, $request) : null);
+            $thumbnail = $storedThumb !== null && $storedThumb !== ''
+                ? ReelPlayback::resolve($storedThumb, ReelPlayback::thumbnailUrl((string) $row->id, $request))
+                : null;
 
             return [
                 'id' => (string) $row->id,
                 'caption' => $row->caption,
-                'media_url' => $row->media_url,
-                'thumbnail_path' => $thumbnails->get($row->id)?->thumbnail_path,
+                'media_url' => $mediaUrl,
+                'thumbnail_path' => $thumbnail,
                 'duration_ms' => $row->duration_ms === null ? null : (int) $row->duration_ms,
                 'published_at' => $row->published_at,
                 'creator_profile_id' => (string) $row->creator_profile_id,

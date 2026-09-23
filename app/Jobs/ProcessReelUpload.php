@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Contracts\MediaProbe;
 use App\Models\MediaUpload;
+use App\Support\ReelLimits;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -17,7 +18,7 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 60;
+    public int $timeout = 180;
 
     public array $backoff = [30, 120];
 
@@ -61,7 +62,7 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
                 unlink($temporaryPath);
             }
         }
-        $tooLong = $result['duration_ms'] > config('media.max_reel_duration_ms');
+        $tooLong = $result['duration_ms'] > ReelLimits::maxDurationMs();
         $upload->update([
             'state' => $tooLong ? 'rejected' : 'processed',
             'probe' => $result,

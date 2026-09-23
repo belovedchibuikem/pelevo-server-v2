@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Contracts\MediaTranscoder;
+use App\Services\MuxMedia;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -69,15 +70,27 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
                     }
                 }
             }
+            $videoAbsolute = $media->disk === 'local'
+                ? Storage::disk('local')->path('reels/'.$this->reelId.'/video.mp4')
+                : $outputDirectory.DIRECTORY_SEPARATOR.'video.mp4';
+            $published = app(MuxMedia::class)->publishVideo($videoAbsolute) ?? [];
         } finally {
             if ($temporaryDirectory !== null) {
                 $this->removeDirectory($temporaryDirectory);
             }
         }
-        DB::transaction(function () use ($media, $result): void {
-            DB::table('reel_media')->where('id', $media->id)->update(['processing_state' => 'ready', 'transcoded_path' => 'reels/'.$this->reelId.'/video.mp4', 'thumbnail_path' => 'reels/'.$this->reelId.'/thumbnail.jpg', 'safety_results' => json_encode($result['safety'], JSON_THROW_ON_ERROR), 'updated_at' => now()]);
-            DB::table('reels')->where('id', $this->reelId)->where('state', 'processing')->update(['state' => 'pending_review', 'updated_at' => now()]);
-            $this->event('pending_review', $result['safety']);
+        DB::transaction(function () use ($media, $result, $published): void {
+            $thumbnailPath = is_string($published['thumbnail_url'] ?? null)
+                ? $published['thumbnail_url']
+                : 'reels/'.$this->reelId.'/thumbnail.jpg';
+            DB::table('reel_media')->where('id', $media->id)->update(['processing_state' => 'ready', 'transcoded_path' => 'reels/'.$this->reelId.'/video.mp4', 'thumbnail_path' => $thumbnailPath, 'safety_results' => json_encode($result['safety'], JSON_THROW_ON_ERROR), 'updated_at' => now()]);
+            DB::table('reels')->where('id', $this->reelId)->where('state', 'processing')->update([
+                'state' => 'published',
+                'published_at' => now(),
+                'media_url' => $published['playback_url'] ?? null,
+                'updated_at' => now(),
+            ]);
+            $this->event('published', [...$result['safety'], 'mux_asset_id' => $published['asset_id'] ?? null]);
         });
     }
 

@@ -21,9 +21,9 @@ final class ModerationTest extends TestCase
         $creator = CreatorProfile::create(['user_id' => $user->id, 'display_name' => 'Creator']);
         $reelId = (string) Str::ulid();
         $uploadId = (string) Str::ulid();
-        DB::table('media_uploads')->insert(['id' => $uploadId, 'user_id' => $user->id, 'disk' => 'local', 'path' => 'test', 'expected_mime' => 'video/mp4', 'expected_size' => 1, 'actual_size' => 1, 'state' => 'processed', 'probe' => json_encode(['duration_ms' => 61000]), 'expires_at' => now()->addHour(), 'uploaded_at' => now(), 'processed_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
-        DB::table('reels')->insert(['id' => $reelId, 'creator_profile_id' => $creator->id, 'state' => 'pending_review', 'duration_ms' => 61000, 'created_at' => now(), 'updated_at' => now()]);
-        DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $reelId, 'media_upload_id' => $uploadId, 'mime' => 'video/mp4', 'duration_ms' => 61000, 'processing_state' => 'ready', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('media_uploads')->insert(['id' => $uploadId, 'user_id' => $user->id, 'disk' => 'local', 'path' => 'test', 'expected_mime' => 'video/mp4', 'expected_size' => 1, 'actual_size' => 1, 'state' => 'processed', 'probe' => json_encode(['duration_ms' => 181000]), 'expires_at' => now()->addHour(), 'uploaded_at' => now(), 'processed_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('reels')->insert(['id' => $reelId, 'creator_profile_id' => $creator->id, 'state' => 'pending_review', 'duration_ms' => 181000, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $reelId, 'media_upload_id' => $uploadId, 'mime' => 'video/mp4', 'duration_ms' => 181000, 'processing_state' => 'ready', 'created_at' => now(), 'updated_at' => now()]);
         $payload = ['action' => 'publish', 'reason_code' => 'approved', 'reason' => 'Content passed policy review.'];
 
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->putJson("/api/admin/v1/reels/{$reelId}/moderation", $payload)->assertForbidden();
@@ -34,7 +34,7 @@ final class ModerationTest extends TestCase
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->get('/admin/moderation')->assertOk();
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->getJson('/api/admin/v1/moderation')->assertOk();
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->putJson("/api/admin/v1/reels/{$reelId}/moderation", $payload)->assertUnprocessable()->assertJsonPath('error.code', 'UPLOAD_TOO_LONG');
-        DB::table('reels')->where('id', $reelId)->update(['duration_ms' => 60000]);
+        DB::table('reels')->where('id', $reelId)->update(['duration_ms' => 180000]);
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->putJson("/api/admin/v1/reels/{$reelId}/moderation", $payload)->assertOk()->assertJsonStructure(['data' => ['audit_reference']]);
         $this->assertDatabaseHas('reels', ['id' => $reelId, 'state' => 'published']);
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->putJson("/api/admin/v1/reels/{$reelId}/moderation", [...$payload, 'action' => 'remove', 'reason' => 'Removed after a subsequent policy violation.'])->assertOk();

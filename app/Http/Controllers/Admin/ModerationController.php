@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\ReelLimits;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -25,8 +26,8 @@ final class ModerationController extends Controller
             if (! $record || $record->state !== 'pending_review' || $record->duration_ms === null || ! $mediaReady) {
                 return ApiResponse::error('MODERATION_HOLD', 'A completed server media probe is required.', 409);
             }
-            if ($record->duration_ms > config('media.max_reel_duration_ms')) {
-                return ApiResponse::error('UPLOAD_TOO_LONG', 'Reels may not exceed 60 seconds.', 422);
+            if ($record->duration_ms > ReelLimits::maxDurationMs()) {
+                return ApiResponse::error('UPLOAD_TOO_LONG', ReelLimits::tooLongMessage(), 422);
             }
         }
 

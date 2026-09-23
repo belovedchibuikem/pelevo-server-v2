@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\CreatorProfile;
 use App\Support\ApiResponse;
+use App\Support\ReelPlayback;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -109,14 +110,17 @@ final class StudioWorkspaceController extends Controller
     {
         $items = DB::table('reels')->whereIn('reels.creator_profile_id', $this->creatorIds($request))->leftJoin('episodes', 'episodes.id', '=', 'reels.episode_id')->select($this->reelColumns())->when($request->string('state')->isNotEmpty(), fn ($q) => $q->where('reels.state', $request->string('state')->toString()))->when($request->boolean('linked'), fn ($q) => $q->where(fn ($inner) => $inner->whereNotNull('reels.episode_id')->orWhereExists(fn ($exists) => $exists->selectRaw('1')->from('reel_episode_links')->whereColumn('reel_episode_links.reel_id', 'reels.id'))))->orderByDesc('reels.updated_at')->orderByDesc('reels.id')->cursorPaginate($this->limit($request));
 
-        return $this->page($items);
+        return ApiResponse::success(
+            collect($items->items())->map(fn (object $row): array => $this->presentReel($row, $request))->values()->all(),
+            ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()],
+        );
     }
 
     public function reel(string $reel, Request $request): JsonResponse
     {
         $row = DB::table('reels')->where('reels.id', $reel)->whereIn('reels.creator_profile_id', $this->creatorIds($request))->leftJoin('episodes', 'episodes.id', '=', 'reels.episode_id')->select($this->reelColumns())->first();
 
-        return $row ? ApiResponse::success($row) : ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
+        return $row ? ApiResponse::success($this->presentReel($row, $request)) : ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
     }
 
     public function audience(Request $request): JsonResponse
@@ -232,6 +236,31 @@ final class StudioWorkspaceController extends Controller
     private function page($items): JsonResponse
     {
         return ApiResponse::success($items->items(), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()]);
+    }
+
+    private function presentReel(object $row, Request $request): array
+    {
+        $thumb = is_string($row->thumbnail_path ?? null) ? $row->thumbnail_path : null;
+        $media = is_string($row->media_url ?? null) ? $row->media_url : null;
+        $id = (string) $row->id;
+
+        return [
+            'id' => $id,
+            'caption' => $row->caption,
+            'state' => $row->state,
+            'duration_ms' => $row->duration_ms === null ? null : (int) $row->duration_ms,
+            'published_at' => $row->published_at,
+            'episode_id' => $row->episode_id,
+            'show_id' => $row->show_id,
+            'episode_title' => $row->episode_title,
+            'linked' => (bool) $row->linked,
+            'media_url' => $media !== null && $media !== ''
+                ? ReelPlayback::resolve($media, ReelPlayback::videoUrl($id, $request))
+                : ($thumb ? ReelPlayback::videoUrl($id, $request) : null),
+            'thumbnail_path' => $thumb !== null && $thumb !== ''
+                ? ReelPlayback::resolve($thumb, ReelPlayback::thumbnailUrl($id, $request))
+                : null,
+        ];
     }
 
     private function reelColumns(): array
