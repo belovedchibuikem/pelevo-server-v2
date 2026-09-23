@@ -78,6 +78,23 @@ final class ProfileApiTest extends TestCase
         $this->assertDatabaseCount('verified_show_claims', 0);
     }
 
+    public function test_login_and_refresh_include_live_creator_access(): void
+    {
+        $user = User::factory()->create(['password' => 'password']);
+        $creator = CreatorProfile::create(['user_id' => $user->id, 'display_name' => $user->name]);
+        $show = Show::create(['rss_url' => 'https://example.invalid/session-access.xml', 'title' => 'Claimed Show']);
+        $claim = (string) Str::ulid();
+        DB::table('show_claims')->insert(['id' => $claim, 'show_id' => $show->id, 'creator_profile_id' => $creator->id, 'method' => 'email', 'state' => 'verified', 'verified_at' => now(), 'expires_at' => now()->addDay(), 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('verified_show_claims')->insert(['show_id' => $show->id, 'show_claim_id' => $claim, 'created_at' => now(), 'updated_at' => now()]);
+
+        $login = $this->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => 'password', 'device_name' => 'Phone'])
+            ->assertOk()
+            ->assertJsonPath('data.user.capabilities.creator_access', true);
+        $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $login->json('data.refresh_token'), 'device_id' => $login->json('data.device_id')])
+            ->assertOk()
+            ->assertJsonPath('data.user.capabilities.creator_access', true);
+    }
+
     public function test_duplicate_handle_does_not_partially_save_profile_changes(): void
     {
         User::factory()->create(['handle' => 'taken_handle']);

@@ -50,6 +50,10 @@ final class InAppNotificationDelivery
                     ->where('broadcasts.id', $message['data']['broadcast_id'])->whereIn('broadcasts.state', ['processing', 'completed'])
                     ->where('templates.active', true)->exists();
             }
+            if (in_array($message['type'], ['reply', 'comment'], true)) {
+                $types = $options['types'] ?? ['mentions'];
+                $allowed = $allowed && in_array('mentions', $types, true);
+            }
             if (! $allowed || now()->gte(Carbon::parse($expiresAt))) {
                 $state = $allowed ? 'expired' : 'suppressed';
                 $this->receipt($userId, $message, $state);

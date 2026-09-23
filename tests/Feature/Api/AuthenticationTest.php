@@ -17,6 +17,7 @@ final class AuthenticationTest extends TestCase
         Mail::fake();
         $response = $this->withHeaders(['X-Device-Id' => 'flutter-test-device'])->postJson('/api/v1/auth/register', ['name' => 'Ada', 'email' => 'ada@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Ada phone']);
         $response->assertCreated()->assertJsonPath('ok', true)->assertJsonStructure(['data' => ['access_token', 'refresh_token', 'device_id'], 'request_id']);
+        $response->assertJsonPath('data.user.capabilities.creator_access', false);
         $this->assertDatabaseCount('refresh_tokens', 1);
         $this->assertDatabaseMissing('refresh_tokens', ['token_hash' => $response->json('data.refresh_token')]);
         Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.com') && $mail->heading === 'Your African podcast home');

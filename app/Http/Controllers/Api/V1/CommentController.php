@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\CreatorProfile;
+use App\Services\NotifyCommentActivity;
 use App\Support\ApiResponse;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -43,8 +44,10 @@ final class CommentController extends Controller
         }
         $id = (string) Str::ulid();
         DB::table('comments')->insert(['id' => $id, 'user_id' => $request->user()->id, ...$data, 'created_at' => now(), 'updated_at' => now()]);
+        $row = DB::table('comments')->find($id);
+        app(NotifyCommentActivity::class)->created($row, (string) $request->user()->name);
 
-        return ApiResponse::success($this->presentOne(DB::table('comments')->find($id), $request), status: 201);
+        return ApiResponse::success($this->presentOne($row, $request), status: 201);
     }
 
     public function update(string $comment, Request $request): JsonResponse

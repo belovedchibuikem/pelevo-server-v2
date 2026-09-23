@@ -2,12 +2,14 @@
 
 namespace Tests\Feature\Api;
 
+use App\Mail\PelevoNotice;
 use App\Models\CreatorProfile;
 use App\Models\Episode;
 use App\Models\Show;
 use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -51,6 +53,33 @@ final class CommunityAndLiveTest extends TestCase
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/comments?commentable_type=episode&commentable_id='.$episode->id)->assertOk()->assertJsonCount(0, 'data');
         $listed = $this->actingAs($user, 'sanctum')->postJson('/api/v1/comments', ['commentable_type' => 'episode', 'commentable_id' => $episode->id, 'body' => 'Again'])->assertCreated()->json('data');
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/comments?commentable_type=episode&commentable_id='.$episode->id.'&sort=newest')->assertOk()->assertJsonPath('data.0.id', $listed['id'])->assertJsonPath('data.0.author_name', $user->name)->assertJsonPath('data.0.like_count', 0)->assertJsonPath('data.0.replies_count', 0);
+    }
+
+    public function test_comments_and_replies_notify_owners_and_parent_authors(): void
+    {
+        Mail::fake();
+        $creatorUser = User::factory()->create(['name' => 'Host Ada']);
+        $listener = User::factory()->create(['name' => 'Listener Ben']);
+        $replier = User::factory()->create(['name' => 'Reply Chi']);
+        $optedOut = User::factory()->create(['name' => 'Quiet']);
+        $creator = CreatorProfile::create(['user_id' => $creatorUser->id, 'display_name' => 'Host Ada']);
+        $show = Show::create(['rss_url' => 'https://example.com/notify-comments.xml', 'title' => 'Morning Africa']);
+        $episode = Episode::create(['show_id' => $show->id, 'guid' => 'notify-ep', 'title' => 'Episode one', 'audio_url' => 'https://example.com/a.mp3']);
+        $claim = (string) Str::ulid();
+        DB::table('show_claims')->insert(['id' => $claim, 'show_id' => $show->id, 'creator_profile_id' => $creator->id, 'method' => 'email', 'state' => 'verified', 'verified_at' => now(), 'expires_at' => now()->addDay(), 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('verified_show_claims')->insert(['show_id' => $show->id, 'show_claim_id' => $claim, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('notification_preferences')->insert(['user_id' => $optedOut->id, 'new_episodes' => true, 'push_enabled' => true, 'timezone' => 'UTC', 'mobile_options' => json_encode(['email_enabled' => false, 'types' => ['mentions']], JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
+
+        $this->actingAs($listener, 'sanctum')->postJson('/api/v1/comments', ['commentable_type' => 'episode', 'commentable_id' => $episode->id, 'body' => 'Loved this episode.'])->assertCreated();
+        $this->assertDatabaseHas('notifications', ['user_id' => $creatorUser->id, 'type' => 'comment']);
+        $this->assertDatabaseMissing('notifications', ['user_id' => $listener->id]);
+        Mail::assertQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($creatorUser->email) && $mail->heading === 'New comment on Morning Africa');
+        Mail::assertNotQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($listener->email));
+
+        $parent = $this->actingAs($optedOut, 'sanctum')->postJson('/api/v1/comments', ['commentable_type' => 'episode', 'commentable_id' => $episode->id, 'body' => 'My take.'])->assertCreated()->json('data.id');
+        $this->actingAs($replier, 'sanctum')->postJson('/api/v1/comments', ['commentable_type' => 'episode', 'commentable_id' => $episode->id, 'parent_id' => $parent, 'body' => 'I agree with you.'])->assertCreated();
+        $this->assertDatabaseHas('notifications', ['user_id' => $optedOut->id, 'type' => 'reply']);
+        Mail::assertNotQueued(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo($optedOut->email));
     }
 
     public function test_creator_controls_valid_live_session_transitions(): void

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\ConfigurationVersion;
 use App\Support\ApiResponse;
+use App\Support\CreatorAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +26,7 @@ final class MeController extends Controller
             'onboarded' => $user->onboarded_at !== null,
             'interests' => DB::table('user_interests')->where('user_id', $user->id)->orderBy('interest')->pluck('interest')->values()->all(),
             'profile' => DB::table('user_profiles')->where('user_id', $user->id)->first(),
-            'capabilities' => ['creator_access' => $claimedShows > 0],
+            'capabilities' => CreatorAccess::capabilities($user->id),
             'stats' => [
                 'following' => DB::table('follows')->where('user_id', $user->id)->count(),
                 'followers' => DB::table('creator_followers')

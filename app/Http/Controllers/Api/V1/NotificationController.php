@@ -22,7 +22,7 @@ final class NotificationController extends Controller
         $unread = (clone $query)->whereNull('dismissed_at')->whereNull('read_at')->count();
         $items = $query->when($view !== 'history', fn ($q) => $q->whereNull('dismissed_at'))
             ->when($view === 'unread', fn ($q) => $q->whereNull('read_at'))
-            ->when($view === 'mentions', fn ($q) => $q->whereIn('type', ['mention', 'follow', 'reply']))
+            ->when($view === 'mentions', fn ($q) => $q->whereIn('type', ['mention', 'follow', 'reply', 'comment']))
             ->when($view === 'new_episode', fn ($q) => $q->where('type', 'new_episode'))
             ->when($view === 'broadcast', fn ($q) => $q->where('type', 'broadcast'))
             ->select('id', 'type', 'title', 'body', 'data', 'read_at', 'dismissed_at', 'created_at')

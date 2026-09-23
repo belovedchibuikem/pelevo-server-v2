@@ -19,7 +19,7 @@ final class SendNotificationDigests implements ShouldQueue
     private const INCLUDE_TYPES = [
         'new_episodes' => ['new_episode'],
         'downloads' => ['download'],
-        'mentions' => ['mention', 'follow', 'reply'],
+        'mentions' => ['mention', 'follow', 'reply', 'comment'],
         'promotions' => ['broadcast'],
     ];
 

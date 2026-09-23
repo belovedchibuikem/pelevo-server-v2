@@ -5,6 +5,7 @@ namespace App\Actions\Identity;
 use App\Models\Device;
 use App\Models\RefreshToken;
 use App\Models\User;
+use App\Support\CreatorAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -17,7 +18,9 @@ final class IssueMobileSession
         $plain = Str::random(80);
         RefreshToken::create(['user_id' => $user->id, 'device_id' => $device->id, 'token_hash' => hash('sha256', $plain), 'expires_at' => now()->addDays(30)]);
         $access = $user->createToken($device->id, ['mobile'], now()->addMinutes(15))->plainTextToken;
+        $payload = $user->toArray();
+        $payload['capabilities'] = CreatorAccess::capabilities($user->id);
 
-        return ['user' => $user, 'access_token' => $access, 'token_type' => 'Bearer', 'expires_in' => 900, 'refresh_token' => $plain, 'device_id' => $device->id];
+        return ['user' => $payload, 'access_token' => $access, 'token_type' => 'Bearer', 'expires_in' => 900, 'refresh_token' => $plain, 'device_id' => $device->id];
     }
 }
