@@ -56,5 +56,36 @@ final class SuperadminAccessTest extends TestCase
             ->withSession(['admin_mfa_verified_at' => now()->timestamp])
             ->get('/admin/finance')
             ->assertForbidden();
+        $this->assertTrue(AdminAccess::allows($admin, 'moderation.act'));
+        $this->actingAs($admin, 'admin')
+            ->withSession(['admin_mfa_verified_at' => now()->timestamp])
+            ->get('/admin/moderation')
+            ->assertOk();
+    }
+
+    public function test_operator_admins_receive_moderator_privilege(): void
+    {
+        $this->withoutVite();
+        $this->seed(DatabaseSeeder::class);
+        $admin = Admin::query()->create([
+            'name' => 'Finance cover',
+            'email' => 'finance@pelevo.test',
+            'password' => 'Admin-password-9!',
+            'status' => 'active',
+        ]);
+        AdminAccess::attachRole($admin->id, 'finance');
+
+        $this->assertTrue(AdminAccess::allows($admin, 'moderation.act'));
+        $this->assertTrue(
+            DB::table('admin_role')
+                ->join('roles', 'roles.id', '=', 'admin_role.role_id')
+                ->where('admin_role.admin_id', $admin->id)
+                ->where('roles.name', 'moderator')
+                ->exists(),
+        );
+        $this->actingAs($admin, 'admin')
+            ->withSession(['admin_mfa_verified_at' => now()->timestamp])
+            ->get('/admin/moderation')
+            ->assertOk();
     }
 }

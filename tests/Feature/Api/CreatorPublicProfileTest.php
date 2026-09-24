@@ -45,5 +45,30 @@ final class CreatorPublicProfileTest extends TestCase
             ->assertJsonPath('data.0.id', $reel)
             ->assertJsonPath('data.0.creator_name', 'Ada Creator')
             ->assertJsonMissing(['id' => $hidden]);
+
+        $this->actingAs($owner, 'sanctum')->getJson("/api/v1/creators/{$creator->id}")
+            ->assertOk()
+            ->assertJsonPath('data.is_self', true)
+            ->assertJsonPath('data.display_name', 'Ada Creator');
+    }
+
+    public function test_owner_can_open_their_own_inactive_profile(): void
+    {
+        $owner = User::factory()->create();
+        $stranger = User::factory()->create();
+        $creator = CreatorProfile::create([
+            'user_id' => $owner->id,
+            'display_name' => 'Quiet Creator',
+            'status' => 'inactive',
+        ]);
+
+        $this->actingAs($stranger, 'sanctum')
+            ->getJson("/api/v1/creators/{$creator->id}")
+            ->assertNotFound();
+        $this->actingAs($owner, 'sanctum')
+            ->getJson("/api/v1/creators/{$creator->id}")
+            ->assertOk()
+            ->assertJsonPath('data.is_self', true)
+            ->assertJsonPath('data.display_name', 'Quiet Creator');
     }
 }

@@ -32,11 +32,11 @@ final class AdminAccess
     public static function roleMatrix(): array
     {
         return [
-            'support' => ['users.view'],
+            'support' => ['users.view', 'moderation.act'],
             'moderator' => ['moderation.act'],
-            'catalog_editor' => ['catalog.write', 'claims.decide'],
-            'finance' => ['finance.view', 'finance.adjust', 'payouts.approve'],
-            'analyst' => [],
+            'catalog_editor' => ['catalog.write', 'claims.decide', 'moderation.act'],
+            'finance' => ['finance.view', 'finance.adjust', 'payouts.approve', 'moderation.act'],
+            'analyst' => ['moderation.act'],
             'superadmin' => self::PERMISSIONS,
         ];
     }
@@ -62,6 +62,24 @@ final class AdminAccess
             }
         }
         self::syncSuperadminPermissions();
+        self::grantModeratorToAllAdmins();
+    }
+
+    public static function grantModeratorToAllAdmins(): void
+    {
+        $moderatorId = DB::table('roles')->where('name', 'moderator')->value('id');
+        if (! $moderatorId) {
+            return;
+        }
+        foreach (DB::table('admins')->where('status', 'active')->pluck('id') as $adminId) {
+            if (! is_string($adminId) || $adminId === '') {
+                continue;
+            }
+            DB::table('admin_role')->insertOrIgnore([
+                'admin_id' => $adminId,
+                'role_id' => $moderatorId,
+            ]);
+        }
     }
 
     public static function syncSuperadminPermissions(): void
@@ -90,6 +108,15 @@ final class AdminAccess
         ]);
         if ($roleName === 'superadmin') {
             self::syncSuperadminPermissions();
+        }
+        if ($roleName !== 'moderator') {
+            $moderatorId = DB::table('roles')->where('name', 'moderator')->value('id');
+            if ($moderatorId) {
+                DB::table('admin_role')->insertOrIgnore([
+                    'admin_id' => $adminId,
+                    'role_id' => $moderatorId,
+                ]);
+            }
         }
     }
 

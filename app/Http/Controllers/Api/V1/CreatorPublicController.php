@@ -14,7 +14,9 @@ final class CreatorPublicController extends Controller
 {
     public function show(CreatorProfile $creator, Request $request): JsonResponse
     {
-        if ($creator->status !== 'active') {
+        $viewerId = $request->user()->id;
+        $isSelf = $creator->user_id === $viewerId;
+        if ($creator->status !== 'active' && ! $isSelf) {
             return ApiResponse::error('NOT_FOUND', 'Creator not found.', 404);
         }
         $user = DB::table('users')->where('id', $creator->user_id)->first();
@@ -26,7 +28,6 @@ final class CreatorPublicController extends Controller
             ->select('shows.id', 'shows.title', 'shows.author', 'shows.artwork_url')
             ->orderBy('shows.title')
             ->get();
-        $viewerId = $request->user()->id;
         $host = rtrim($request->getSchemeAndHttpHost(), '/');
         $avatar = is_string($profile?->avatar_url) ? $profile->avatar_url : null;
         if (is_string($avatar) && $avatar !== '' && ! str_starts_with($avatar, 'http')) {
@@ -40,7 +41,7 @@ final class CreatorPublicController extends Controller
             'bio' => is_string($profile?->bio) ? $profile->bio : null,
             'avatar_url' => $avatar,
             'verified' => $shows->isNotEmpty(),
-            'is_self' => $creator->user_id === $viewerId,
+            'is_self' => $isSelf,
             'following' => DB::table('creator_followers')->where('creator_profile_id', $creator->id)->where('user_id', $viewerId)->exists(),
             'stats' => [
                 'followers' => DB::table('creator_followers')->where('creator_profile_id', $creator->id)->count(),
@@ -59,7 +60,8 @@ final class CreatorPublicController extends Controller
 
     public function reels(CreatorProfile $creator, Request $request, PublishedReelPresenter $presenter): JsonResponse
     {
-        if ($creator->status !== 'active') {
+        $isSelf = $creator->user_id === $request->user()->id;
+        if ($creator->status !== 'active' && ! $isSelf) {
             return ApiResponse::error('NOT_FOUND', 'Creator not found.', 404);
         }
         $items = DB::table('reels')

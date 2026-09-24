@@ -366,3 +366,31 @@ button, input, select, textarea { font: inherit; }
 [data-theme='dark'] .pelevo-admin .border-amber-200 {
     border-color: #52441e !important;
 }
+[data-theme='dark'] .pelevo-admin .bg-red-50 {
+    background-color: rgb(127 29 29 / 0.28) !important;
+}
+[data-theme='dark'] .pelevo-admin .border-red-200,
+[data-theme='dark'] .pelevo-admin .border-red-300 {
+    border-color: rgb(127 29 29 / 0.7) !important;
+}
+[data-theme='dark'] .pelevo-admin .text-red-700 {
+    color: #fca5a5 !important;
+}
+[data-theme='dark'] .pelevo-admin .border-teal-200 {
+    border-color: #134e4a !important;
+}
+[data-theme='dark'] .pelevo-admin .hover\:text-teal-700:hover {
+    color: #5eead4 !important;
+}
+[data-theme='light'] .pelevo-admin .text-red-300 {
+    color: #b91c1c !important;
+}
+[data-theme='light'] .pelevo-admin .border-red-800 {
+    border-color: #fecaca !important;
+}
+[data-theme='light'] .pelevo-admin .bg-red-950\/20 {
+    background-color: #fef2f2 !important;
+}
+[data-theme='light'] .pelevo-admin .border-red-900\/60 {
+    border-color: #fecaca !important;
+}
