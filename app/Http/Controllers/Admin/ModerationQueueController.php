@@ -31,7 +31,7 @@ final class ModerationQueueController extends Controller
     public function page(): Response
     {
         return Inertia::render('Admin/Moderation', [
-            'reels' => DB::table('reels')->whereIn('state', ['processing', 'pending_review', 'failed'])->orderBy('updated_at')->limit(50)->get(),
+            'reels' => DB::table('reels')->whereIn('state', ['processing', 'pending_review', 'failed', 'published', 'rejected', 'removed', 'escalated'])->orderByDesc('updated_at')->limit(80)->get(),
             'reports' => DB::table('content_reports')->where('state', 'open')->orderBy('created_at')->limit(50)->get(),
             'live' => DB::table('live_sessions')->where('state', 'live')->orderByDesc('started_at')->limit(20)->get(),
             'appeals' => DB::table('appeals')->whereIn('state', ['open', 'escalated'])->orderBy('created_at')->limit(50)->get(),

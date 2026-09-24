@@ -20,18 +20,44 @@ final class ModerationController extends Controller
 
     public function reel(string $reel, Request $request): JsonResponse
     {
-        if ($request->input('action') === 'publish') {
+        $action = $request->input('action');
+        if (in_array($action, ['publish', 'restore'], true)) {
             $record = DB::table('reels')->where('id', $reel)->first();
             $mediaReady = DB::table('reel_media')->where('reel_id', $reel)->where('processing_state', 'ready')->exists();
-            if (! $record || $record->state !== 'pending_review' || $record->duration_ms === null || ! $mediaReady) {
+            if (! $record || $record->duration_ms === null || ! $mediaReady) {
                 return ApiResponse::error('MODERATION_HOLD', 'A completed server media probe is required.', 409);
             }
             if ($record->duration_ms > ReelLimits::maxDurationMs()) {
                 return ApiResponse::error('UPLOAD_TOO_LONG', ReelLimits::tooLongMessage(), 422);
             }
         }
+        if ($action === 'delete') {
+            return $this->deleteReel($reel, $request);
+        }
 
-        return $this->act('reels', $reel, $request, ['publish', 'reject', 'remove', 'strike', 'escalate'], fn (string $action): array => ['state' => ['publish' => 'published', 'reject' => 'rejected', 'remove' => 'removed', 'strike' => 'removed', 'escalate' => 'escalated'][$action], 'published_at' => $action === 'publish' ? now() : null]);
+        return $this->act('reels', $reel, $request, ['publish', 'restore', 'reject', 'remove', 'strike', 'escalate'], fn (string $action): array => ['state' => ['publish' => 'published', 'restore' => 'published', 'reject' => 'rejected', 'remove' => 'removed', 'strike' => 'removed', 'escalate' => 'escalated'][$action], 'published_at' => in_array($action, ['publish', 'restore'], true) ? now() : null]);
+    }
+
+    private function deleteReel(string $reel, Request $request): JsonResponse
+    {
+        $data = $request->validate(['action' => ['required', 'in:delete'], 'reason_code' => ['required', 'string', 'max:80'], 'reason' => ['required', 'string', 'min:10', 'max:2000'], 'user_facing_explanation' => ['nullable', 'string', 'max:1000']]);
+
+        return DB::transaction(function () use ($reel, $request, $data): JsonResponse {
+            $record = DB::table('reels')->where('id', $reel)->lockForUpdate()->first();
+            if (! $record) {
+                return ApiResponse::error('NOT_FOUND', 'Moderation subject not found.', 404);
+            }
+            DB::table('comments')->where('commentable_type', 'reel')->where('commentable_id', $reel)->whereNotNull('parent_id')->delete();
+            DB::table('comments')->where('commentable_type', 'reel')->where('commentable_id', $reel)->delete();
+            DB::table('reels')->where('id', $reel)->delete();
+            Cache::forget('reel:'.$reel);
+            $actionId = (string) Str::ulid();
+            $type = 'App\\Models\\Reel';
+            DB::table('moderation_actions')->insert(['id' => $actionId, 'admin_id' => auth('admin')->id(), 'subject_type' => $type, 'subject_id' => $reel, 'action' => 'delete', 'reason_code' => $data['reason_code'], 'reason' => $data['reason'], 'evidence' => json_encode(['before' => $record, 'user_facing_explanation' => $data['user_facing_explanation'] ?? null], JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
+            DB::table('audit_logs')->insert(['id' => (string) Str::ulid(), 'admin_id' => auth('admin')->id(), 'action' => 'reels.delete', 'subject_type' => $type, 'subject_id' => $reel, 'reason' => $data['reason'], 'before' => json_encode($record), 'after' => json_encode(['deleted' => true]), 'request_id' => $request->attributes->get('request_id'), 'ip_address' => $request->ip(), 'created_at' => now(), 'updated_at' => now()]);
+
+            return ApiResponse::success(['state' => ['deleted' => true], 'audit_reference' => $actionId]);
+        });
     }
 
     private function act(string $table, string $id, Request $request, array $allowed, \Closure $changes): JsonResponse

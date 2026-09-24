@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\ConnectedAccountController;
 use App\Http\Controllers\Api\V1\ContentReportController;
 use App\Http\Controllers\Api\V1\CreatorController;
 use App\Http\Controllers\Api\V1\CreatorFollowController;
+use App\Http\Controllers\Api\V1\CreatorPublicController;
 use App\Http\Controllers\Api\V1\CreatorPayoutSettingsController;
 use App\Http\Controllers\Api\V1\DownloadController;
 use App\Http\Controllers\Api\V1\EarnController;
@@ -163,6 +164,8 @@ Route::prefix('v1')->group(function (): void {
         Route::post('reports', [ContentReportController::class, 'store'])->middleware('not.sanctioned');
         Route::get('appeals', [AppealController::class, 'index']);
         Route::post('appeals', [AppealController::class, 'store'])->middleware('throttle:5,60');
+        Route::get('creators/{creator}', [CreatorPublicController::class, 'show']);
+        Route::get('creators/{creator}/reels', [CreatorPublicController::class, 'reels']);
         Route::post('creators/{creator}/follow', [CreatorFollowController::class, 'store']);
         Route::delete('creators/{creator}/follow', [CreatorFollowController::class, 'destroy']);
         Route::post('shows/{show}/claims', [CreatorController::class, 'claim']);

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\TranscodeReelMedia;
 use App\Models\CreatorProfile;
 use App\Support\ApiResponse;
+use App\Support\PublishedReelPresenter;
 use App\Support\ReelLimits;
 use App\Support\ReelPlayback;
 use Illuminate\Http\JsonResponse;
@@ -16,19 +17,19 @@ use Illuminate\Support\Str;
 
 final class ReelController extends Controller
 {
-    public function feed(Request $request): JsonResponse
+    public function feed(Request $request, PublishedReelPresenter $presenter): JsonResponse
     {
-        return $this->publishedFeed($request, 'recent');
+        return $this->publishedFeed($request, 'recent', $presenter);
     }
 
-    public function following(Request $request): JsonResponse
+    public function following(Request $request, PublishedReelPresenter $presenter): JsonResponse
     {
-        return $this->publishedFeed($request, 'following');
+        return $this->publishedFeed($request, 'following', $presenter);
     }
 
-    public function trending(Request $request): JsonResponse
+    public function trending(Request $request, PublishedReelPresenter $presenter): JsonResponse
     {
-        return $this->publishedFeed($request, 'trending');
+        return $this->publishedFeed($request, 'trending', $presenter);
     }
 
     public function store(Request $request): JsonResponse
@@ -74,14 +75,14 @@ final class ReelController extends Controller
         ], status: 201);
     }
 
-    public function show(string $reel, Request $request): JsonResponse
+    public function show(string $reel, Request $request, PublishedReelPresenter $presenter): JsonResponse
     {
         $row = DB::table('reels')->where('id', $reel)->where('state', 'published')->first();
 
         if (! $row) {
             return ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
         }
-        $presented = $this->presentPublishedReels([$row], $request->user()->id, $request);
+        $presented = $presenter->present([$row], $request->user()->id, $request);
         if ($presented === []) {
             return ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
         }
@@ -135,7 +136,7 @@ final class ReelController extends Controller
         return ApiResponse::success($row);
     }
 
-    private function publishedFeed(Request $request, string $mode): JsonResponse
+    private function publishedFeed(Request $request, string $mode, PublishedReelPresenter $presenter): JsonResponse
     {
         $query = DB::table('reels')->where('reels.state', 'published')->whereNotExists(function ($hidden) use ($request): void {
             $hidden->selectRaw('1')->from('reel_engagements')->whereColumn('reel_engagements.reel_id', 'reels.id')->where('reel_engagements.user_id', $request->user()->id)->where('reel_engagements.not_interested', true);
@@ -152,73 +153,6 @@ final class ReelController extends Controller
         }
         $items = $query->orderByDesc('reels.id')->cursorPaginate(min($request->integer('limit', 20), 50));
 
-        return ApiResponse::success($this->presentPublishedReels($items->items(), $request->user()->id, $request), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()]);
-    }
-
-    /**
-     * @param  iterable<int, object>  $rows
-     * @return list<array<string, mixed>>
-     */
-    private function presentPublishedReels(iterable $rows, string $userId, Request $request): array
-    {
-        $items = collect($rows)->values();
-        if ($items->isEmpty()) {
-            return [];
-        }
-        $ids = $items->pluck('id')->all();
-        $creatorIds = $items->pluck('creator_profile_id')->unique()->values()->all();
-        $episodeIds = $items->pluck('episode_id')->filter()->unique()->values()->all();
-        $creators = DB::table('creator_profiles')->leftJoin('users', 'users.id', '=', 'creator_profiles.user_id')->whereIn('creator_profiles.id', $creatorIds)->select('creator_profiles.id', 'creator_profiles.display_name', 'users.handle')->get()->keyBy('id');
-        $thumbnails = DB::table('reel_media')->whereIn('reel_id', $ids)->orderByDesc('created_at')->get(['reel_id', 'thumbnail_path', 'transcoded_path'])->unique('reel_id')->keyBy('reel_id');
-        $likes = DB::table('reel_engagements')->whereIn('reel_id', $ids)->where('liked', true)->selectRaw('reel_id, count(*) as aggregate')->groupBy('reel_id')->pluck('aggregate', 'reel_id');
-        $saves = DB::table('reel_engagements')->whereIn('reel_id', $ids)->where('saved', true)->selectRaw('reel_id, count(*) as aggregate')->groupBy('reel_id')->pluck('aggregate', 'reel_id');
-        $comments = DB::table('comments')->where('commentable_type', 'reel')->whereIn('commentable_id', $ids)->whereNull('hidden_at')->selectRaw('commentable_id, count(*) as aggregate')->groupBy('commentable_id')->pluck('aggregate', 'commentable_id');
-        $mine = DB::table('reel_engagements')->where('user_id', $userId)->whereIn('reel_id', $ids)->get()->keyBy('reel_id');
-        $following = DB::table('creator_followers')->where('user_id', $userId)->whereIn('creator_profile_id', $creatorIds)->pluck('creator_profile_id')->all();
-        $episodes = $episodeIds === [] ? collect() : DB::table('episodes')->whereIn('id', $episodeIds)->pluck('title', 'id');
-
-        return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $mine, $following, $episodes, $request): ?array {
-            $creator = $creators->get($row->creator_profile_id);
-            if (! is_string($creator?->display_name) || $creator->display_name === '') {
-                return null;
-            }
-            $engagement = $mine->get($row->id);
-            $media = $thumbnails->get($row->id);
-            $storedMedia = is_string($row->media_url) ? $row->media_url : null;
-            $storedThumb = is_string($media?->thumbnail_path) ? $media->thumbnail_path : null;
-            $hasFile = is_string($media?->transcoded_path) && $media->transcoded_path !== '';
-            $mediaUrl = $storedMedia !== null && $storedMedia !== ''
-                ? ReelPlayback::resolve($storedMedia, ReelPlayback::videoUrl((string) $row->id, $request))
-                : ($hasFile ? ReelPlayback::videoUrl((string) $row->id, $request) : null);
-            $thumbnail = $storedThumb !== null && $storedThumb !== ''
-                ? ReelPlayback::resolve($storedThumb, ReelPlayback::thumbnailUrl((string) $row->id, $request))
-                : null;
-
-            return [
-                'id' => (string) $row->id,
-                'caption' => $row->caption,
-                'media_url' => $mediaUrl,
-                'thumbnail_path' => $thumbnail,
-                'duration_ms' => $row->duration_ms === null ? null : (int) $row->duration_ms,
-                'published_at' => $row->published_at,
-                'creator_profile_id' => (string) $row->creator_profile_id,
-                'creator_name' => $creator->display_name,
-                'creator_handle' => is_string($creator->handle) ? $creator->handle : '',
-                'show_id' => $row->show_id,
-                'episode_id' => $row->episode_id,
-                'episode_title' => $row->episode_id ? ($episodes[$row->episode_id] ?? null) : null,
-                'likes_count' => (int) ($likes[$row->id] ?? 0),
-                'comments_count' => (int) ($comments[$row->id] ?? 0),
-                'saves_count' => (int) ($saves[$row->id] ?? 0),
-                'liked' => $this->flag($engagement?->liked),
-                'saved' => $this->flag($engagement?->saved),
-                'following' => in_array($row->creator_profile_id, $following, true),
-            ];
-        })->filter()->values()->all();
-    }
-
-    private function flag(mixed $value): bool
-    {
-        return $value === true || $value === 1 || $value === '1';
+        return ApiResponse::success($presenter->present($items->items(), $request->user()->id, $request), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()]);
     }
 }
