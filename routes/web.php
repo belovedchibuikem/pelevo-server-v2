@@ -160,6 +160,7 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
     Route::middleware('auth.admin')->group(function (): void {
         Route::get('step-up', [AuthController::class, 'stepUp'])->name('step-up');
         Route::post('step-up', [AuthController::class, 'verifyStepUp'])->middleware('throttle:auth');
+        Route::match(['get', 'post'], 'logout', [AuthController::class, 'destroy'])->name('logout');
     });
     Route::middleware(['auth.admin', 'admin.mfa'])->group(function (): void {
         Route::get('/', DashboardController::class)->name('dashboard');
@@ -192,6 +193,5 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
         Route::get('profile', [AdminAccountController::class, 'show'])->name('profile');
         Route::patch('profile', [AdminAccountController::class, 'update']);
         Route::delete('sessions/{session}', [AdminAccountController::class, 'revokeSession'])->name('sessions.destroy');
-        Route::post('logout', [AuthController::class, 'destroy'])->name('logout');
     });
 });

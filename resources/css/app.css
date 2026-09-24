@@ -97,6 +97,11 @@ button, input, select, textarea { font: inherit; }
     padding: 14px;
     margin-top: 14px;
 }
+.auth button.secondary {
+    background: transparent;
+    border: 1px solid var(--admin-border);
+    color: var(--admin-text);
+}
 .auth a { color: #0f766e; }
 
 [data-theme='dark'] .brand span,

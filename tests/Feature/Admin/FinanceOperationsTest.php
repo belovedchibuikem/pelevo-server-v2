@@ -82,7 +82,7 @@ final class FinanceOperationsTest extends TestCase
     public function test_finance_routes_require_permissions_and_fresh_mfa(): void
     {
         $admin = Admin::create(['name' => 'No Access', 'email' => 'none@example.com', 'password' => 'password', 'status' => 'active']);
-        $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->subHour()->timestamp])->get('/admin/finance')->assertForbidden();
+        $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->subHour()->timestamp])->get('/admin/finance')->assertRedirect('/admin/step-up');
         $this->actingAs($admin, 'admin')->withSession(['admin_mfa_verified_at' => now()->timestamp])->get('/admin/finance')->assertForbidden();
     }
 

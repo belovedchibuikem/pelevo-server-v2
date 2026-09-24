@@ -129,4 +129,48 @@ final class AdminAuthenticationTest extends TestCase
         DB::table('admin_sessions')->where('id', 'tracked-session')->update(['revoked_at' => now()]);
         $client->get('/admin')->assertRedirect('/admin/login')->assertSessionHasErrors('email');
     }
+
+    public function test_stale_mfa_sends_the_dashboard_to_step_up_and_still_allows_logout(): void
+    {
+        $this->withoutVite();
+        $admin = Admin::create([
+            'name' => 'Operator',
+            'email' => 'stale-mfa@example.com',
+            'password' => 'Admin-password-9!',
+            'mfa_secret' => 'JBSWY3DPEHPK3PXP',
+            'mfa_confirmed_at' => now(),
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->withSession(['admin_mfa_verified_at' => now()->subHour()->timestamp])
+            ->get('/admin')
+            ->assertRedirect('/admin/step-up');
+
+        $this->actingAs($admin, 'admin')
+            ->withSession(['admin_mfa_verified_at' => now()->subHour()->timestamp])
+            ->from('/admin/step-up')
+            ->post('/admin/logout')
+            ->assertRedirect('/admin/login');
+
+        $this->get('/admin')->assertRedirect('/admin/login');
+    }
+
+    public function test_get_logout_signs_out_when_mfa_has_expired(): void
+    {
+        $this->withoutVite();
+        $admin = Admin::create([
+            'name' => 'Operator',
+            'email' => 'get-logout@example.com',
+            'password' => 'Admin-password-9!',
+            'mfa_secret' => 'JBSWY3DPEHPK3PXP',
+            'mfa_confirmed_at' => now(),
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->withSession(['admin_mfa_verified_at' => now()->subHour()->timestamp])
+            ->get('/admin/logout')
+            ->assertRedirect('/admin/login');
+
+        $this->get('/admin')->assertRedirect('/admin/login');
+    }
 }

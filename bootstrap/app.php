@@ -38,7 +38,7 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
         $exceptions->render(function (Throwable $exception, Request $request) {
-            if ($request->is('admin/*') && $exception instanceof HttpExceptionInterface && in_array($exception->getStatusCode(), [403, 503], true)) {
+            if ($request->is('admin', 'admin/*') && $exception instanceof HttpExceptionInterface && in_array($exception->getStatusCode(), [403, 503], true)) {
                 $status = $exception->getStatusCode();
                 $response = Inertia::render('Admin/ErrorState', [
                     'status' => $status,

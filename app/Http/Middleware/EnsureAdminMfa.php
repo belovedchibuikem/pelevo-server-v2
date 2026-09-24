@@ -11,8 +11,14 @@ final class EnsureAdminMfa
     public function handle(Request $request, Closure $next): Response
     {
         $verifiedAt = $request->session()->get('admin_mfa_verified_at');
-        abort_unless(is_numeric($verifiedAt) && now()->timestamp - (int) $verifiedAt <= 1800, 403);
+        $valid = is_numeric($verifiedAt) && now()->timestamp - (int) $verifiedAt <= 1800;
+        if ($valid) {
+            return $next($request);
+        }
+        if ($request->is('api/*') || $request->expectsJson()) {
+            abort(403, 'Multi-factor authentication is required.');
+        }
 
-        return $next($request);
+        return redirect()->route('admin.step-up')->with('intended_url', $request->fullUrl());
     }
 }
