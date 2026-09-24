@@ -8,6 +8,7 @@ use App\Models\MediaUpload;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 
@@ -40,15 +41,25 @@ final class MediaUploadController extends Controller
 
     public function put(MediaUpload $upload, Request $request): JsonResponse
     {
+        $user = $request->user();
+        if ($user !== null && $upload->user_id !== $user->id) {
+            abort(404);
+        }
         if ($upload->state !== 'pending' || $upload->expires_at->isPast()) {
             return ApiResponse::error('UPLOAD_EXPIRED', 'The upload URL is no longer valid.', 410);
         }
-        $contentType = strtolower(trim(explode(';', (string) $request->header('Content-Type'))[0]));
-        if ($contentType !== strtolower($upload->expected_mime)) {
-            return ApiResponse::error('VALIDATION', 'The content type does not match the upload request.', 422, ['content_type' => ['Content type mismatch.']]);
+        $file = $request->file('file') ?? $request->file('content');
+        if ($file instanceof UploadedFile) {
+            if (! $file->isValid()) {
+                return ApiResponse::error('VALIDATION', 'The uploaded file could not be read.', 422, ['file' => ['Upload failed.']]);
+            }
+        } else {
+            $contentType = strtolower(trim(explode(';', (string) $request->header('Content-Type'))[0]));
+            if ($contentType !== strtolower($upload->expected_mime)) {
+                return ApiResponse::error('VALIDATION', 'The content type does not match the upload request.', 422, ['content_type' => ['Content type mismatch.']]);
+            }
         }
-        $stream = $request->getContent(true);
-        if (! is_resource($stream) || ! Storage::disk($upload->disk)->writeStream($upload->path, $stream)) {
+        if (! $this->writeUploadBody($upload, $request, $file instanceof UploadedFile ? $file : null)) {
             return ApiResponse::error('SERVICE_DEGRADED', 'The media could not be stored.', 503);
         }
         $size = Storage::disk($upload->disk)->size($upload->path);
@@ -79,28 +90,7 @@ final class MediaUploadController extends Controller
         if (! $disk->exists($upload->path) || $disk->size($upload->path) !== $upload->expected_size) {
             return ApiResponse::error('VALIDATION', 'The uploaded file size does not match the request.', 422, ['size' => ['File size mismatch.']]);
         }
-        $detectedMime = $disk->mimeType($upload->path);
-        if (! in_array($detectedMime, ['video/mp4', 'video/quicktime', 'video/webm', 'application/octet-stream'], true)) {
-            Storage::disk($upload->disk)->delete($upload->path);
-            $upload->update(['state' => 'rejected', 'failure_reason' => 'INVALID_MEDIA_TYPE']);
-
-            return ApiResponse::error('VALIDATION', 'The uploaded file is not a supported video.', 422, ['media' => ['Unsupported media type.']]);
-        }
-        $stream = $disk->readStream($upload->path);
-        if (! is_resource($stream)) {
-            return ApiResponse::error('SERVICE_DEGRADED', 'The media could not be read for verification.', 503);
-        }
-        $hash = hash_init('sha256');
-        hash_update_stream($hash, $stream);
-        fclose($stream);
-        $checksum = hash_final($hash);
-        if ($upload->checksum_sha256 && ! hash_equals($upload->checksum_sha256, $checksum)) {
-            Storage::disk($upload->disk)->delete($upload->path);
-            $upload->update(['state' => 'rejected', 'failure_reason' => 'CHECKSUM_MISMATCH']);
-
-            return ApiResponse::error('VALIDATION', 'The upload checksum does not match.', 422, ['checksum_sha256' => ['Checksum mismatch.']]);
-        }
-        $upload->update(['state' => 'queued', 'checksum_sha256' => $checksum]);
+        $upload->update(['state' => 'queued']);
         if (config('media.process_inline')) {
             ProcessReelUpload::dispatchSync($upload->id);
         } else {
@@ -108,5 +98,34 @@ final class MediaUploadController extends Controller
         }
 
         return ApiResponse::success(['id' => $upload->id, 'state' => 'queued'], status: 202);
+    }
+
+    private function writeUploadBody(MediaUpload $upload, Request $request, ?UploadedFile $file): bool
+    {
+        $disk = Storage::disk($upload->disk);
+        if ($file instanceof UploadedFile) {
+            $path = $file->getRealPath();
+            if (! is_string($path) || $path === '' || ! is_readable($path)) {
+                return false;
+            }
+            $stream = fopen($path, 'rb');
+            if (! is_resource($stream)) {
+                return false;
+            }
+            try {
+                return $disk->writeStream($upload->path, $stream);
+            } finally {
+                fclose($stream);
+            }
+        }
+
+        $stream = $request->getContent(true);
+        if (is_resource($stream)) {
+            return $disk->writeStream($upload->path, $stream);
+        }
+
+        $raw = $request->getContent();
+
+        return is_string($raw) && $raw !== '' && $disk->put($upload->path, $raw);
     }
 }

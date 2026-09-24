@@ -11,6 +11,7 @@ use App\Support\ApiResponse;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
+use Illuminate\Http\Exceptions\PostTooLargeException;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
@@ -59,6 +60,7 @@ return Application::configure(basePath: dirname(__DIR__))
                 $exception instanceof ModelNotFoundException => ApiResponse::error('NOT_FOUND', 'The requested resource was not found.', 404),
                 $exception instanceof HttpExceptionInterface && $exception->getStatusCode() === 403 => ApiResponse::error('FORBIDDEN', 'You are not allowed to perform this action.', 403),
                 $exception instanceof HttpExceptionInterface && $exception->getStatusCode() === 429 => ApiResponse::error('RATE_LIMITED', 'Too many requests.', 429),
+                $exception instanceof PostTooLargeException => ApiResponse::error('TOO_LARGE', 'That video is too large to upload. Try a shorter clip.', 413),
                 default => null,
             };
         });

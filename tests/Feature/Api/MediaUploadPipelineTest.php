@@ -10,6 +10,7 @@ use App\Models\CreatorProfile;
 use App\Models\MediaUpload;
 use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -153,5 +154,54 @@ final class MediaUploadPipelineTest extends TestCase
         $rewritten = 'http://10.0.2.2:8000'.$created['upload_url'];
 
         $this->call('PUT', $rewritten, [], [], [], ['CONTENT_TYPE' => 'video/mp4', 'HTTP_HOST' => '10.0.2.2:8000'], $bytes)->assertOk()->assertJsonPath('data.state', 'uploaded');
+    }
+
+    public function test_authenticated_multipart_upload_stores_reserved_bytes(): void
+    {
+        Storage::fake('local');
+        Queue::fake([ProcessReelUpload::class]);
+        $user = User::factory()->create();
+        $bytes = "\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+        $created = $this->actingAs($user, 'sanctum')->postJson('/api/v1/uploads', ['mime' => 'video/mp4', 'size' => strlen($bytes), 'checksum_sha256' => hash('sha256', $bytes)])->assertCreated()->json('data');
+        $tmp = tempnam(sys_get_temp_dir(), 'pelevo-reel-');
+        file_put_contents($tmp, $bytes);
+
+        $this->actingAs($user, 'sanctum')->post(
+            "/api/v1/uploads/{$created['id']}/content",
+            ['file' => new UploadedFile($tmp, 'clip.mp4', 'video/mp4', null, true)],
+        )->assertOk()->assertJsonPath('data.state', 'uploaded');
+        $this->actingAs($user, 'sanctum')->postJson("/api/v1/uploads/{$created['id']}/complete")->assertStatus(202);
+        Queue::assertPushed(ProcessReelUpload::class);
+
+        @unlink($tmp);
+    }
+
+    public function test_probe_rejects_checksum_mismatch(): void
+    {
+        Storage::fake('local');
+        $user = User::factory()->create();
+        Storage::disk('local')->put('reel-uploads/mismatch', 'video');
+        $upload = MediaUpload::create([
+            'user_id' => $user->id,
+            'disk' => 'local',
+            'path' => 'reel-uploads/mismatch',
+            'expected_mime' => 'video/mp4',
+            'expected_size' => 5,
+            'actual_size' => 5,
+            'checksum_sha256' => hash('sha256', 'other'),
+            'state' => 'queued',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        (new ProcessReelUpload($upload->id))->handle(new class implements MediaProbe
+        {
+            public function inspect(string $absolutePath): array
+            {
+                return ['duration_ms' => 3000, 'mime' => 'video/mp4', 'width' => 1080, 'height' => 1920];
+            }
+        });
+        $upload->refresh();
+        $this->assertSame('rejected', $upload->state);
+        $this->assertSame('CHECKSUM_MISMATCH', $upload->failure_reason);
     }
 }

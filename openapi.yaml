@@ -317,6 +317,15 @@ paths:
         '200': { description: Media bytes stored and size verified }
         '410': { description: Signed upload reservation expired }
         '422': { $ref: '#/components/responses/Validation' }
+    post:
+      operationId: postReelUploadContent
+      security: [{ bearerAuth: [] }]
+      description: Authenticated multipart or raw upload of reserved reel bytes. Prefer this from the mobile app so the request uses the session and does not depend on a signed host.
+      parameters: [{ $ref: '#/components/parameters/UploadId' }]
+      responses:
+        '200': { description: Media bytes stored and size verified }
+        '410': { description: Upload reservation expired }
+        '422': { $ref: '#/components/responses/Validation' }
   /reels:
     post:
       operationId: createReel

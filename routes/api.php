@@ -229,6 +229,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('uploads', [MediaUploadController::class, 'store'])->middleware('not.sanctioned');
         Route::get('uploads/{upload}', [MediaUploadController::class, 'show']);
         Route::post('uploads/{upload}/complete', [MediaUploadController::class, 'complete']);
+        Route::post('uploads/{upload}/content', [MediaUploadController::class, 'put'])->middleware('throttle:30,1');
         Route::put('reels/{reel}/engagement', [ReelEngagementController::class, 'update']);
         Route::post('reels/{reel}/like', [ReelEngagementController::class, 'like']);
         Route::delete('reels/{reel}/like', [ReelEngagementController::class, 'unlike']);

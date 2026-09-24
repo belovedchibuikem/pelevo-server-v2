@@ -40,6 +40,21 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
         }
         $upload->update(['state' => 'processing', 'failure_reason' => null]);
         $disk = Storage::disk($upload->disk);
+        if ($upload->checksum_sha256) {
+            $checksumStream = $disk->readStream($upload->path);
+            if (! is_resource($checksumStream)) {
+                throw new RuntimeException('Media could not be read for verification.');
+            }
+            $hash = hash_init('sha256');
+            hash_update_stream($hash, $checksumStream);
+            fclose($checksumStream);
+            if (! hash_equals($upload->checksum_sha256, hash_final($hash))) {
+                $disk->delete($upload->path);
+                $upload->update(['state' => 'rejected', 'failure_reason' => 'CHECKSUM_MISMATCH']);
+
+                return;
+            }
+        }
         $temporaryPath = null;
         if ($upload->disk === 'local') {
             $absolutePath = $disk->path($upload->path);
