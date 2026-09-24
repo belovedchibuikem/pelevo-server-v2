@@ -68,7 +68,11 @@ final class PhaseThreeOperationsTest extends TestCase
         $hidden = (string) Str::ulid();
         DB::table('reels')->insert(['id' => $hidden, 'creator_profile_id' => $creator->id, 'state' => 'published', 'duration_ms' => 8000, 'published_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
         DB::table('reel_engagements')->insert(['reel_id' => $hidden, 'user_id' => $viewer->id, 'liked' => false, 'saved' => false, 'not_interested' => true, 'created_at' => now(), 'updated_at' => now()]);
-        $this->actingAs($viewer, 'sanctum')->getJson('/api/v1/reels/for-you')->assertOk()->assertJsonPath('data.0.id', $reel)->assertJsonCount(1, 'data');
+        $this->actingAs($viewer, 'sanctum')->postJson("/api/v1/reels/{$reel}/save")->assertOk();
+        $this->actingAs($viewer, 'sanctum')->getJson('/api/v1/reels/saved')->assertOk()
+            ->assertJsonPath('data.0.id', $reel)
+            ->assertJsonPath('data.0.saved', true)
+            ->assertJsonPath('data.0.episode_title', 'Feed episode');
     }
 
     public function test_rejected_creator_content_can_be_appealed_once(): void

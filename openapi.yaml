@@ -448,6 +448,8 @@ paths:
     delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Show unfollowed } } }
   /reels/for-you:
     get: { security: [{ bearerAuth: [] }], description: Cursor-paginated published reel feed with creator, media, counts and viewer engagement. Compact view counts are not invented., responses: { '200': { description: Cursor-paginated published reel feed } } }
+  /reels/saved:
+    get: { security: [{ bearerAuth: [] }], description: Cursor-paginated published reels the caller saved., responses: { '200': { description: Saved published reels } } }
   /reels/{reel}:
     get: { security: [{ bearerAuth: [] }], description: Published reel public fields plus episode_links., responses: { '200': { description: Published reel and episode links }, '404': { description: Reel unavailable } } }
   /reels/{reel}/related-show:

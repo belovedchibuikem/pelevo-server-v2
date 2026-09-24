@@ -23,6 +23,7 @@ final class LibraryController extends Controller
 
         return ApiResponse::success([
             'saved_count' => DB::table('episode_saves')->where('user_id', $userId)->count(),
+            'saved_reels_count' => DB::table('reel_engagements')->where('user_id', $userId)->where('saved', true)->count(),
             'liked_count' => DB::table('episode_reactions')->where('user_id', $userId)->whereIn('reaction', ['like', 'love'])->count(),
             'shows_count' => DB::table('follows')->where('user_id', $userId)->count(),
             'downloads_count' => DB::table('downloads')->where('user_id', $userId)->count(),

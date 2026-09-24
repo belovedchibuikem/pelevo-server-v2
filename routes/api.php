@@ -217,6 +217,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('reels/for-you', [ReelController::class, 'feed']);
         Route::get('reels/following', [ReelController::class, 'following']);
         Route::get('reels/trending', [ReelController::class, 'trending']);
+        Route::get('reels/saved', [ReelController::class, 'saved']);
         Route::apiResource('reels/drafts', ReelDraftController::class)->parameters(['drafts' => 'id']);
         Route::get('reels/monetization', [ReelMonetizationController::class, 'show']);
         Route::post('reels/monetization/opt-in', [ReelMonetizationController::class, 'store']);

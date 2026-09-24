@@ -32,6 +32,11 @@ final class ReelController extends Controller
         return $this->publishedFeed($request, 'trending', $presenter);
     }
 
+    public function saved(Request $request, PublishedReelPresenter $presenter): JsonResponse
+    {
+        return $this->publishedFeed($request, 'saved', $presenter);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $creator = CreatorProfile::where('user_id', $request->user()->id)->first();
@@ -148,6 +153,12 @@ final class ReelController extends Controller
         }
         if ($mode === 'trending') {
             $query->leftJoin('reel_view_credits', 'reel_view_credits.reel_id', '=', 'reels.id')->select('reels.*')->selectRaw('count(reel_view_credits.reel_view_id) as qualified_views')->groupBy('reels.id')->orderByDesc('qualified_views');
+        } elseif ($mode === 'saved') {
+            $query->join('reel_engagements', function ($join) use ($request): void {
+                $join->on('reel_engagements.reel_id', '=', 'reels.id')
+                    ->where('reel_engagements.user_id', $request->user()->id)
+                    ->where('reel_engagements.saved', true);
+            })->select('reels.*')->orderByDesc('reel_engagements.updated_at');
         } else {
             $query->orderByDesc('reels.published_at');
         }

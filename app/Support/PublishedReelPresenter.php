@@ -20,6 +20,9 @@ final class PublishedReelPresenter
         $ids = $items->pluck('id')->all();
         $creatorIds = $items->pluck('creator_profile_id')->unique()->values()->all();
         $episodeIds = $items->pluck('episode_id')->filter()->unique()->values()->all();
+        $linkRows = DB::table('reel_episode_links')->whereIn('reel_id', $ids)->orderBy('created_at')->get(['reel_id', 'episode_id']);
+        $linkedByReel = $linkRows->groupBy('reel_id');
+        $episodeIds = collect($episodeIds)->merge($linkRows->pluck('episode_id'))->unique()->filter()->values()->all();
         $creators = DB::table('creator_profiles')
             ->leftJoin('users', 'users.id', '=', 'creator_profiles.user_id')
             ->leftJoin('user_profiles', 'user_profiles.user_id', '=', 'users.id')
@@ -33,9 +36,11 @@ final class PublishedReelPresenter
         $comments = DB::table('comments')->where('commentable_type', 'reel')->whereIn('commentable_id', $ids)->whereNull('hidden_at')->selectRaw('commentable_id, count(*) as aggregate')->groupBy('commentable_id')->pluck('aggregate', 'commentable_id');
         $mine = DB::table('reel_engagements')->where('user_id', $userId)->whereIn('reel_id', $ids)->get()->keyBy('reel_id');
         $following = DB::table('creator_followers')->where('user_id', $userId)->whereIn('creator_profile_id', $creatorIds)->pluck('creator_profile_id')->all();
-        $episodes = $episodeIds === [] ? collect() : DB::table('episodes')->whereIn('id', $episodeIds)->pluck('title', 'id');
+        $episodes = $episodeIds === []
+            ? collect()
+            : DB::table('episodes')->whereIn('id', $episodeIds)->get(['id', 'title', 'show_id'])->keyBy('id');
 
-        return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $mine, $following, $episodes, $request): ?array {
+        return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $mine, $following, $episodes, $linkedByReel, $request): ?array {
             $creator = $creators->get($row->creator_profile_id);
             if (! is_string($creator?->display_name) || $creator->display_name === '') {
                 return null;
@@ -51,6 +56,10 @@ final class PublishedReelPresenter
             $thumbnail = $storedThumb !== null && $storedThumb !== ''
                 ? ReelPlayback::resolve($storedThumb, ReelPlayback::thumbnailUrl((string) $row->id, $request))
                 : null;
+            $resolvedEpisodeId = is_string($row->episode_id) && $row->episode_id !== ''
+                ? $row->episode_id
+                : $linkedByReel->get($row->id)?->first()?->episode_id;
+            $episode = $resolvedEpisodeId ? $episodes->get($resolvedEpisodeId) : null;
 
             return [
                 'id' => (string) $row->id,
@@ -63,9 +72,9 @@ final class PublishedReelPresenter
                 'creator_name' => $creator->display_name,
                 'creator_handle' => is_string($creator->handle) ? $creator->handle : '',
                 'creator_avatar_url' => $this->publicUrl(is_string($creator->avatar_url) ? $creator->avatar_url : null, $request),
-                'show_id' => $row->show_id,
-                'episode_id' => $row->episode_id,
-                'episode_title' => $row->episode_id ? ($episodes[$row->episode_id] ?? null) : null,
+                'show_id' => $row->show_id ?: ($episode?->show_id),
+                'episode_id' => $resolvedEpisodeId,
+                'episode_title' => $episode?->title,
                 'likes_count' => (int) ($likes[$row->id] ?? 0),
                 'comments_count' => (int) ($comments[$row->id] ?? 0),
                 'saves_count' => (int) ($saves[$row->id] ?? 0),
