@@ -1,6 +1,7 @@
 import { Head, Link, router } from '@inertiajs/react';
 import { useState } from 'react';
 import RecordFinancialActions from '../../components/admin/RecordFinancialActions';
+import RecordReelActions from '../../components/admin/RecordReelActions';
 
 type RecordData = Record<string, string | number | null>;
 type Section = { label: string; rows: RecordData[]; total: number; next?: string | null; previous?: string | null };
@@ -18,6 +19,7 @@ export default function CanonicalDetail({ entity, heading, parent, record, secti
     <header className="my-6 flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-widest text-teal-300">{heading}</p><h1 className="mt-2 break-words text-3xl font-semibold">{record.title ?? record.display_name ?? record.caption ?? record.reference ?? heading}</h1><p className="mt-3 font-mono text-xs text-slate-400">{record.id}</p></div><div className="flex items-center gap-3"><span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs uppercase text-teal-300">{record.state ?? record.status ?? record.availability ?? 'Recorded'}</span><button onClick={() => router.reload()} className="rounded-lg border border-slate-700 px-4 py-2 text-sm">Refresh</button></div></header>
     <p className="mb-5 text-xs text-slate-400">Updated {new Date(freshAt).toLocaleString()}{financial && ' · Immutable financial evidence; amounts retain their recorded currency or coin unit.'}</p>
     {financial && <RecordFinancialActions key={String(record.id)} entity={entity} record={record} reversed={Boolean(sections.find(section => section.label === 'Reversals')?.total)} />}
+    {entity === 'reels' && <RecordReelActions key={String(record.id)} record={record} />}
     {mediaUrl && <section className="mb-5 rounded-xl border border-slate-800 p-4"><h2 className="mb-3 font-semibold">Media preview</h2>{entity === 'reels' ? <video controls preload="none" src={mediaUrl} className="max-h-96 max-w-full rounded-lg"><track kind="captions" label="Captions unavailable" /></video> : <audio controls preload="none" src={mediaUrl} className="max-w-full" />}<p className="mt-2 text-xs text-slate-400">Playback starts only when you press play.</p></section>}
     {financial && <p className="mb-4 rounded-xl border border-amber-900 bg-amber-950/20 p-4 text-sm text-amber-200 md:hidden">Use a desktop or tablet to review ledger entries and approvals together before taking a financial action.</p>}
     <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)]"><nav aria-label="Record sections" className="flex gap-2 overflow-x-auto lg:block lg:space-y-1">{['Overview', ...sections.map(section => section.label)].map(tab => <button key={tab} aria-current={active === tab ? 'page' : undefined} onClick={() => change(tab)} className={`whitespace-nowrap rounded-lg px-4 py-3 text-left text-sm lg:block lg:w-full ${active === tab ? 'bg-teal-950 text-teal-200' : 'text-slate-400 hover:bg-slate-900'}`}>{tab}</button>)}</nav>

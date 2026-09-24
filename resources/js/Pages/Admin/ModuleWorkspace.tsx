@@ -36,6 +36,7 @@ export default function ModuleWorkspace({ module, title, description, views, act
         </Link>)}
       </section>
       <GovernedWorkspaceAction module={module} view={activeView} />
+      {module === 'reels-live' && <Link href="/admin/moderation" className="mt-6 inline-block rounded-lg bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950">Open reel moderation actions</Link>}
       {module === 'communications' && <Link href="/admin/communications/compose" className="mt-6 inline-block rounded-lg bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950">Open notification composer & delivery overview</Link>}
       {module === 'support' && <Link href="/admin/support?view=contact" className="mt-6 inline-block rounded-lg bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950">Open website contact messages</Link>}
       {module === 'settings' && <div className="mt-6 flex flex-wrap gap-3">

@@ -15,6 +15,7 @@ const navigation: NavItem[] = [
   { label: 'Creators & Claims', href: '/admin/creators', group: 'Operate', keywords: 'studios verification disputes monetization', permission: 'claims.decide' },
   { label: 'Claim Queue', href: '/admin/claims', group: 'Operate', keywords: 'review verification rss ownership', permission: 'claims.decide' },
   { label: 'Reels & Live', href: '/admin/reels-live', group: 'Operate', keywords: 'processing reports appeals livestream', permission: 'moderation.act' },
+  { label: 'Reel Moderation', href: '/admin/moderation', group: 'Operate', keywords: 'approve publish unpublish reject strike delete reels', permission: 'moderation.act' },
   { label: 'Community', href: '/admin/community', group: 'Operate', keywords: 'comments reports sanctions sla', permission: 'moderation.act' },
   { label: 'Finance', href: '/admin/finance', group: 'Operate', keywords: 'ledger iap earn withdrawals payouts reconciliation', permission: 'finance.view' },
   { label: 'Communications', href: '/admin/communications', group: 'Engage', keywords: 'notifications audiences templates delivery', permission: 'broadcast.send' },
