@@ -43,7 +43,7 @@ final class ReelController extends Controller
         if (! $creator) {
             return ApiResponse::error('CLAIM_REQUIRED', 'Creator access is required.', 403);
         }
-        $data = $request->validate(['draft_id' => ['nullable', 'exists:reels,id'], 'upload_id' => ['required', 'exists:media_uploads,id'], 'caption' => ['nullable', 'string', 'max:400'], 'show_id' => ['nullable', 'exists:shows,id'], 'episode_id' => ['nullable', 'exists:episodes,id']]);
+        $data = $request->validate(['draft_id' => ['nullable', 'exists:reels,id'], 'upload_id' => ['required', 'exists:media_uploads,id'], 'title' => ['nullable', 'string', 'max:120'], 'caption' => ['nullable', 'string', 'max:400'], 'show_id' => ['nullable', 'exists:shows,id'], 'episode_id' => ['nullable', 'exists:episodes,id']]);
         $created = DB::transaction(function () use ($creator, $request, $data): array {
             $upload = DB::table('media_uploads')->where('id', $data['upload_id'])->where('user_id', $request->user()->id)->lockForUpdate()->first();
             if (! $upload || $upload->state !== 'processed' || DB::table('reel_media')->where('media_upload_id', $data['upload_id'])->exists()) {

@@ -21,7 +21,7 @@ final class PhaseThreeGateTest extends TestCase
         CreatorProfile::create(['user_id' => $creatorUser->id, 'display_name' => 'Creator']);
         $other = User::factory()->create();
         CreatorProfile::create(['user_id' => $other->id, 'display_name' => 'Other']);
-        $draft = $this->actingAs($creatorUser, 'sanctum')->postJson('/api/v1/reels/drafts', ['caption' => 'First'])->assertCreated()->json('data');
+        $draft = $this->actingAs($creatorUser, 'sanctum')->postJson('/api/v1/reels/drafts', ['title' => 'Morning clip', 'caption' => 'First'])->assertCreated()->assertJsonPath('data.title', 'Morning clip')->assertJsonPath('data.caption', 'First')->json('data');
         $this->actingAs($creatorUser, 'sanctum')->putJson("/api/v1/reels/drafts/{$draft['id']}", ['caption' => 'Updated'])->assertOk()->assertJsonPath('data.caption', 'Updated');
         $this->actingAs($other, 'sanctum')->getJson("/api/v1/reels/drafts/{$draft['id']}")->assertNotFound();
         $this->actingAs($creatorUser, 'sanctum')->deleteJson("/api/v1/reels/drafts/{$draft['id']}")->assertOk();

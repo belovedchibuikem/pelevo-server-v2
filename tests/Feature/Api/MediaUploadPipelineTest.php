@@ -12,6 +12,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -203,5 +204,119 @@ final class MediaUploadPipelineTest extends TestCase
         $upload->refresh();
         $this->assertSame('rejected', $upload->state);
         $this->assertSame('CHECKSUM_MISMATCH', $upload->failure_reason);
+    }
+
+    public function test_production_mux_reservation_returns_a_direct_upload_url(): void
+    {
+        config([
+            'media.direct_upload' => 'mux',
+            'services.mux.token_id' => 'mux-id',
+            'services.mux.token_secret' => 'mux-secret',
+        ]);
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if ($request->method() === 'POST' && str_ends_with($request->url(), '/video/v1/uploads')) {
+                return Http::response(['data' => ['id' => 'mux_upload_1', 'url' => 'https://storage.googleapis.com/mux-uploads/abc']], 201);
+            }
+
+            return Http::response(['error' => $request->url()], 500);
+        });
+        $user = User::factory()->create();
+        $created = $this->actingAs($user, 'sanctum')->postJson('/api/v1/uploads', ['mime' => 'video/mp4', 'size' => 2048])->assertCreated()->json('data');
+
+        $this->assertSame('mux', $created['provider']);
+        $this->assertSame('https://storage.googleapis.com/mux-uploads/abc', $created['upload_url']);
+        $this->assertSame('application/octet-stream', $created['upload_headers']['Content-Type']);
+        $this->assertDatabaseHas('media_uploads', ['id' => $created['id'], 'disk' => 'mux', 'path' => 'mux_upload_1']);
+    }
+
+    public function test_mux_complete_waits_for_the_asset_and_marks_the_upload_processed(): void
+    {
+        config([
+            'media.direct_upload' => 'mux',
+            'media.process_inline' => false,
+            'services.mux.token_id' => 'mux-id',
+            'services.mux.token_secret' => 'mux-secret',
+        ]);
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if (str_contains($request->url(), '/video/v1/uploads/mux_upload_1')) {
+                return Http::response(['data' => ['status' => 'asset_created', 'asset_id' => 'asset1']], 200);
+            }
+            if (str_contains($request->url(), '/video/v1/assets/asset1')) {
+                return Http::response(['data' => [
+                    'status' => 'ready',
+                    'duration' => 8.25,
+                    'playback_ids' => [['id' => 'play1']],
+                    'tracks' => [['type' => 'video', 'max_width' => 1080, 'max_height' => 1920]],
+                ]], 200);
+            }
+
+            return Http::response(['error' => $request->url()], 500);
+        });
+        Queue::fake([ProcessReelUpload::class]);
+        $user = User::factory()->create();
+        $upload = MediaUpload::create([
+            'user_id' => $user->id,
+            'disk' => 'mux',
+            'path' => 'mux_upload_1',
+            'expected_mime' => 'video/mp4',
+            'expected_size' => 2048,
+            'state' => 'pending',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $this->actingAs($user, 'sanctum')->postJson("/api/v1/uploads/{$upload->id}/complete")->assertStatus(202)->assertJsonPath('data.state', 'queued');
+        Queue::assertPushed(ProcessReelUpload::class, fn (ProcessReelUpload $job): bool => $job->uploadId === $upload->id);
+
+        (new ProcessReelUpload($upload->id))->handle(new class implements MediaProbe
+        {
+            public function inspect(string $absolutePath): array
+            {
+                throw new \RuntimeException('Mux uploads must not be probed from disk.');
+            }
+        });
+        $upload->refresh();
+        $this->assertSame('processed', $upload->state);
+        $this->assertSame(8250, $upload->probe['duration_ms']);
+        $this->assertSame('https://stream.mux.com/play1.m3u8', $upload->probe['playback_url']);
+    }
+
+    public function test_mux_transcode_publishes_without_ffmpeg(): void
+    {
+        $user = User::factory()->create();
+        $creator = CreatorProfile::create(['user_id' => $user->id, 'display_name' => 'Mux Creator']);
+        $upload = MediaUpload::create([
+            'user_id' => $user->id,
+            'disk' => 'mux',
+            'path' => 'mux_upload_1',
+            'expected_mime' => 'video/mp4',
+            'expected_size' => 2048,
+            'actual_size' => 2048,
+            'state' => 'processed',
+            'probe' => [
+                'duration_ms' => 8000,
+                'mime' => 'video/mp4',
+                'width' => 1080,
+                'height' => 1920,
+                'playback_url' => 'https://stream.mux.com/play1.m3u8',
+                'thumbnail_url' => 'https://image.mux.com/play1/thumbnail.jpg?time=1',
+                'mux_asset_id' => 'asset1',
+            ],
+            'expires_at' => now()->addHour(),
+            'processed_at' => now(),
+        ]);
+        $reel = (string) Str::ulid();
+        DB::table('reels')->insert(['id' => $reel, 'creator_profile_id' => $creator->id, 'state' => 'processing', 'duration_ms' => 8000, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $reel, 'media_upload_id' => $upload->id, 'mime' => 'video/mp4', 'duration_ms' => 8000, 'processing_state' => 'processing', 'created_at' => now(), 'updated_at' => now()]);
+        $transcoder = new class implements MediaTranscoder
+        {
+            public function transcode(string $source, string $outputDirectory, ?int $maxDurationMs = null): array
+            {
+                throw new \RuntimeException('Mux reels must not be transcoded with FFmpeg.');
+            }
+        };
+
+        (new TranscodeReelMedia($reel))->handle($transcoder);
+        $this->assertDatabaseHas('reels', ['id' => $reel, 'state' => 'published', 'media_url' => 'https://stream.mux.com/play1.m3u8']);
+        $this->assertDatabaseHas('reel_media', ['reel_id' => $reel, 'processing_state' => 'ready', 'transcoded_path' => 'mux/asset1']);
     }
 }

@@ -5,6 +5,9 @@ return [
     'max_reel_bytes' => (int) env('MEDIA_MAX_REEL_BYTES', 209715200),
     'max_reel_duration_ms' => (int) env('MEDIA_MAX_REEL_DURATION_MS', 180000),
     'upload_url_ttl_minutes' => (int) env('MEDIA_UPLOAD_URL_TTL_MINUTES', 15),
+    // origin = phone → pelevo.com (Cloudflare 100s limit). mux = phone → Mux GCS.
+    // auto uses Mux in production when credentials exist.
+    'direct_upload' => env('MEDIA_DIRECT_UPLOAD', 'auto'),
     'process_inline' => filter_var(env('MEDIA_PROCESS_INLINE', env('APP_ENV') === 'local'), FILTER_VALIDATE_BOOL),
     'ffprobe_binary' => env('FFPROBE_BINARY', 'ffprobe'),
     'ffmpeg_binary' => env('FFMPEG_BINARY', 'ffmpeg'),

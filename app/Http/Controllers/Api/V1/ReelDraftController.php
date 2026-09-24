@@ -90,7 +90,7 @@ final class ReelDraftController extends Controller
 
     private function payload(Request $request, CreatorProfile $creator): array|JsonResponse
     {
-        $data = $request->validate(['caption' => ['nullable', 'string', 'max:400'], 'show_id' => ['nullable', 'exists:shows,id'], 'episode_id' => ['nullable', 'exists:episodes,id']]);
+        $data = $request->validate(['title' => ['nullable', 'string', 'max:120'], 'caption' => ['nullable', 'string', 'max:400'], 'show_id' => ['nullable', 'exists:shows,id'], 'episode_id' => ['nullable', 'exists:episodes,id']]);
         if (! empty($data['episode_id'])) {
             $showId = DB::table('episodes')->join('verified_show_claims', 'verified_show_claims.show_id', '=', 'episodes.show_id')->join('show_claims', 'show_claims.id', '=', 'verified_show_claims.show_claim_id')->where('episodes.id', $data['episode_id'])->where('show_claims.creator_profile_id', $creator->id)->value('episodes.show_id');
             if (! $showId) {
@@ -113,6 +113,7 @@ final class ReelDraftController extends Controller
 
         return [
             'id' => (string) $row->id,
+            'title' => $row->title ?? null,
             'caption' => $row->caption,
             'state' => $row->state,
             'show_id' => $row->show_id,

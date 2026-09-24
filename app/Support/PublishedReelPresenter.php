@@ -63,6 +63,7 @@ final class PublishedReelPresenter
 
             return [
                 'id' => (string) $row->id,
+                'title' => $row->title ?? null,
                 'caption' => $row->caption,
                 'media_url' => $mediaUrl,
                 'thumbnail_path' => $thumbnail,

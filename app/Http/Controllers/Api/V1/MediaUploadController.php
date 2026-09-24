@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessReelUpload;
 use App\Models\MediaUpload;
+use App\Services\MuxMedia;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,12 +32,30 @@ final class MediaUploadController extends Controller
             'state' => 'pending',
             'expires_at' => now()->addMinutes(config('media.upload_url_ttl_minutes')),
         ]);
-        $upload->update(['path' => 'reel-uploads/'.$request->user()->id.'/'.$upload->id]);
-        $directUpload = $upload->disk === 'local'
-            ? ['url' => URL::temporarySignedRoute('api.uploads.put', $upload->expires_at, ['upload' => $upload->id], absolute: false), 'headers' => ['Content-Type' => $upload->expected_mime]]
-            : Storage::disk($upload->disk)->temporaryUploadUrl($upload->path, $upload->expires_at, ['ContentType' => $upload->expected_mime]);
+        $mux = $this->shouldUseMuxDirect()
+            ? app(MuxMedia::class)->createDirectUpload($upload->id)
+            : null;
+        if (is_array($mux)) {
+            $upload->update([
+                'disk' => 'mux',
+                'path' => $mux['upload_id'],
+            ]);
+            $directUpload = ['url' => $mux['url'], 'headers' => $mux['headers']];
+        } else {
+            $upload->update(['path' => 'reel-uploads/'.$request->user()->id.'/'.$upload->id]);
+            $directUpload = $upload->disk === 'local'
+                ? ['url' => URL::temporarySignedRoute('api.uploads.put', $upload->expires_at, ['upload' => $upload->id], absolute: false), 'headers' => ['Content-Type' => $upload->expected_mime]]
+                : Storage::disk($upload->disk)->temporaryUploadUrl($upload->path, $upload->expires_at, ['ContentType' => $upload->expected_mime]);
+        }
 
-        return ApiResponse::success(['id' => $upload->id, 'state' => $upload->state, 'upload_url' => $directUpload['url'], 'upload_headers' => $directUpload['headers'], 'expires_at' => $upload->expires_at], status: 201);
+        return ApiResponse::success([
+            'id' => $upload->id,
+            'state' => $upload->state,
+            'provider' => $upload->disk === 'mux' ? 'mux' : 'origin',
+            'upload_url' => $directUpload['url'],
+            'upload_headers' => $directUpload['headers'],
+            'expires_at' => $upload->expires_at,
+        ], status: 201);
     }
 
     public function put(MediaUpload $upload, Request $request): JsonResponse
@@ -44,6 +63,9 @@ final class MediaUploadController extends Controller
         $user = $request->user();
         if ($user !== null && $upload->user_id !== $user->id) {
             abort(404);
+        }
+        if ($upload->disk === 'mux') {
+            return ApiResponse::error('VALIDATION', 'This upload must be sent directly to Mux.', 422);
         }
         if ($upload->state !== 'pending' || $upload->expires_at->isPast()) {
             return ApiResponse::error('UPLOAD_EXPIRED', 'The upload URL is no longer valid.', 410);
@@ -83,12 +105,25 @@ final class MediaUploadController extends Controller
     public function complete(MediaUpload $upload, Request $request): JsonResponse
     {
         abort_unless($upload->user_id === $request->user()->id, 404);
-        if ($upload->state !== 'uploaded') {
-            return ApiResponse::error('CONFLICT', 'The upload is not ready to process.', 409);
+        if ($upload->state === 'queued' || $upload->state === 'processing' || $upload->state === 'processed') {
+            return ApiResponse::success(['id' => $upload->id, 'state' => $upload->state], status: 202);
         }
-        $disk = Storage::disk($upload->disk);
-        if (! $disk->exists($upload->path) || $disk->size($upload->path) !== $upload->expected_size) {
-            return ApiResponse::error('VALIDATION', 'The uploaded file size does not match the request.', 422, ['size' => ['File size mismatch.']]);
+        if ($upload->disk === 'mux') {
+            if (! in_array($upload->state, ['pending', 'uploaded'], true) || $upload->expires_at->isPast()) {
+                return ApiResponse::error('UPLOAD_EXPIRED', 'The upload URL is no longer valid.', 410);
+            }
+            $upload->update([
+                'state' => 'uploaded',
+                'actual_size' => $upload->actual_size ?: $upload->expected_size,
+                'uploaded_at' => $upload->uploaded_at ?? now(),
+            ]);
+        } elseif ($upload->state !== 'uploaded') {
+            return ApiResponse::error('CONFLICT', 'The upload is not ready to process.', 409);
+        } else {
+            $disk = Storage::disk($upload->disk);
+            if (! $disk->exists($upload->path) || $disk->size($upload->path) !== $upload->expected_size) {
+                return ApiResponse::error('VALIDATION', 'The uploaded file size does not match the request.', 422, ['size' => ['File size mismatch.']]);
+            }
         }
         $upload->update(['state' => 'queued']);
         if (config('media.process_inline')) {
@@ -98,6 +133,19 @@ final class MediaUploadController extends Controller
         }
 
         return ApiResponse::success(['id' => $upload->id, 'state' => 'queued'], status: 202);
+    }
+
+    private function shouldUseMuxDirect(): bool
+    {
+        $mode = strtolower((string) config('media.direct_upload', 'auto'));
+        if (in_array($mode, ['origin', 's3', 'local', 'off', 'false', '0'], true)) {
+            return false;
+        }
+        if ($mode === 'mux') {
+            return true;
+        }
+
+        return app()->isProduction();
     }
 
     private function writeUploadBody(MediaUpload $upload, Request $request, ?UploadedFile $file): bool

@@ -246,6 +246,7 @@ final class StudioWorkspaceController extends Controller
 
         return [
             'id' => $id,
+            'title' => $row->title ?? null,
             'caption' => $row->caption,
             'state' => $row->state,
             'duration_ms' => $row->duration_ms === null ? null : (int) $row->duration_ms,
@@ -265,6 +266,6 @@ final class StudioWorkspaceController extends Controller
 
     private function reelColumns(): array
     {
-        return ['reels.id', 'reels.caption', 'reels.state', 'reels.duration_ms', 'reels.published_at', 'reels.episode_id', 'reels.show_id', 'reels.media_url', DB::raw('coalesce(episodes.title, (select episodes.title from reel_episode_links join episodes on episodes.id = reel_episode_links.episode_id where reel_episode_links.reel_id = reels.id limit 1)) as episode_title'), DB::raw('(select thumbnail_path from reel_media where reel_media.reel_id = reels.id order by reel_media.created_at desc limit 1) as thumbnail_path'), DB::raw('(reels.episode_id is not null or exists (select 1 from reel_episode_links where reel_episode_links.reel_id = reels.id)) as linked')];
+        return ['reels.id', 'reels.title', 'reels.caption', 'reels.state', 'reels.duration_ms', 'reels.published_at', 'reels.episode_id', 'reels.show_id', 'reels.media_url', DB::raw('coalesce(episodes.title, (select episodes.title from reel_episode_links join episodes on episodes.id = reel_episode_links.episode_id where reel_episode_links.reel_id = reels.id limit 1)) as episode_title'), DB::raw('(select thumbnail_path from reel_media where reel_media.reel_id = reels.id order by reel_media.created_at desc limit 1) as thumbnail_path'), DB::raw('(reels.episode_id is not null or exists (select 1 from reel_episode_links where reel_episode_links.reel_id = reels.id)) as linked')];
     }
 }

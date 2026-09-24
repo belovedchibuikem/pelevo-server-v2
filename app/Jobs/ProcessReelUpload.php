@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Contracts\MediaProbe;
 use App\Models\MediaUpload;
+use App\Services\MuxMedia;
 use App\Support\ReelLimits;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -18,7 +19,7 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 180;
+    public int $timeout = 360;
 
     public array $backoff = [30, 120];
 
@@ -39,6 +40,25 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
             return;
         }
         $upload->update(['state' => 'processing', 'failure_reason' => null]);
+        if ($upload->disk === 'mux') {
+            $ready = app(MuxMedia::class)->waitForDirectUpload($upload->path);
+            if ($ready === null) {
+                throw new RuntimeException('Mux did not finish processing the reel.');
+            }
+            $originalMs = (int) ($ready['duration_ms'] ?? 0);
+            $truncated = $originalMs > ReelLimits::maxDurationMs();
+            $ready['original_duration_ms'] = $originalMs;
+            $ready['truncated'] = $truncated;
+            $ready['duration_ms'] = ReelLimits::cappedDurationMs($originalMs);
+            $upload->update([
+                'state' => 'processed',
+                'probe' => $ready,
+                'failure_reason' => null,
+                'processed_at' => now(),
+            ]);
+
+            return;
+        }
         $disk = Storage::disk($upload->disk);
         if ($upload->checksum_sha256) {
             $checksumStream = $disk->readStream($upload->path);

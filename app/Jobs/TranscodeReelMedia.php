@@ -41,6 +41,11 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
         if (! $media || $media->processing_state === 'ready') {
             return;
         }
+        if ($media->disk === 'mux') {
+            $this->publishFromMux($media);
+
+            return;
+        }
         $disk = Storage::disk($media->disk);
         $temporaryDirectory = null;
         if ($media->disk === 'local') {
@@ -98,6 +103,38 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
                 'updated_at' => now(),
             ]);
             $this->event('published', [...$result['safety'], 'mux_asset_id' => $published['asset_id'] ?? null, 'truncated' => $truncated, 'original_duration_ms' => $originalMs]);
+        });
+        if ($truncated) {
+            $this->notifyTruncated($media->user_id === null ? null : (string) $media->user_id, $originalMs, $durationMs);
+        }
+    }
+
+    private function publishFromMux(object $media): void
+    {
+        $probe = is_array($media->probe) ? $media->probe : (json_decode((string) $media->probe, true) ?: []);
+        $originalMs = (int) ($probe['original_duration_ms'] ?? $probe['duration_ms'] ?? $media->duration_ms ?? 0);
+        $truncated = ($probe['truncated'] ?? false) === true || $originalMs > ReelLimits::maxDurationMs();
+        $durationMs = ReelLimits::cappedDurationMs($originalMs > 0 ? $originalMs : (int) ($media->duration_ms ?? 0));
+        $playback = is_string($probe['playback_url'] ?? null) ? $probe['playback_url'] : null;
+        $thumbnail = is_string($probe['thumbnail_url'] ?? null) ? $probe['thumbnail_url'] : null;
+        $assetId = is_string($probe['mux_asset_id'] ?? null) ? $probe['mux_asset_id'] : null;
+        DB::transaction(function () use ($media, $durationMs, $truncated, $originalMs, $playback, $thumbnail, $assetId): void {
+            DB::table('reel_media')->where('id', $media->id)->update([
+                'processing_state' => 'ready',
+                'transcoded_path' => $assetId !== null ? 'mux/'.$assetId : null,
+                'thumbnail_path' => $thumbnail,
+                'duration_ms' => $durationMs,
+                'safety_results' => json_encode(['mux' => 'direct'], JSON_THROW_ON_ERROR),
+                'updated_at' => now(),
+            ]);
+            DB::table('reels')->where('id', $this->reelId)->where('state', 'processing')->update([
+                'state' => 'published',
+                'published_at' => now(),
+                'duration_ms' => $durationMs,
+                'media_url' => $playback,
+                'updated_at' => now(),
+            ]);
+            $this->event('published', ['mux_asset_id' => $assetId, 'truncated' => $truncated, 'original_duration_ms' => $originalMs, 'direct_upload' => true]);
         });
         if ($truncated) {
             $this->notifyTruncated($media->user_id === null ? null : (string) $media->user_id, $originalMs, $durationMs);

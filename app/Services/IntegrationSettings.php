@@ -32,7 +32,7 @@ final class IntegrationSettings
                 ['name' => 'token', 'label' => 'API token', 'type' => 'password', 'secret' => true],
                 ['name' => 'model', 'label' => 'Model', 'type' => 'text'],
             ], 'config' => ['provider' => 'services.ai.provider', 'url' => 'services.ai.url', 'token' => 'services.ai.token', 'model' => 'services.ai.model']],
-            'mux' => ['group' => 'Media', 'title' => 'Mux', 'description' => 'Optional HLS encoding and playback. Reels currently transcode with FFmpeg until Mux is enabled in a later media cutover.', 'fields' => [
+            'mux' => ['group' => 'Media', 'title' => 'Mux', 'description' => 'Direct reel uploads and HLS playback. Production sends phone video straight to Mux so uploads do not time out on pelevo.com.', 'fields' => [
                 ['name' => 'token_id', 'label' => 'Access token ID', 'type' => 'text'],
                 ['name' => 'token_secret', 'label' => 'Access token secret', 'type' => 'password', 'secret' => true],
                 ['name' => 'signing_key', 'label' => 'Signing key (optional)', 'type' => 'password', 'secret' => true],

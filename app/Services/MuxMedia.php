@@ -16,17 +16,21 @@ final class MuxMedia
     }
 
     /**
-     * @return array{playback_url: string, thumbnail_url: string, asset_id: string}|null
+     * @return array{upload_id: string, url: string, headers: array<string, string>}|null
      */
-    public function publishVideo(string $absolutePath): ?array
+    public function createDirectUpload(string $passthrough): ?array
     {
-        if (! $this->enabled() || ! is_file($absolutePath)) {
+        if (! $this->enabled()) {
             return null;
         }
         try {
             $created = $this->client()->timeout(20)->post('https://api.mux.com/video/v1/uploads', [
                 'cors_origin' => '*',
-                'new_asset_settings' => ['playback_policy' => ['public']],
+                'timeout' => 3600,
+                'new_asset_settings' => [
+                    'playback_policy' => ['public'],
+                    'passthrough' => $passthrough,
+                ],
             ]);
             if (! $created->successful()) {
                 return null;
@@ -36,51 +40,85 @@ final class MuxMedia
             if ($uploadUrl === '' || $uploadId === '') {
                 return null;
             }
-            $body = file_get_contents($absolutePath);
-            if ($body === false) {
-                return null;
-            }
-            $put = Http::withBody($body, 'video/mp4')->timeout(120)->put($uploadUrl);
-            if (! $put->successful() && $put->status() !== 201) {
-                return null;
-            }
+
+            return [
+                'upload_id' => $uploadId,
+                'url' => $uploadUrl,
+                'headers' => ['Content-Type' => 'application/octet-stream'],
+            ];
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return array{duration_ms: int, mime: string, width: int, height: int, playback_url: string, thumbnail_url: string, mux_asset_id: string, mux_playback_id: string}|null
+     */
+    public function waitForDirectUpload(string $uploadId): ?array
+    {
+        if (! $this->enabled() || $uploadId === '') {
+            return null;
+        }
+        try {
             $assetId = null;
-            for ($i = 0; $i < 20; $i++) {
+            for ($i = 0; $i < 45; $i++) {
                 $upload = $this->client()->timeout(15)->get('https://api.mux.com/video/v1/uploads/'.$uploadId);
+                $status = (string) $upload->json('data.status');
                 $assetId = $upload->json('data.asset_id');
-                $status = $upload->json('data.status');
+                if ($status === 'errored' || $status === 'cancelled' || $status === 'timed_out') {
+                    return null;
+                }
                 if (is_string($assetId) && $assetId !== '') {
                     break;
                 }
-                if ($status === 'errored' || $status === 'cancelled') {
-                    return null;
-                }
-                sleep(2);
+                $this->pause();
             }
             if (! is_string($assetId) || $assetId === '') {
                 return null;
             }
-            $playbackId = null;
-            for ($i = 0; $i < 30; $i++) {
-                $asset = $this->client()->timeout(15)->get('https://api.mux.com/video/v1/assets/'.$assetId);
-                $status = $asset->json('data.status');
-                $playbackId = $asset->json('data.playback_ids.0.id');
-                if ($status === 'ready' && is_string($playbackId) && $playbackId !== '') {
-                    break;
-                }
-                if ($status === 'errored') {
-                    return null;
-                }
-                sleep(2);
+
+            return $this->waitForReadyAsset($assetId);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return array{playback_url: string, thumbnail_url: string, asset_id: string}|null
+     */
+    public function publishVideo(string $absolutePath): ?array
+    {
+        if (! $this->enabled() || ! is_file($absolutePath)) {
+            return null;
+        }
+        try {
+            $created = $this->createDirectUpload('server-publish');
+            if ($created === null) {
+                return null;
             }
-            if (! is_string($playbackId) || $playbackId === '') {
+            $stream = fopen($absolutePath, 'rb');
+            if (! is_resource($stream)) {
+                return null;
+            }
+            try {
+                $put = Http::withBody($stream, 'application/octet-stream')->timeout(120)->put($created['url']);
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+            if (! $put->successful() && $put->status() !== 201) {
+                return null;
+            }
+            $ready = $this->waitForDirectUpload($created['upload_id']);
+            if ($ready === null) {
                 return null;
             }
 
             return [
-                'asset_id' => $assetId,
-                'playback_url' => 'https://stream.mux.com/'.$playbackId.'.m3u8',
-                'thumbnail_url' => 'https://image.mux.com/'.$playbackId.'/thumbnail.jpg?time=1',
+                'asset_id' => $ready['mux_asset_id'],
+                'playback_url' => $ready['playback_url'],
+                'thumbnail_url' => $ready['thumbnail_url'],
             ];
         } catch (Throwable) {
             return null;
@@ -121,6 +159,62 @@ final class MuxMedia
         } catch (Throwable) {
             return null;
         }
+    }
+
+    /**
+     * @return array{duration_ms: int, mime: string, width: int, height: int, playback_url: string, thumbnail_url: string, mux_asset_id: string, mux_playback_id: string}|null
+     */
+    private function waitForReadyAsset(string $assetId): ?array
+    {
+        $playbackId = null;
+        $duration = 0.0;
+        $width = 1080;
+        $height = 1920;
+        for ($i = 0; $i < 45; $i++) {
+            $asset = $this->client()->timeout(15)->get('https://api.mux.com/video/v1/assets/'.$assetId);
+            $status = $asset->json('data.status');
+            $playbackId = $asset->json('data.playback_ids.0.id');
+            $duration = (float) ($asset->json('data.duration') ?? 0);
+            $tracks = $asset->json('data.tracks');
+            if (is_array($tracks)) {
+                foreach ($tracks as $track) {
+                    if (! is_array($track) || ($track['type'] ?? null) !== 'video') {
+                        continue;
+                    }
+                    $width = (int) ($track['max_width'] ?? $width);
+                    $height = (int) ($track['max_height'] ?? $height);
+                }
+            }
+            if ($status === 'ready' && is_string($playbackId) && $playbackId !== '') {
+                break;
+            }
+            if ($status === 'errored') {
+                return null;
+            }
+            $this->pause();
+        }
+        if (! is_string($playbackId) || $playbackId === '') {
+            return null;
+        }
+
+        return [
+            'duration_ms' => (int) round($duration * 1000),
+            'mime' => 'video/mp4',
+            'width' => max(1, $width),
+            'height' => max(1, $height),
+            'mux_asset_id' => $assetId,
+            'mux_playback_id' => $playbackId,
+            'playback_url' => 'https://stream.mux.com/'.$playbackId.'.m3u8',
+            'thumbnail_url' => 'https://image.mux.com/'.$playbackId.'/thumbnail.jpg?time=1',
+        ];
+    }
+
+    private function pause(): void
+    {
+        if (app()->runningUnitTests()) {
+            return;
+        }
+        sleep(2);
     }
 
     private function client()
