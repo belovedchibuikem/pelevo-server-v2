@@ -38,31 +38,40 @@ final class ReelController extends Controller
             return ApiResponse::error('CLAIM_REQUIRED', 'Creator access is required.', 403);
         }
         $data = $request->validate(['draft_id' => ['nullable', 'exists:reels,id'], 'upload_id' => ['required', 'exists:media_uploads,id'], 'caption' => ['nullable', 'string', 'max:400'], 'show_id' => ['nullable', 'exists:shows,id'], 'episode_id' => ['nullable', 'exists:episodes,id']]);
-        $id = DB::transaction(function () use ($creator, $request, $data): string {
+        $created = DB::transaction(function () use ($creator, $request, $data): array {
             $upload = DB::table('media_uploads')->where('id', $data['upload_id'])->where('user_id', $request->user()->id)->lockForUpdate()->first();
             if (! $upload || $upload->state !== 'processed' || DB::table('reel_media')->where('media_upload_id', $data['upload_id'])->exists()) {
                 abort(409, 'The processed upload is unavailable.');
             }
-            $probe = json_decode($upload->probe, true, flags: JSON_THROW_ON_ERROR);
-            if (($probe['duration_ms'] ?? PHP_INT_MAX) > ReelLimits::maxDurationMs()) {
-                abort(422, ReelLimits::tooLongMessage());
+            $probe = is_array($upload->probe) ? $upload->probe : json_decode((string) $upload->probe, true, flags: JSON_THROW_ON_ERROR);
+            if (! is_array($probe)) {
+                abort(409, 'The processed upload is unavailable.');
             }
+            $originalMs = (int) ($probe['original_duration_ms'] ?? $probe['duration_ms'] ?? 0);
+            $truncated = ($probe['truncated'] ?? false) === true || $originalMs > ReelLimits::maxDurationMs();
+            $durationMs = ReelLimits::cappedDurationMs($originalMs);
             $id = $data['draft_id'] ?? (string) Str::ulid();
             $reelData = collect($data)->except(['upload_id', 'draft_id'])->all();
             if ($data['draft_id'] ?? null) {
-                $updated = DB::table('reels')->where('id', $id)->where('creator_profile_id', $creator->id)->where('state', 'draft')->update([...$reelData, 'state' => 'processing', 'duration_ms' => $probe['duration_ms'], 'updated_at' => now()]);
+                $updated = DB::table('reels')->where('id', $id)->where('creator_profile_id', $creator->id)->where('state', 'draft')->update([...$reelData, 'state' => 'processing', 'duration_ms' => $durationMs, 'updated_at' => now()]);
                 abort_unless($updated, 404);
             } else {
-                DB::table('reels')->insert(['id' => $id, 'creator_profile_id' => $creator->id, ...$reelData, 'state' => 'processing', 'duration_ms' => $probe['duration_ms'], 'created_at' => now(), 'updated_at' => now()]);
+                DB::table('reels')->insert(['id' => $id, 'creator_profile_id' => $creator->id, ...$reelData, 'state' => 'processing', 'duration_ms' => $durationMs, 'created_at' => now(), 'updated_at' => now()]);
             }
-            DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $id, 'media_upload_id' => $upload->id, 'mime' => $probe['mime'], 'duration_ms' => $probe['duration_ms'], 'width' => $probe['width'], 'height' => $probe['height'], 'processing_state' => 'processing', 'created_at' => now(), 'updated_at' => now()]);
-            DB::table('reel_processing_events')->insert(['id' => (string) Str::ulid(), 'reel_id' => $id, 'state' => 'processing', 'created_at' => now()]);
+            DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $id, 'media_upload_id' => $upload->id, 'mime' => $probe['mime'], 'duration_ms' => $durationMs, 'width' => $probe['width'], 'height' => $probe['height'], 'processing_state' => 'processing', 'created_at' => now(), 'updated_at' => now()]);
+            DB::table('reel_processing_events')->insert(['id' => (string) Str::ulid(), 'reel_id' => $id, 'state' => 'processing', 'details' => json_encode(['truncated' => $truncated, 'original_duration_ms' => $originalMs], JSON_THROW_ON_ERROR), 'created_at' => now()]);
 
-            return $id;
+            return ['id' => $id, 'truncated' => $truncated, 'original_duration_ms' => $originalMs];
         });
-        TranscodeReelMedia::dispatch($id);
+        TranscodeReelMedia::dispatch($created['id']);
+        $row = (array) DB::table('reels')->find($created['id']);
 
-        return ApiResponse::success(DB::table('reels')->find($id), status: 201);
+        return ApiResponse::success([
+            ...$row,
+            'truncated' => $created['truncated'],
+            'original_duration_ms' => $created['truncated'] ? $created['original_duration_ms'] : null,
+            'truncated_message' => $created['truncated'] ? ReelLimits::truncatedMessage() : null,
+        ], status: 201);
     }
 
     public function show(string $reel, Request $request): JsonResponse

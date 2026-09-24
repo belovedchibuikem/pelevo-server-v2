@@ -34,7 +34,7 @@ final class MediaUploadPipelineTest extends TestCase
         $this->assertDatabaseHas('media_uploads', ['id' => $created['id'], 'state' => 'queued', 'actual_size' => strlen($bytes)]);
     }
 
-    public function test_probe_is_authoritative_and_rejects_video_over_configured_duration(): void
+    public function test_probe_caps_overlong_video_and_marks_it_truncated(): void
     {
         Storage::fake('local');
         $user = User::factory()->create();
@@ -49,7 +49,23 @@ final class MediaUploadPipelineTest extends TestCase
         };
 
         (new ProcessReelUpload($upload->id))->handle($probe);
-        $this->assertDatabaseHas('media_uploads', ['id' => $upload->id, 'state' => 'rejected', 'failure_reason' => 'UPLOAD_TOO_LONG']);
+        $upload->refresh();
+        $this->assertSame('processed', $upload->state);
+        $this->assertNull($upload->failure_reason);
+        $this->assertTrue((bool) ($upload->probe['truncated'] ?? false));
+        $this->assertSame(180000, $upload->probe['duration_ms']);
+        $this->assertSame(180001, $upload->probe['original_duration_ms']);
+    }
+
+    public function test_overlong_processed_upload_creates_a_truncated_reel(): void
+    {
+        Queue::fake([TranscodeReelMedia::class]);
+        $user = User::factory()->create();
+        CreatorProfile::create(['user_id' => $user->id, 'display_name' => 'Creator']);
+        $upload = MediaUpload::create(['user_id' => $user->id, 'disk' => 'local', 'path' => 'reel-uploads/ready', 'expected_mime' => 'video/mp4', 'expected_size' => 5, 'actual_size' => 5, 'state' => 'processed', 'probe' => ['duration_ms' => 180000, 'original_duration_ms' => 240000, 'truncated' => true, 'mime' => 'video/mp4', 'width' => 1080, 'height' => 1920], 'expires_at' => now()->addHour(), 'processed_at' => now()]);
+
+        $this->actingAs($user, 'sanctum')->postJson('/api/v1/reels', ['upload_id' => $upload->id, 'caption' => 'Ready'])->assertCreated()->assertJsonPath('data.state', 'processing')->assertJsonPath('data.duration_ms', 180000)->assertJsonPath('data.truncated', true)->assertJsonPath('data.original_duration_ms', 240000);
+        Queue::assertPushed(TranscodeReelMedia::class);
     }
 
     public function test_processed_upload_can_create_only_one_pending_review_reel(): void
@@ -77,7 +93,7 @@ final class MediaUploadPipelineTest extends TestCase
         DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $reel, 'media_upload_id' => $upload->id, 'mime' => 'video/mp4', 'duration_ms' => 3000, 'processing_state' => 'processing', 'created_at' => now(), 'updated_at' => now()]);
         $transcoder = new class implements MediaTranscoder
         {
-            public function transcode(string $source, string $outputDirectory): array
+            public function transcode(string $source, string $outputDirectory, ?int $maxDurationMs = null): array
             {
                 return ['video' => $outputDirectory.'/video.mp4', 'thumbnail' => $outputDirectory.'/thumbnail.jpg', 'safety' => ['blank_frame_scan' => 'passed']];
             }
@@ -99,7 +115,7 @@ final class MediaUploadPipelineTest extends TestCase
         DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $reel, 'media_upload_id' => $upload->id, 'mime' => 'video/mp4', 'duration_ms' => 3000, 'processing_state' => 'processing', 'created_at' => now(), 'updated_at' => now()]);
         $transcoder = new class implements MediaTranscoder
         {
-            public function transcode(string $source, string $outputDirectory): array
+            public function transcode(string $source, string $outputDirectory, ?int $maxDurationMs = null): array
             {
                 file_put_contents($outputDirectory.'/video.mp4', 'transcoded');
                 file_put_contents($outputDirectory.'/thumbnail.jpg', 'thumbnail');

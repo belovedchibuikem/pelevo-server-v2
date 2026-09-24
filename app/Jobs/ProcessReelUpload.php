@@ -62,11 +62,15 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
                 unlink($temporaryPath);
             }
         }
-        $tooLong = $result['duration_ms'] > ReelLimits::maxDurationMs();
+        $originalMs = (int) ($result['duration_ms'] ?? 0);
+        $truncated = $originalMs > ReelLimits::maxDurationMs();
+        $result['original_duration_ms'] = $originalMs;
+        $result['truncated'] = $truncated;
+        $result['duration_ms'] = ReelLimits::cappedDurationMs($originalMs);
         $upload->update([
-            'state' => $tooLong ? 'rejected' : 'processed',
+            'state' => 'processed',
             'probe' => $result,
-            'failure_reason' => $tooLong ? 'UPLOAD_TOO_LONG' : null,
+            'failure_reason' => null,
             'processed_at' => now(),
         ]);
     }

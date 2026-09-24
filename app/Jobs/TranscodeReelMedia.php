@@ -3,7 +3,9 @@
 namespace App\Jobs;
 
 use App\Contracts\MediaTranscoder;
+use App\Services\InAppNotificationDelivery;
 use App\Services\MuxMedia;
+use App\Support\ReelLimits;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -35,7 +37,7 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
 
     public function handle(MediaTranscoder $transcoder): void
     {
-        $media = DB::table('reel_media')->join('media_uploads', 'media_uploads.id', '=', 'reel_media.media_upload_id')->where('reel_media.reel_id', $this->reelId)->select('reel_media.*', 'media_uploads.disk', 'media_uploads.path')->first();
+        $media = DB::table('reel_media')->join('media_uploads', 'media_uploads.id', '=', 'reel_media.media_upload_id')->where('reel_media.reel_id', $this->reelId)->select('reel_media.*', 'media_uploads.disk', 'media_uploads.path', 'media_uploads.probe', 'media_uploads.user_id')->first();
         if (! $media || $media->processing_state === 'ready') {
             return;
         }
@@ -54,7 +56,7 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
             $this->copyStreamToPath($disk->readStream($media->path), $inputPath);
         }
         try {
-            $result = $transcoder->transcode($inputPath, $outputDirectory);
+            $result = $transcoder->transcode($inputPath, $outputDirectory, ReelLimits::maxDurationMs());
             if ($media->disk !== 'local') {
                 foreach (['video.mp4', 'thumbnail.jpg'] as $filename) {
                     $stream = fopen($outputDirectory.DIRECTORY_SEPARATOR.$filename, 'rb');
@@ -79,19 +81,46 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
                 $this->removeDirectory($temporaryDirectory);
             }
         }
-        DB::transaction(function () use ($media, $result, $published): void {
+        $probe = is_array($media->probe) ? $media->probe : (json_decode((string) $media->probe, true) ?: []);
+        $originalMs = (int) ($probe['original_duration_ms'] ?? $probe['duration_ms'] ?? $media->duration_ms ?? 0);
+        $truncated = ($probe['truncated'] ?? false) === true || $originalMs > ReelLimits::maxDurationMs();
+        $durationMs = ReelLimits::cappedDurationMs($originalMs > 0 ? $originalMs : (int) ($media->duration_ms ?? 0));
+        DB::transaction(function () use ($media, $result, $published, $durationMs, $truncated, $originalMs): void {
             $thumbnailPath = is_string($published['thumbnail_url'] ?? null)
                 ? $published['thumbnail_url']
                 : 'reels/'.$this->reelId.'/thumbnail.jpg';
-            DB::table('reel_media')->where('id', $media->id)->update(['processing_state' => 'ready', 'transcoded_path' => 'reels/'.$this->reelId.'/video.mp4', 'thumbnail_path' => $thumbnailPath, 'safety_results' => json_encode($result['safety'], JSON_THROW_ON_ERROR), 'updated_at' => now()]);
+            DB::table('reel_media')->where('id', $media->id)->update(['processing_state' => 'ready', 'transcoded_path' => 'reels/'.$this->reelId.'/video.mp4', 'thumbnail_path' => $thumbnailPath, 'duration_ms' => $durationMs, 'safety_results' => json_encode($result['safety'], JSON_THROW_ON_ERROR), 'updated_at' => now()]);
             DB::table('reels')->where('id', $this->reelId)->where('state', 'processing')->update([
                 'state' => 'published',
                 'published_at' => now(),
+                'duration_ms' => $durationMs,
                 'media_url' => $published['playback_url'] ?? null,
                 'updated_at' => now(),
             ]);
-            $this->event('published', [...$result['safety'], 'mux_asset_id' => $published['asset_id'] ?? null]);
+            $this->event('published', [...$result['safety'], 'mux_asset_id' => $published['asset_id'] ?? null, 'truncated' => $truncated, 'original_duration_ms' => $originalMs]);
         });
+        if ($truncated) {
+            $this->notifyTruncated($media->user_id === null ? null : (string) $media->user_id, $originalMs, $durationMs);
+        }
+    }
+
+    private function notifyTruncated(?string $userId, int $originalMs, int $durationMs): void
+    {
+        if ($userId === null || $userId === '') {
+            return;
+        }
+        app(InAppNotificationDelivery::class)->deliver($userId, [
+            'type' => 'reel',
+            'key' => 'reel-truncated:'.$this->reelId,
+            'title' => 'Reel trimmed to '.max(1, (int) ceil(ReelLimits::maxDurationMs() / 60000)).' minutes',
+            'body' => ReelLimits::truncatedMessage(),
+            'data' => [
+                'reel_id' => $this->reelId,
+                'truncated' => true,
+                'original_duration_ms' => $originalMs,
+                'duration_ms' => $durationMs,
+            ],
+        ]);
     }
 
     public function failed(?Throwable $exception): void
