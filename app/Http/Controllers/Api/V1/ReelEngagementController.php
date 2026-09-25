@@ -64,28 +64,58 @@ class ReelEngagementController extends Controller
         $data = $request->validate(['session_id' => ['required', 'uuid'], 'watched_ms' => ['required', 'integer', 'min:0', 'max:86400000']]);
         abort_unless(DB::table('reels')->where('id', $reel)->where('state', 'published')->exists(), 404);
         $view = DB::transaction(function () use ($reel, $request, $data, $limits): object {
-            $query = DB::table('reel_views')->where('reel_id', $reel)->where('user_id', $request->user()->id)->where('session_id', $data['session_id']);
-            $existing = $query->lockForUpdate()->first();
-            $watched = max((int) ($existing->watched_ms ?? 0), (int) $data['watched_ms']);
-            $qualified = (bool) ($existing->qualified ?? false) || $watched >= ($limits['reel_qualified_view_ms'] ?? config('media.qualified_view_ms'));
-            $attributes = ['watched_ms' => $watched, 'qualified' => $qualified, 'qualified_at' => $qualified ? ($existing->qualified_at ?? now()) : null, 'updated_at' => now()];
+            $existing = DB::table('reel_views')
+                ->where('reel_id', $reel)
+                ->where('user_id', $request->user()->id)
+                ->where('session_id', $data['session_id'])
+                ->lockForUpdate()
+                ->first();
+            $watched = max((int) ($existing?->watched_ms ?? 0), (int) $data['watched_ms']);
+            $threshold = (int) ($limits['reel_qualified_view_ms'] ?? config('media.qualified_view_ms'));
+            $qualified = (bool) ($existing?->qualified ?? false) || $watched >= $threshold;
+            $attributes = [
+                'watched_ms' => $watched,
+                'qualified' => $qualified,
+                'qualified_at' => $qualified ? ($existing?->qualified_at ?? now()) : null,
+                'updated_at' => now(),
+            ];
+            $viewId = isset($existing->id) && is_string($existing->id) && $existing->id !== ''
+                ? $existing->id
+                : (string) Str::ulid();
             if ($existing) {
-                $query->update($attributes);
+                DB::table('reel_views')->where('id', $viewId)->update($attributes);
             } else {
-                DB::table('reel_views')->insert(['id' => (string) Str::ulid(), 'reel_id' => $reel, 'user_id' => $request->user()->id, 'session_id' => $data['session_id'], ...$attributes, 'created_at' => now()]);
+                DB::table('reel_views')->insert([
+                    'id' => $viewId,
+                    'reel_id' => $reel,
+                    'user_id' => $request->user()->id,
+                    'session_id' => $data['session_id'],
+                    ...$attributes,
+                    'created_at' => now(),
+                ]);
             }
 
-            $view = $query->first();
-            if ($qualified && ! DB::table('reel_view_credits')->where('reel_view_id', $view->id)->exists()) {
+            if ($qualified && ! DB::table('reel_view_credits')->where('reel_view_id', $viewId)->exists()) {
                 $windowSeconds = max(60, ($limits['reel_view_window_minutes'] ?? config('media.view_window_minutes')) * 60);
                 $windowKey = (string) intdiv(now()->timestamp, $windowSeconds);
-                for ($ordinal = 1; $ordinal <= max(1, $limits['reel_qualified_views_per_window'] ?? config('media.qualified_views_per_window')); $ordinal++) {
-                    if (DB::table('reel_view_credits')->insertOrIgnore(['reel_id' => $reel, 'user_id' => $request->user()->id, 'window_key' => $windowKey, 'ordinal' => $ordinal, 'reel_view_id' => $view->id, 'created_at' => now()])) {
+                $maxOrdinal = max(1, $limits['reel_qualified_views_per_window'] ?? config('media.qualified_views_per_window'));
+                for ($ordinal = 1; $ordinal <= $maxOrdinal; $ordinal++) {
+                    if (DB::table('reel_view_credits')->insertOrIgnore([
+                        'reel_id' => $reel,
+                        'user_id' => $request->user()->id,
+                        'window_key' => $windowKey,
+                        'ordinal' => $ordinal,
+                        'reel_view_id' => $viewId,
+                        'created_at' => now(),
+                    ])) {
                         break;
                     }
                 }
             }
-            $view->counted = DB::table('reel_view_credits')->where('reel_view_id', $view->id)->exists();
+
+            $view = DB::table('reel_views')->where('id', $viewId)->first()
+                ?? (object) ['id' => $viewId, 'watched_ms' => $watched, 'qualified' => $qualified];
+            $view->counted = DB::table('reel_view_credits')->where('reel_view_id', $viewId)->exists();
 
             return $view;
         });

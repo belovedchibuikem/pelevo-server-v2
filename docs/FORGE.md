@@ -177,6 +177,22 @@ That is storage-only — not “hosted on Supabase”.
 - Restrict Horizon to admin auth (`HORIZON_PATH=admin/horizon` already)
 - Confirm webhook URLs use `https://pelevo.com/webhooks/v1/...`
 
+## Deploy failed: `Unable to connect to Inertia SSR server`
+
+Forge treats that as a failed release. The Pelevo admin dashboard is a **client-rendered** Inertia app (`resources/js/app.tsx` uses `createRoot`). There is no `ssr.js` bundle and no Node SSR daemon, so `php artisan inertia:stop-ssr` cannot connect to `127.0.0.1:13714` and exits 1.
+
+Do this on the site, then Redeploy:
+
+1. Forge → Site → **Application** → turn **Inertia SSR** **off**. That removes the extra daemon and the `inertia:stop-ssr` deploy step.
+2. Forge → Deployments → replace the deploy script with `deploy/forge/deploy.sh` (it already ignores a missing SSR process).
+3. If the current deploy script still contains `$FORGE_PHP artisan inertia:stop-ssr`, change it to:
+   ```bash
+   $FORGE_PHP artisan inertia:stop-ssr || true
+   ```
+   or delete that line.
+
+Do **not** enable Inertia SSR on this site unless you add an SSR entry (`resources/js/ssr.tsx`) and `vite build --ssr`.
+
 ## Deploy failed: `rm: cannot remove '…': Directory not empty`
 
 Forge already built the new release. It failed while deleting the previous one because Horizon still had that directory open. The site keeps serving the old `current` until a successful deploy.

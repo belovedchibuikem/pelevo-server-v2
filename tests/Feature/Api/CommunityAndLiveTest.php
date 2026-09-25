@@ -28,7 +28,9 @@ final class CommunityAndLiveTest extends TestCase
         $this->actingAs($user, 'sanctum')->putJson("/api/v1/reels/$reel/engagement", ['action' => 'like'])->assertOk();
         $session = (string) Str::uuid();
         $this->actingAs($user, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", ['session_id' => $session, 'watched_ms' => 2999])->assertOk()->assertJsonPath('data.qualified', 0);
-        $this->actingAs($user, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", ['session_id' => $session, 'watched_ms' => 3000])->assertOk()->assertJsonPath('data.qualified', 1);
+        $second = $this->actingAs($user, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", ['session_id' => $session, 'watched_ms' => 3000])->assertOk();
+        $second->assertJsonPath('data.qualified', 1);
+        $this->assertNotEmpty($second->json('data.id'));
         $this->assertDatabaseCount('reel_engagements', 1);
         $this->assertDatabaseCount('reel_views', 1);
     }

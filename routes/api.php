@@ -237,7 +237,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('reels/{reel}/save', [ReelEngagementController::class, 'save']);
         Route::delete('reels/{reel}/save', [ReelEngagementController::class, 'unsave']);
         Route::post('reels/{reel}/not-interested', [ReelEngagementController::class, 'notInterested']);
-        Route::post('reels/{reel}/view-heartbeat', [ReelEngagementController::class, 'heartbeat']);
+        Route::post('reels/{reel}/view-heartbeat', [ReelEngagementController::class, 'heartbeat'])->middleware('throttle:20,1');
         Route::get('live-sessions', [LiveSessionController::class, 'index']);
         Route::post('live-sessions', [LiveSessionController::class, 'store'])->middleware('not.sanctioned');
         Route::put('live-sessions/{session}/state', [LiveSessionController::class, 'transition']);

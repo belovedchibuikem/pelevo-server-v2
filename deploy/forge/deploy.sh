@@ -40,3 +40,11 @@ pkill -f "artisan horizon" || true
 sleep 2
 
 echo "==> Deploy complete"
+
+# Forge may append `artisan inertia:stop-ssr` when the site's Inertia SSR
+# toggle is on. Pelevo's admin UI is client-rendered (no ssr.js bundle), so
+# that command prints "Unable to connect to Inertia SSR server" and would
+# abort the whole release under `set -e`. Ignore a missing SSR process, then
+# turn `set -e` off so Forge's suffix cannot fail the deploy.
+$php artisan inertia:stop-ssr >/dev/null 2>&1 || true
+set +e
