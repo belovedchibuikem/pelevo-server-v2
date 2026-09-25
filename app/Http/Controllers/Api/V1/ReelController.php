@@ -181,15 +181,19 @@ final class ReelController extends Controller
         if ($mode === 'recent') {
             $limit = min(max($request->integer('limit', 20), 1), 50);
             $offset = max(0, (int) $request->input('cursor', 0));
-            [$rows, $hasMore] = app(ReelFeedRanker::class)->page($query, $limit, $offset);
+            try {
+                [$rows, $hasMore] = app(ReelFeedRanker::class)->page($query, $limit, $offset);
 
-            return ApiResponse::success(
-                $presenter->present($rows, $request->user()->id, $request),
-                ['cursor' => $hasMore ? (string) ($offset + $limit) : null, 'has_more' => $hasMore],
-            );
+                return ApiResponse::success(
+                    $presenter->present($rows, $request->user()->id, $request),
+                    ['cursor' => $hasMore ? (string) ($offset + $limit) : null, 'has_more' => $hasMore],
+                );
+            } catch (\Throwable $exception) {
+                report($exception);
+            }
         }
         if ($mode === 'trending') {
-            $query->leftJoin('reel_view_credits', 'reel_view_credits.reel_id', '=', 'reels.id')->select('reels.*')->selectRaw('count(reel_view_credits.reel_view_id) as qualified_views')->groupBy('reels.id')->orderByDesc('qualified_views');
+            $query->select('reels.*')->selectRaw('(select count(*) from reel_view_credits where reel_view_credits.reel_id = reels.id) as qualified_views')->orderByDesc('qualified_views');
         } elseif ($mode === 'saved') {
             $query->join('reel_engagements', function ($join) use ($request): void {
                 $join->on('reel_engagements.reel_id', '=', 'reels.id')

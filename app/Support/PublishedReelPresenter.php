@@ -77,7 +77,7 @@ final class PublishedReelPresenter
                 'media_url' => $mediaUrl,
                 'thumbnail_path' => $thumbnail,
                 'duration_ms' => $row->duration_ms === null ? null : (int) $row->duration_ms,
-                'published_at' => $row->published_at,
+                'published_at' => $this->publishedAt($row->published_at ?? null),
                 'creator_profile_id' => (string) $row->creator_profile_id,
                 'creator_name' => $creator->display_name,
                 'creator_handle' => is_string($creator->handle) ? $creator->handle : '',
@@ -113,5 +113,14 @@ final class PublishedReelPresenter
     private function flag(mixed $value): bool
     {
         return $value === true || $value === 1 || $value === '1';
+    }
+
+    private function publishedAt(mixed $value): ?string
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format(DATE_ATOM);
+        }
+
+        return is_string($value) && $value !== '' ? $value : null;
     }
 }
