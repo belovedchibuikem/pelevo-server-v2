@@ -38,7 +38,18 @@ final class PublishedReelPresenter
         $following = DB::table('creator_followers')->where('user_id', $userId)->whereIn('creator_profile_id', $creatorIds)->pluck('creator_profile_id')->all();
         $episodes = $episodeIds === []
             ? collect()
-            : DB::table('episodes')->whereIn('id', $episodeIds)->get(['id', 'title', 'show_id'])->keyBy('id');
+            : DB::table('episodes')
+                ->leftJoin('shows', 'shows.id', '=', 'episodes.show_id')
+                ->whereIn('episodes.id', $episodeIds)
+                ->get([
+                    'episodes.id',
+                    'episodes.title',
+                    'episodes.show_id',
+                    'episodes.duration_seconds',
+                    'shows.title as show_title',
+                    'shows.artwork_url',
+                ])
+                ->keyBy('id');
 
         return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $mine, $following, $episodes, $linkedByReel, $request): ?array {
             $creator = $creators->get($row->creator_profile_id);
@@ -74,8 +85,11 @@ final class PublishedReelPresenter
                 'creator_handle' => is_string($creator->handle) ? $creator->handle : '',
                 'creator_avatar_url' => $this->publicUrl(is_string($creator->avatar_url) ? $creator->avatar_url : null, $request),
                 'show_id' => $row->show_id ?: ($episode?->show_id),
+                'show_title' => is_string($episode?->show_title) && $episode->show_title !== '' ? $episode->show_title : null,
+                'show_artwork_url' => $this->publicUrl(is_string($episode?->artwork_url) ? $episode->artwork_url : null, $request),
                 'episode_id' => $resolvedEpisodeId,
                 'episode_title' => $episode?->title,
+                'episode_duration_seconds' => $episode?->duration_seconds === null ? null : (int) $episode->duration_seconds,
                 'likes_count' => (int) ($likes[$row->id] ?? 0),
                 'comments_count' => (int) ($comments[$row->id] ?? 0),
                 'saves_count' => (int) ($saves[$row->id] ?? 0),
