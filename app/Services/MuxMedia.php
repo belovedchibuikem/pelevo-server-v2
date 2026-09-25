@@ -34,6 +34,11 @@ final class MuxMedia
                 ],
             ]);
             if (! $created->successful()) {
+                Log::warning('mux.direct_upload.create_failed', [
+                    'status' => $created->status(),
+                    'body' => mb_substr($created->body(), 0, 300),
+                ]);
+
                 return null;
             }
             $uploadUrl = (string) $created->json('data.url');
@@ -47,7 +52,11 @@ final class MuxMedia
                 'url' => $uploadUrl,
                 'headers' => ['Content-Type' => 'application/octet-stream'],
             ];
-        } catch (Throwable) {
+        } catch (Throwable $error) {
+            Log::warning('mux.direct_upload.create_exception', [
+                'message' => $error->getMessage(),
+            ]);
+
             return null;
         }
     }

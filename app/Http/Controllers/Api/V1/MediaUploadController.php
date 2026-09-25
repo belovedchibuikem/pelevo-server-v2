@@ -35,6 +35,11 @@ final class MediaUploadController extends Controller
         $mux = $this->shouldUseMuxDirect()
             ? app(MuxMedia::class)->createDirectUpload($upload->id)
             : null;
+        if ($this->shouldUseMuxDirect() && ! is_array($mux)) {
+            $upload->delete();
+
+            return ApiResponse::error('SERVICE_DEGRADED', 'Video upload is temporarily unavailable. Please try again.', 503);
+        }
         if (is_array($mux)) {
             $upload->update([
                 'disk' => 'mux',

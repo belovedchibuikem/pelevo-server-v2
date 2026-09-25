@@ -199,7 +199,7 @@ return [
     'defaults' => [
         'supervisor-general' => [
             'connection' => 'redis',
-            'queue' => ['default', 'media', 'notifications', 'feeds', 'rss', 'catalog', 'recommendations', 'privacy', 'ai', 'admin-exports', 'claims'],
+            'queue' => ['default', 'media', 'notifications', 'feeds', 'recommendations', 'privacy', 'ai', 'admin-exports', 'claims'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 1,
@@ -233,7 +233,20 @@ return [
             'memory' => 512,
             'tries' => 3,
             'timeout' => 900,
-            'nice' => 5,
+            'nice' => 0,
+        ],
+        'supervisor-rss' => [
+            'connection' => 'redis',
+            'queue' => ['rss', 'catalog'],
+            'balance' => 'auto',
+            'autoScalingStrategy' => 'time',
+            'maxProcesses' => 1,
+            'maxTime' => 0,
+            'maxJobs' => 50,
+            'memory' => 256,
+            'tries' => 1,
+            'timeout' => 240,
+            'nice' => 10,
         ],
     ],
 
@@ -252,7 +265,12 @@ return [
                 'balanceCooldown' => 5,
             ],
             'supervisor-media' => [
+                'minProcesses' => 1,
                 'maxProcesses' => 2,
+            ],
+            'supervisor-rss' => [
+                'minProcesses' => 1,
+                'maxProcesses' => 3,
             ],
         ],
 
@@ -266,6 +284,9 @@ return [
             'supervisor-media' => [
                 'maxProcesses' => 1,
             ],
+            'supervisor-rss' => [
+                'maxProcesses' => 1,
+            ],
         ],
         '*' => [
             'supervisor-general' => [
@@ -275,6 +296,9 @@ return [
                 'maxProcesses' => 1,
             ],
             'supervisor-media' => [
+                'maxProcesses' => 1,
+            ],
+            'supervisor-rss' => [
                 'maxProcesses' => 1,
             ],
         ],
