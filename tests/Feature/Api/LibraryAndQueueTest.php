@@ -32,7 +32,7 @@ final class LibraryAndQueueTest extends TestCase
         $second = Episode::create(['show_id' => $show->id, 'guid' => 'two', 'title' => 'Two', 'audio_url' => 'https://example.com/two.mp3']);
 
         $this->actingAs($user, 'sanctum')->putJson('/api/v1/queue', ['version' => 0, 'episode_ids' => [$second->id, $first->id]])->assertOk()->assertJsonPath('data.version', 1);
-        $this->actingAs($user, 'sanctum')->getJson('/api/v1/queue')->assertOk()->assertJsonPath('data.items.0.id', $second->id)->assertJsonPath('data.items.0.show_id', $show->id)->assertJsonPath('data.items.1.id', $first->id);
+        $this->actingAs($user, 'sanctum')->getJson('/api/v1/queue')->assertOk()->assertJsonPath('data.items.0.id', $second->id)->assertJsonPath('data.items.0.show_id', $show->id)->assertJsonPath('data.items.0.audio_url', 'https://example.com/two.mp3')->assertJsonPath('data.items.1.id', $first->id);
         $this->actingAs($user, 'sanctum')->putJson('/api/v1/queue', ['version' => 0, 'episode_ids' => [$first->id]])->assertConflict();
     }
 

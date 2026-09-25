@@ -6,6 +6,7 @@ use App\Contracts\MediaTranscoder;
 use App\Services\InAppNotificationDelivery;
 use App\Services\MuxMedia;
 use App\Support\ReelLimits;
+use App\Support\ReelPlayback;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -91,9 +92,11 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
         $truncated = ($probe['truncated'] ?? false) === true || $originalMs > ReelLimits::maxDurationMs();
         $durationMs = ReelLimits::cappedDurationMs($originalMs > 0 ? $originalMs : (int) ($media->duration_ms ?? 0));
         DB::transaction(function () use ($media, $result, $published, $durationMs, $truncated, $originalMs): void {
-            $thumbnailPath = is_string($published['thumbnail_url'] ?? null)
-                ? $published['thumbnail_url']
-                : 'reels/'.$this->reelId.'/thumbnail.jpg';
+            $thumbnailPath = $this->resolveThumbnail(
+                is_string($media->thumbnail_path ?? null) ? $media->thumbnail_path : null,
+                is_string($published['thumbnail_url'] ?? null) ? $published['thumbnail_url'] : null,
+                is_string($published['playback_url'] ?? null) ? $published['playback_url'] : null,
+            ) ?? 'reels/'.$this->reelId.'/thumbnail.jpg';
             DB::table('reel_media')->where('id', $media->id)->update(['processing_state' => 'ready', 'transcoded_path' => 'reels/'.$this->reelId.'/video.mp4', 'thumbnail_path' => $thumbnailPath, 'duration_ms' => $durationMs, 'safety_results' => json_encode($result['safety'], JSON_THROW_ON_ERROR), 'updated_at' => now()]);
             DB::table('reels')->where('id', $this->reelId)->where('state', 'processing')->update([
                 'state' => 'published',
@@ -122,7 +125,11 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
             DB::table('reel_media')->where('id', $media->id)->update([
                 'processing_state' => 'ready',
                 'transcoded_path' => $assetId !== null ? 'mux/'.$assetId : null,
-                'thumbnail_path' => $thumbnail,
+                'thumbnail_path' => $this->resolveThumbnail(
+                    is_string($media->thumbnail_path ?? null) ? $media->thumbnail_path : null,
+                    $thumbnail,
+                    $playback,
+                ),
                 'duration_ms' => $durationMs,
                 'safety_results' => json_encode(['mux' => 'direct'], JSON_THROW_ON_ERROR),
                 'updated_at' => now(),
@@ -139,6 +146,18 @@ final class TranscodeReelMedia implements ShouldBeUnique, ShouldQueue
         if ($truncated) {
             $this->notifyTruncated($media->user_id === null ? null : (string) $media->user_id, $originalMs, $durationMs);
         }
+    }
+
+    private function resolveThumbnail(?string $existing, ?string $generated, ?string $playback): ?string
+    {
+        if (ReelPlayback::keepUploadedCover($existing)) {
+            return $existing;
+        }
+        if (is_string($generated) && $generated !== '') {
+            return $generated;
+        }
+
+        return ReelPlayback::muxThumbnailFromPlayback($playback);
     }
 
     private function notifyTruncated(?string $userId, int $originalMs, int $durationMs): void

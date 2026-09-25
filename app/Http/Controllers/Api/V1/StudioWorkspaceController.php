@@ -258,9 +258,7 @@ final class StudioWorkspaceController extends Controller
             'media_url' => $media !== null && $media !== ''
                 ? ReelPlayback::resolve($media, ReelPlayback::videoUrl($id, $request))
                 : ($thumb ? ReelPlayback::videoUrl($id, $request) : null),
-            'thumbnail_path' => $thumb !== null && $thumb !== ''
-                ? ReelPlayback::resolve($thumb, ReelPlayback::thumbnailUrl($id, $request))
-                : null,
+            'thumbnail_path' => ReelPlayback::presentedThumbnail($thumb, $media, $id, $request),
         ];
     }
 

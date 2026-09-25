@@ -41,6 +41,16 @@ final class PhaseThreeOperationsTest extends TestCase
         $this->actingAs($owner, 'sanctum')->postJson('/api/v1/reels/monetization/opt-in')->assertOk()->assertJsonPath('data.opted_in', true);
     }
 
+    public function test_following_feed_includes_reels_from_followed_creators(): void
+    {
+        [, $creator, $show] = $this->verifiedCreator();
+        $viewer = User::factory()->create();
+        $reel = (string) Str::ulid();
+        DB::table('reels')->insert(['id' => $reel, 'creator_profile_id' => $creator->id, 'show_id' => $show->id, 'state' => 'published', 'duration_ms' => 10000, 'published_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+        $this->actingAs($viewer, 'sanctum')->postJson("/api/v1/creators/{$creator->id}/follow")->assertCreated();
+        $this->actingAs($viewer, 'sanctum')->getJson('/api/v1/reels/following')->assertOk()->assertJsonPath('data.0.id', $reel);
+    }
+
     public function test_published_feed_presents_creator_and_viewer_fields(): void
     {
         [$owner, $creator, $show] = $this->verifiedCreator();

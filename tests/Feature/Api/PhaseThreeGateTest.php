@@ -80,6 +80,16 @@ final class PhaseThreeGateTest extends TestCase
         $this->actingAs($fan, 'sanctum')->getJson("/api/v1/reels/$reel")->assertOk()->assertJsonPath('data.episode_links.0', $episode->id);
     }
 
+    public function test_creator_can_delete_own_reel_and_others_cannot(): void
+    {
+        [$creatorUser, $reel] = $this->creatorReel('published');
+        $other = User::factory()->create();
+        CreatorProfile::create(['user_id' => $other->id, 'display_name' => 'Other']);
+        $this->actingAs($other, 'sanctum')->deleteJson("/api/v1/reels/$reel")->assertNotFound();
+        $this->actingAs($creatorUser, 'sanctum')->deleteJson("/api/v1/reels/$reel")->assertOk()->assertJsonPath('data.deleted', true);
+        $this->assertDatabaseMissing('reels', ['id' => $reel]);
+    }
+
     private function creatorReel(string $state): array
     {
         $user = User::factory()->create();

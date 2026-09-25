@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Support\ReelPlayback;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\Response;
@@ -36,21 +37,42 @@ final class ReelMediaController extends Controller
         if (is_string($relative) && str_starts_with($relative, 'http')) {
             return redirect()->away($relative);
         }
-        if (! is_string($relative) || $relative === '') {
-            abort(404);
-        }
-        $diskName = is_string($media->disk) && $media->disk !== '' ? $media->disk : (string) config('media.upload_disk', 'local');
-        $disk = Storage::disk($diskName);
-        if (! $disk->exists($relative)) {
-            abort(404);
-        }
-        if ($diskName !== 'local') {
-            return redirect()->away($disk->temporaryUrl($relative, now()->addHours(6)));
-        }
+        if (is_string($relative) && $relative !== '') {
+            $disks = [];
+            foreach ([
+                is_string($media->disk) && $media->disk !== '' && $media->disk !== 'mux' ? $media->disk : null,
+                (string) config('media.upload_disk', 'local'),
+                'local',
+            ] as $candidate) {
+                if (is_string($candidate) && $candidate !== '' && ! in_array($candidate, $disks, true)) {
+                    $disks[] = $candidate;
+                }
+            }
+            foreach ($disks as $diskName) {
+                try {
+                    $disk = Storage::disk($diskName);
+                    if (! $disk->exists($relative)) {
+                        continue;
+                    }
+                    if ($diskName !== 'local') {
+                        return redirect()->away($disk->temporaryUrl($relative, now()->addHours(6)));
+                    }
 
-        return $disk->response($relative, null, [
-            'Content-Type' => $kind === 'video' ? 'video/mp4' : 'image/jpeg',
-            'Cache-Control' => 'private, max-age=3600',
-        ]);
+                    return $disk->response($relative, null, [
+                        'Content-Type' => $kind === 'video' ? 'video/mp4' : 'image/jpeg',
+                        'Cache-Control' => 'private, max-age=3600',
+                    ]);
+                } catch (\Throwable) {
+                    continue;
+                }
+            }
+        }
+        if ($kind === 'thumbnail') {
+            $mux = ReelPlayback::muxThumbnailFromPlayback(is_string($row->media_url ?? null) ? $row->media_url : null);
+            if ($mux !== null) {
+                return redirect()->away($mux);
+            }
+        }
+        abort(404);
     }
 }

@@ -222,6 +222,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('reels/monetization', [ReelMonetizationController::class, 'show']);
         Route::post('reels/monetization/opt-in', [ReelMonetizationController::class, 'store']);
         Route::get('reels/{reel}', [ReelController::class, 'show']);
+        Route::delete('reels/{reel}', [ReelController::class, 'destroy'])->middleware('not.sanctioned');
         Route::get('reels/{reel}/related-show', [ReelController::class, 'relatedShow']);
         Route::post('reels', [ReelController::class, 'store'])->middleware('not.sanctioned');
         Route::post('reels/{reel}/episode-links', [ReelController::class, 'linkEpisode']);

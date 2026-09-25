@@ -461,6 +461,7 @@ paths:
     get: { security: [{ bearerAuth: [] }], description: Cursor-paginated published reels the caller saved., responses: { '200': { description: Saved published reels } } }
   /reels/{reel}:
     get: { security: [{ bearerAuth: [] }], description: Published reel public fields plus episode_links., responses: { '200': { description: Published reel and episode links }, '404': { description: Reel unavailable } } }
+    delete: { security: [{ bearerAuth: [] }], description: Owner permanently deletes their reel., responses: { '200': { description: Reel deleted }, '403': { description: Creator access required }, '404': { description: Reel unavailable } } }
   /reels/{reel}/related-show:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Related available show }, '404': { description: Related show unavailable } } }
   /reels/{reel}/like:

@@ -64,9 +64,7 @@ final class PublishedReelPresenter
             $mediaUrl = $storedMedia !== null && $storedMedia !== ''
                 ? ReelPlayback::resolve($storedMedia, ReelPlayback::videoUrl((string) $row->id, $request))
                 : ($hasFile ? ReelPlayback::videoUrl((string) $row->id, $request) : null);
-            $thumbnail = $storedThumb !== null && $storedThumb !== ''
-                ? ReelPlayback::resolve($storedThumb, ReelPlayback::thumbnailUrl((string) $row->id, $request))
-                : null;
+            $thumbnail = ReelPlayback::presentedThumbnail($storedThumb, $storedMedia, (string) $row->id, $request);
             $resolvedEpisodeId = is_string($row->episode_id) && $row->episode_id !== ''
                 ? $row->episode_id
                 : $linkedByReel->get($row->id)?->first()?->episode_id;

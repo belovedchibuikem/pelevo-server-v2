@@ -20,7 +20,7 @@ final class QueueController extends Controller
             ->join('shows', 'shows.id', '=', 'episodes.show_id')
             ->where('queue_id', $queue->id)
             ->orderBy('position')
-            ->get(['queue_items.id as queue_item_id', 'queue_items.position', 'episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.duration_seconds', 'shows.title as show_title', 'shows.artwork_url'])
+            ->get(['queue_items.id as queue_item_id', 'queue_items.position', 'episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.audio_url', 'episodes.duration_seconds', 'shows.title as show_title', 'shows.artwork_url'])
             ->map(fn (object $row): array => [
                 'queue_item_id' => $row->queue_item_id,
                 'position' => (int) $row->position,
@@ -30,6 +30,7 @@ final class QueueController extends Controller
                 'show_title' => $row->show_title,
                 'duration_seconds' => $row->duration_seconds === null ? null : (int) $row->duration_seconds,
                 'artwork_url' => $row->artwork_url,
+                'audio_url' => $row->audio_url,
             ]) : [];
 
         return ApiResponse::success(['version' => $queue?->version ?? 0, 'items' => $items]);

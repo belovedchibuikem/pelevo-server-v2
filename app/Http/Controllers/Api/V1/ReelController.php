@@ -97,6 +97,21 @@ final class ReelController extends Controller
         return ApiResponse::success($presented[0]);
     }
 
+    public function destroy(string $reel, Request $request): JsonResponse
+    {
+        $creator = CreatorProfile::where('user_id', $request->user()->id)->first();
+        if (! $creator) {
+            return ApiResponse::error('CLAIM_REQUIRED', 'Creator access is required.', 403);
+        }
+        $deleted = DB::table('reels')->where('id', $reel)->where('creator_profile_id', $creator->id)->delete();
+        if ($deleted === 0) {
+            return ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
+        }
+        Cache::forget('reel:'.$reel);
+
+        return ApiResponse::success(['deleted' => true]);
+    }
+
     public function linkEpisode(string $reel, Request $request): JsonResponse
     {
         $data = $request->validate(['episode_id' => ['required', 'exists:episodes,id']]);
@@ -148,9 +163,19 @@ final class ReelController extends Controller
             $hidden->selectRaw('1')->from('reel_engagements')->whereColumn('reel_engagements.reel_id', 'reels.id')->where('reel_engagements.user_id', $request->user()->id)->where('reel_engagements.not_interested', true);
         });
         if ($mode === 'following') {
-            $query->join('follows', function ($join) use ($request): void {
-                $join->on('follows.show_id', '=', 'reels.show_id')->where('follows.user_id', $request->user()->id);
-            })->select('reels.*');
+            $query->where(function ($scope) use ($request): void {
+                $scope->whereExists(function ($followed) use ($request): void {
+                    $followed->selectRaw('1')
+                        ->from('creator_followers')
+                        ->whereColumn('creator_followers.creator_profile_id', 'reels.creator_profile_id')
+                        ->where('creator_followers.user_id', $request->user()->id);
+                })->orWhereExists(function ($followedShow) use ($request): void {
+                    $followedShow->selectRaw('1')
+                        ->from('follows')
+                        ->whereColumn('follows.show_id', 'reels.show_id')
+                        ->where('follows.user_id', $request->user()->id);
+                });
+            });
         }
         if ($mode === 'trending') {
             $query->leftJoin('reel_view_credits', 'reel_view_credits.reel_id', '=', 'reels.id')->select('reels.*')->selectRaw('count(reel_view_credits.reel_view_id) as qualified_views')->groupBy('reels.id')->orderByDesc('qualified_views');
