@@ -126,7 +126,8 @@ final class MediaUploadController extends Controller
             }
         }
         $upload->update(['state' => 'queued']);
-        if (config('media.process_inline')) {
+        $inline = (bool) config('media.process_inline') && $upload->disk !== 'mux';
+        if ($inline) {
             ProcessReelUpload::dispatchSync($upload->id);
         } else {
             ProcessReelUpload::dispatch($upload->id);

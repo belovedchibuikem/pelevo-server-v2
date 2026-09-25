@@ -70,7 +70,8 @@ or systemd units.
 
 - **Database:** `DB_CONNECTION=pgsql` on Forge (PostgreSQL). Local WAMP may still use MySQL.
 - **Cache/queues:** `QUEUE_CONNECTION=redis` and `CACHE_STORE=redis`.
-- Horizon must consume every queue listed in `config/operations.php`.
+- Horizon must consume every queue listed in `config/operations.php`, including `media`. Reel processing stays `queued` forever if `supervisor-media` is down.
+- `MEDIA_PROCESS_INLINE` must be `false` in production. Mux reel jobs are never run inside the HTTP request.
 - `OPERATIONS_READINESS_TOKEN` must be a long random secret available only to
   the infrastructure probe.
 - Object-storage credentials (`AWS_*` or optional `SUPABASE_STORAGE_*`) stay

@@ -19,9 +19,11 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 360;
+    public int $timeout = 90;
 
-    public array $backoff = [30, 120];
+    public int $uniqueFor = 120;
+
+    public array $backoff = [5, 15];
 
     public function __construct(public readonly string $uploadId)
     {

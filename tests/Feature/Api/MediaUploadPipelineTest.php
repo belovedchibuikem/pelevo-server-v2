@@ -280,6 +280,79 @@ final class MediaUploadPipelineTest extends TestCase
         $this->assertSame('https://stream.mux.com/play1.m3u8', $upload->probe['playback_url']);
     }
 
+    public function test_mux_complete_never_blocks_the_http_request_even_when_inline_processing_is_on(): void
+    {
+        config([
+            'media.direct_upload' => 'mux',
+            'media.process_inline' => true,
+            'services.mux.token_id' => 'mux-id',
+            'services.mux.token_secret' => 'mux-secret',
+        ]);
+        Queue::fake([ProcessReelUpload::class]);
+        $user = User::factory()->create();
+        $upload = MediaUpload::create([
+            'user_id' => $user->id,
+            'disk' => 'mux',
+            'path' => 'mux_upload_prep',
+            'expected_mime' => 'video/mp4',
+            'expected_size' => 2048,
+            'state' => 'pending',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $this->actingAs($user, 'sanctum')->postJson("/api/v1/uploads/{$upload->id}/complete")
+            ->assertStatus(202)
+            ->assertJsonPath('data.state', 'queued');
+        Queue::assertPushed(ProcessReelUpload::class);
+        $this->assertSame('queued', $upload->fresh()->state);
+    }
+
+    public function test_mux_marks_processed_as_soon_as_playback_id_exists(): void
+    {
+        config([
+            'media.direct_upload' => 'mux',
+            'services.mux.token_id' => 'mux-id',
+            'services.mux.token_secret' => 'mux-secret',
+        ]);
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if (str_contains($request->url(), '/video/v1/uploads/mux_upload_prep')) {
+                return Http::response(['data' => ['status' => 'asset_created', 'asset_id' => 'asset_prep']], 200);
+            }
+            if (str_contains($request->url(), '/video/v1/assets/asset_prep')) {
+                return Http::response(['data' => [
+                    'status' => 'preparing',
+                    'duration' => 42.4,
+                    'playback_ids' => [['id' => 'play_prep']],
+                    'tracks' => [['type' => 'video', 'max_width' => 720, 'max_height' => 1280]],
+                ]], 200);
+            }
+
+            return Http::response(['error' => $request->url()], 500);
+        });
+        $upload = MediaUpload::create([
+            'user_id' => User::factory()->create()->id,
+            'disk' => 'mux',
+            'path' => 'mux_upload_prep',
+            'expected_mime' => 'video/mp4',
+            'expected_size' => 2048,
+            'state' => 'queued',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        (new ProcessReelUpload($upload->id))->handle(new class implements MediaProbe
+        {
+            public function inspect(string $absolutePath): array
+            {
+                throw new \RuntimeException('Mux uploads must not be probed from disk.');
+            }
+        });
+        $upload->refresh();
+        $this->assertSame('processed', $upload->state);
+        $this->assertSame(42400, $upload->probe['duration_ms']);
+        $this->assertSame('https://stream.mux.com/play_prep.m3u8', $upload->probe['playback_url']);
+        $this->assertSame(720, $upload->probe['width']);
+    }
+
     public function test_mux_transcode_publishes_without_ffmpeg(): void
     {
         $user = User::factory()->create();

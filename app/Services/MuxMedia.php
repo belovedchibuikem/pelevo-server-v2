@@ -61,7 +61,7 @@ final class MuxMedia
         }
         try {
             $assetId = null;
-            for ($i = 0; $i < 45; $i++) {
+            for ($i = 0; $i < 30; $i++) {
                 $upload = $this->client()->timeout(15)->get('https://api.mux.com/video/v1/uploads/'.$uploadId);
                 $status = (string) $upload->json('data.status');
                 $assetId = $upload->json('data.asset_id');
@@ -166,47 +166,77 @@ final class MuxMedia
      */
     private function waitForReadyAsset(string $assetId): ?array
     {
-        $playbackId = null;
-        $duration = 0.0;
-        $width = 1080;
-        $height = 1920;
-        for ($i = 0; $i < 45; $i++) {
+        for ($i = 0; $i < 40; $i++) {
             $asset = $this->client()->timeout(15)->get('https://api.mux.com/video/v1/assets/'.$assetId);
-            $status = $asset->json('data.status');
-            $playbackId = $asset->json('data.playback_ids.0.id');
-            $duration = (float) ($asset->json('data.duration') ?? 0);
-            $tracks = $asset->json('data.tracks');
-            if (is_array($tracks)) {
-                foreach ($tracks as $track) {
-                    if (! is_array($track) || ($track['type'] ?? null) !== 'video') {
-                        continue;
-                    }
-                    $width = (int) ($track['max_width'] ?? $width);
-                    $height = (int) ($track['max_height'] ?? $height);
-                }
+            $data = $asset->json('data');
+            if (! is_array($data)) {
+                $this->pause();
+                continue;
             }
-            if ($status === 'ready' && is_string($playbackId) && $playbackId !== '') {
-                break;
-            }
+            $status = (string) ($data['status'] ?? '');
             if ($status === 'errored') {
                 return null;
             }
+            $playbackId = $this->playbackId($data);
+            if (is_string($playbackId) && $playbackId !== '') {
+                $duration = (float) ($data['duration'] ?? 0);
+                [$width, $height] = $this->videoSize($data);
+
+                return [
+                    'duration_ms' => max(1, (int) round($duration * 1000)),
+                    'mime' => 'video/mp4',
+                    'width' => $width,
+                    'height' => $height,
+                    'mux_asset_id' => $assetId,
+                    'mux_playback_id' => $playbackId,
+                    'playback_url' => 'https://stream.mux.com/'.$playbackId.'.m3u8',
+                    'thumbnail_url' => 'https://image.mux.com/'.$playbackId.'/thumbnail.jpg?time=1',
+                ];
+            }
             $this->pause();
         }
-        if (! is_string($playbackId) || $playbackId === '') {
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function playbackId(array $data): ?string
+    {
+        $ids = $data['playback_ids'] ?? null;
+        if (! is_array($ids) || $ids === []) {
             return null;
         }
+        $first = $ids[0] ?? null;
+        if (is_array($first) && is_string($first['id'] ?? null) && $first['id'] !== '') {
+            return $first['id'];
+        }
 
-        return [
-            'duration_ms' => (int) round($duration * 1000),
-            'mime' => 'video/mp4',
-            'width' => max(1, $width),
-            'height' => max(1, $height),
-            'mux_asset_id' => $assetId,
-            'mux_playback_id' => $playbackId,
-            'playback_url' => 'https://stream.mux.com/'.$playbackId.'.m3u8',
-            'thumbnail_url' => 'https://image.mux.com/'.$playbackId.'/thumbnail.jpg?time=1',
-        ];
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array{0: int, 1: int}
+     */
+    private function videoSize(array $data): array
+    {
+        $width = 1080;
+        $height = 1920;
+        $tracks = $data['tracks'] ?? null;
+        if (! is_array($tracks)) {
+            return [$width, $height];
+        }
+        foreach ($tracks as $track) {
+            if (! is_array($track) || ($track['type'] ?? null) !== 'video') {
+                continue;
+            }
+            $width = max(1, (int) ($track['max_width'] ?? $width));
+            $height = max(1, (int) ($track['max_height'] ?? $height));
+        }
+
+        return [$width, $height];
     }
 
     private function pause(): void
@@ -214,7 +244,7 @@ final class MuxMedia
         if (app()->runningUnitTests()) {
             return;
         }
-        sleep(2);
+        usleep(400000);
     }
 
     private function client()
