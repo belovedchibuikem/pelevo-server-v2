@@ -7,6 +7,7 @@ use App\Jobs\TranscodeReelMedia;
 use App\Models\CreatorProfile;
 use App\Support\ApiResponse;
 use App\Support\PublishedReelPresenter;
+use App\Support\ReelFeedRanker;
 use App\Support\ReelLimits;
 use App\Support\ReelPlayback;
 use Illuminate\Http\JsonResponse;
@@ -176,6 +177,16 @@ final class ReelController extends Controller
                         ->where('follows.user_id', $request->user()->id);
                 });
             });
+        }
+        if ($mode === 'recent') {
+            $limit = min(max($request->integer('limit', 20), 1), 50);
+            $offset = max(0, (int) $request->input('cursor', 0));
+            [$rows, $hasMore] = app(ReelFeedRanker::class)->page($query, $limit, $offset);
+
+            return ApiResponse::success(
+                $presenter->present($rows, $request->user()->id, $request),
+                ['cursor' => $hasMore ? (string) ($offset + $limit) : null, 'has_more' => $hasMore],
+            );
         }
         if ($mode === 'trending') {
             $query->leftJoin('reel_view_credits', 'reel_view_credits.reel_id', '=', 'reels.id')->select('reels.*')->selectRaw('count(reel_view_credits.reel_view_id) as qualified_views')->groupBy('reels.id')->orderByDesc('qualified_views');

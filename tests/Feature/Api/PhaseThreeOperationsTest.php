@@ -85,6 +85,31 @@ final class PhaseThreeOperationsTest extends TestCase
             ->assertJsonPath('data.0.episode_title', 'Feed episode');
     }
 
+    public function test_for_you_ranks_engaged_reels_ahead_of_new_low_view_reels_but_still_includes_them(): void
+    {
+        [, $creator] = $this->verifiedCreator();
+        $viewer = User::factory()->create();
+        $popular = [];
+        for ($i = 0; $i < 5; $i++) {
+            $id = (string) Str::ulid();
+            $popular[] = $id;
+            DB::table('reels')->insert(['id' => $id, 'creator_profile_id' => $creator->id, 'state' => 'published', 'duration_ms' => 8000, 'published_at' => now()->subDays(20 - $i), 'created_at' => now()->subDays(20 - $i), 'updated_at' => now()]);
+            for ($like = 0; $like < 6; $like++) {
+                $fan = User::factory()->create();
+                DB::table('reel_engagements')->insert(['reel_id' => $id, 'user_id' => $fan->id, 'liked' => true, 'saved' => $like === 0, 'not_interested' => false, 'created_at' => now(), 'updated_at' => now()]);
+            }
+        }
+        $fresh = (string) Str::ulid();
+        DB::table('reels')->insert(['id' => $fresh, 'creator_profile_id' => $creator->id, 'state' => 'published', 'duration_ms' => 8000, 'published_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+
+        $ids = $this->actingAs($viewer, 'sanctum')->getJson('/api/v1/reels/for-you?limit=5')->assertOk()->json('data');
+        $ids = array_column($ids, 'id');
+        $this->assertCount(5, $ids);
+        $this->assertContains($fresh, $ids);
+        $this->assertSame($fresh, $ids[4]);
+        $this->assertSame(array_slice(array_reverse($popular), 0, 4), array_slice($ids, 0, 4));
+    }
+
     public function test_rejected_creator_content_can_be_appealed_once(): void
     {
         [$owner, $creator] = $this->verifiedCreator();
