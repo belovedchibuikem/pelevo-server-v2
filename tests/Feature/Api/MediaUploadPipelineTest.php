@@ -303,7 +303,7 @@ final class MediaUploadPipelineTest extends TestCase
         $this->actingAs($user, 'sanctum')->postJson("/api/v1/uploads/{$upload->id}/complete")
             ->assertStatus(202)
             ->assertJsonPath('data.state', 'queued');
-        Queue::assertPushed(ProcessReelUpload::class);
+        Queue::assertPushed(ProcessReelUpload::class, fn (ProcessReelUpload $job): bool => $job->uploadId === $upload->id && $job->queue === 'default');
         $this->assertSame('queued', $upload->fresh()->state);
     }
 
@@ -391,5 +391,41 @@ final class MediaUploadPipelineTest extends TestCase
         (new TranscodeReelMedia($reel))->handle($transcoder);
         $this->assertDatabaseHas('reels', ['id' => $reel, 'state' => 'published', 'media_url' => 'https://stream.mux.com/play1.m3u8']);
         $this->assertDatabaseHas('reel_media', ['reel_id' => $reel, 'processing_state' => 'ready', 'transcoded_path' => 'mux/asset1']);
+    }
+
+    public function test_process_reel_uploads_command_recovers_a_queued_mux_upload(): void
+    {
+        config([
+            'media.direct_upload' => 'mux',
+            'services.mux.token_id' => 'mux-id',
+            'services.mux.token_secret' => 'mux-secret',
+        ]);
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if (str_contains($request->url(), '/video/v1/uploads/mux_stuck')) {
+                return Http::response(['data' => ['status' => 'asset_created', 'asset_id' => 'asset_stuck']], 200);
+            }
+            if (str_contains($request->url(), '/video/v1/assets/asset_stuck')) {
+                return Http::response(['data' => [
+                    'status' => 'preparing',
+                    'duration' => 12.0,
+                    'playback_ids' => [['id' => 'play_stuck']],
+                ]], 200);
+            }
+
+            return Http::response(['error' => $request->url()], 500);
+        });
+        $upload = MediaUpload::create([
+            'user_id' => User::factory()->create()->id,
+            'disk' => 'mux',
+            'path' => 'mux_stuck',
+            'expected_mime' => 'video/mp4',
+            'expected_size' => 2048,
+            'state' => 'queued',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $this->artisan('pelevo:process-reel-uploads', ['--sync' => true])->assertSuccessful();
+        $this->assertSame('processed', $upload->fresh()->state);
+        $this->assertSame('https://stream.mux.com/play_stuck.m3u8', $upload->fresh()->probe['playback_url']);
     }
 }

@@ -33,6 +33,11 @@ Schedule::call(function (): void {
     ]);
     DB::table('scheduler_heartbeats')->where('ran_at', '<', $ranAt->copy()->subDays(7))->delete();
 })->name('scheduler-heartbeat')->everyMinute()->onOneServer();
+Schedule::command('pelevo:process-reel-uploads --sync --limit=3')
+    ->name('process-stuck-reel-uploads')
+    ->everyMinute()
+    ->onOneServer()
+    ->withoutOverlapping(3);
 Schedule::command('horizon:snapshot')->everyFiveMinutes()->onOneServer()->withoutOverlapping();
 Schedule::call(function (): void {
     User::query()->where('status', 'active')->select('id')->chunkById(500, fn ($users) => $users->each(fn (User $user) => MaterializeHomeFeed::dispatch($user->id)));

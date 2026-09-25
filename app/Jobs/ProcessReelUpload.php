@@ -9,6 +9,7 @@ use App\Support\ReelLimits;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Throwable;
@@ -35,16 +36,30 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
         return $this->uploadId;
     }
 
+    public static function queueForDisk(string $disk): string
+    {
+        return $disk === 'mux' ? 'default' : 'media';
+    }
+
     public function handle(MediaProbe $probe): void
     {
         $upload = MediaUpload::findOrFail($this->uploadId);
         if (in_array($upload->state, ['processed', 'rejected'], true)) {
             return;
         }
+        Log::info('reel.upload.process.start', [
+            'id' => $upload->id,
+            'disk' => $upload->disk,
+            'state' => $upload->state,
+        ]);
         $upload->update(['state' => 'processing', 'failure_reason' => null]);
         if ($upload->disk === 'mux') {
             $ready = app(MuxMedia::class)->waitForDirectUpload($upload->path);
             if ($ready === null) {
+                Log::warning('reel.upload.process.mux_unready', [
+                    'id' => $upload->id,
+                    'mux_upload_id' => $upload->path,
+                ]);
                 throw new RuntimeException('Mux did not finish processing the reel.');
             }
             $originalMs = (int) ($ready['duration_ms'] ?? 0);
@@ -57,6 +72,11 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
                 'probe' => $ready,
                 'failure_reason' => null,
                 'processed_at' => now(),
+            ]);
+            Log::info('reel.upload.process.done', [
+                'id' => $upload->id,
+                'disk' => 'mux',
+                'duration_ms' => $ready['duration_ms'] ?? null,
             ]);
 
             return;
@@ -110,10 +130,19 @@ final class ProcessReelUpload implements ShouldBeUnique, ShouldQueue
             'failure_reason' => null,
             'processed_at' => now(),
         ]);
+        Log::info('reel.upload.process.done', [
+            'id' => $upload->id,
+            'disk' => $upload->disk,
+            'duration_ms' => $result['duration_ms'] ?? null,
+        ]);
     }
 
     public function failed(?Throwable $exception): void
     {
+        Log::error('reel.upload.process.failed', [
+            'id' => $this->uploadId,
+            'message' => $exception?->getMessage(),
+        ]);
         MediaUpload::whereKey($this->uploadId)->whereNotIn('state', ['processed', 'rejected'])->update([
             'state' => 'failed',
             'failure_reason' => mb_substr((string) $exception?->getMessage(), 0, 1000),

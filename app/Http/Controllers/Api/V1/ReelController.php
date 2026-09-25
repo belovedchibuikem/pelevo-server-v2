@@ -67,9 +67,10 @@ final class ReelController extends Controller
             DB::table('reel_media')->insert(['id' => (string) Str::ulid(), 'reel_id' => $id, 'media_upload_id' => $upload->id, 'mime' => $probe['mime'], 'duration_ms' => $durationMs, 'width' => $probe['width'], 'height' => $probe['height'], 'processing_state' => 'processing', 'created_at' => now(), 'updated_at' => now()]);
             DB::table('reel_processing_events')->insert(['id' => (string) Str::ulid(), 'reel_id' => $id, 'state' => 'processing', 'details' => json_encode(['truncated' => $truncated, 'original_duration_ms' => $originalMs], JSON_THROW_ON_ERROR), 'created_at' => now()]);
 
-            return ['id' => $id, 'truncated' => $truncated, 'original_duration_ms' => $originalMs];
+            return ['id' => $id, 'truncated' => $truncated, 'original_duration_ms' => $originalMs, 'disk' => $upload->disk];
         });
-        TranscodeReelMedia::dispatch($created['id']);
+        TranscodeReelMedia::dispatch($created['id'])
+            ->onQueue(($created['disk'] ?? '') === 'mux' ? 'default' : 'media');
         $row = (array) DB::table('reels')->find($created['id']);
 
         return ApiResponse::success([

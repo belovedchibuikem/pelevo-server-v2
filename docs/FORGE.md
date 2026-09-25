@@ -192,3 +192,23 @@ ls -la current releases
 ```
 
 Do **not** `rm` the release that `current` points at. Then Redeploy in Forge. Paste the updated `deploy/forge/deploy.sh` into Forge → Deployments so later deploys stop Horizon before purge. Enable **Restart Daemons After Deployment** so Horizon comes back on the new release.
+
+## Reel upload stuck on “Processing video…”
+
+The phone PUT to Mux can finish at 100% while Pelevo is still waiting on Horizon. SSH in and run:
+
+```bash
+cd /home/forge/pelevo.com/current   # or: cd /home/forge/pelevo.com
+
+php artisan horizon:status
+php artisan pelevo:process-reel-uploads --sync
+php artisan pelevo:catalog-status
+
+# Application log (Mux / reel processing)
+tail -n 200 storage/logs/laravel.log | grep -E 'reel\.upload|mux\.direct_upload'
+
+# Follow new log lines
+tail -f storage/logs/laravel.log
+```
+
+If `horizon:status` is not running, start the Forge Horizon daemon and enable **Restart Daemons After Deployment**. `--sync` processes stuck uploads immediately without waiting for that daemon.

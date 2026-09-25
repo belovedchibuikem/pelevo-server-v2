@@ -8,8 +8,8 @@ return [
     // origin = phone → pelevo.com (Cloudflare 100s limit). mux = phone → Mux GCS.
     // auto uses Mux in production when credentials exist.
     'direct_upload' => env('MEDIA_DIRECT_UPLOAD', 'auto'),
-    // Local origin uploads can probe in the HTTP request. Mux never runs inline —
-    // ProcessReelUpload must be consumed on the `media` Horizon queue.
+    // Mux jobs run on `default` so Horizon's general workers pick them up even if
+    // supervisor-media is down. Origin FFmpeg jobs stay on `media`.
     'process_inline' => filter_var(env('MEDIA_PROCESS_INLINE', env('APP_ENV') === 'local'), FILTER_VALIDATE_BOOL),
     'ffprobe_binary' => env('FFPROBE_BINARY', 'ffprobe'),
     'ffmpeg_binary' => env('FFMPEG_BINARY', 'ffmpeg'),

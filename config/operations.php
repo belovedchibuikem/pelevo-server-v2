@@ -20,5 +20,6 @@ return [
     'manual_tasks' => [
         'catalog:poll-feeds' => 'Poll due RSS feeds',
         'horizon:snapshot' => 'Capture Horizon metrics',
+        'pelevo:process-reel-uploads' => 'Recover stuck reel uploads',
     ],
 ];

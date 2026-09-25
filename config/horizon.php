@@ -199,7 +199,7 @@ return [
     'defaults' => [
         'supervisor-general' => [
             'connection' => 'redis',
-            'queue' => ['default', 'notifications', 'feeds', 'rss', 'catalog', 'recommendations', 'privacy', 'ai', 'admin-exports', 'claims'],
+            'queue' => ['default', 'media', 'notifications', 'feeds', 'rss', 'catalog', 'recommendations', 'privacy', 'ai', 'admin-exports', 'claims'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 1,
@@ -231,7 +231,7 @@ return [
             'maxTime' => 0,
             'maxJobs' => 50,
             'memory' => 512,
-            'tries' => 1,
+            'tries' => 3,
             'timeout' => 900,
             'nice' => 5,
         ],

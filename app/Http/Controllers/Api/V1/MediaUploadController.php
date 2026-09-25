@@ -130,7 +130,8 @@ final class MediaUploadController extends Controller
         if ($inline) {
             ProcessReelUpload::dispatchSync($upload->id);
         } else {
-            ProcessReelUpload::dispatch($upload->id);
+            ProcessReelUpload::dispatch($upload->id)
+                ->onQueue(ProcessReelUpload::queueForDisk($upload->disk));
         }
 
         return ApiResponse::success(['id' => $upload->id, 'state' => 'queued'], status: 202);

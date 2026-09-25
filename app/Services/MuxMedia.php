@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class MuxMedia
@@ -66,6 +67,11 @@ final class MuxMedia
                 $status = (string) $upload->json('data.status');
                 $assetId = $upload->json('data.asset_id');
                 if ($status === 'errored' || $status === 'cancelled' || $status === 'timed_out') {
+                    Log::warning('mux.direct_upload.failed', [
+                        'upload_id' => $uploadId,
+                        'status' => $status,
+                    ]);
+
                     return null;
                 }
                 if (is_string($assetId) && $assetId !== '') {
@@ -74,11 +80,18 @@ final class MuxMedia
                 $this->pause();
             }
             if (! is_string($assetId) || $assetId === '') {
+                Log::warning('mux.direct_upload.no_asset', ['upload_id' => $uploadId]);
+
                 return null;
             }
 
             return $this->waitForReadyAsset($assetId);
-        } catch (Throwable) {
+        } catch (Throwable $error) {
+            Log::warning('mux.direct_upload.exception', [
+                'upload_id' => $uploadId,
+                'message' => $error->getMessage(),
+            ]);
+
             return null;
         }
     }
