@@ -125,11 +125,11 @@ final class MobileEarnWalletTest extends TestCase
     public function test_earn_catalog_lists_only_marked_shows_and_hides_locked_audio(): void
     {
         $user = User::factory()->create();
-        $marked = Show::create(['rss_url' => 'https://example.com/marked.xml', 'title' => 'Marked Earn', 'earn_enabled' => true, 'status' => 'active']);
+        $categoryId = DB::table('categories')->insertGetId(['name' => 'Business', 'slug' => 'business', 'position' => 1, 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
+        $marked = Show::create(['rss_url' => 'https://example.com/marked.xml', 'title' => 'Marked Earn', 'earn_enabled' => true, 'status' => 'active', 'earn_category_id' => $categoryId, 'earn_position' => 1]);
         $indexOnly = Show::create(['rss_url' => 'https://example.com/index.xml', 'title' => 'Podcast Index Import', 'earn_enabled' => false, 'status' => 'active']);
         DB::table('show_external_ids')->insert(['show_id' => $indexOnly->id, 'provider' => 'podcast_index', 'external_id' => '9001']);
-        $categoryId = DB::table('categories')->insertGetId(['name' => 'Business', 'slug' => 'business', 'position' => 1, 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
-        DB::table('category_show')->insert(['category_id' => $categoryId, 'show_id' => $marked->id]);
+        DB::table('category_show')->insert(['category_id' => $categoryId, 'show_id' => $indexOnly->id]);
         Episode::create(['show_id' => $marked->id, 'guid' => (string) Str::ulid(), 'title' => 'Monetized episode', 'audio_url' => 'https://cdn.example.com/marked.mp3', 'duration_seconds' => 700, 'published_at' => now()]);
         Episode::create(['show_id' => $indexOnly->id, 'guid' => (string) Str::ulid(), 'title' => 'Index episode', 'audio_url' => 'https://cdn.example.com/index.mp3', 'duration_seconds' => 700, 'published_at' => now()]);
 

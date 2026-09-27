@@ -12,6 +12,7 @@ const navigation: NavItem[] = [
   { label: 'Operations', href: '/admin/operations', group: 'Operate', keywords: 'scheduler cron horizon workers queue failed jobs', permission: 'audit.view' },
   { label: 'Users', href: '/admin/users', group: 'Operate', keywords: 'people sessions devices wallets sanctions', permission: 'users.view' },
   { label: 'Catalog', href: '/admin/catalog', group: 'Operate', keywords: 'shows episodes rss podcast index discovery', permission: 'catalog.write' },
+  { label: 'Earn podcasts', href: '/admin/earn-podcasts', group: 'Operate', keywords: 'earn monetized niche mark unmark ordinary podcasts', permission: 'catalog.write' },
   { label: 'Creators & Claims', href: '/admin/creators', group: 'Operate', keywords: 'studios verification disputes monetization', permission: 'claims.decide' },
   { label: 'Claim Queue', href: '/admin/claims', group: 'Operate', keywords: 'review verification rss ownership', permission: 'claims.decide' },
   { label: 'Reels & Live', href: '/admin/reels-live', group: 'Operate', keywords: 'processing reports appeals livestream', permission: 'moderation.act' },

@@ -42,7 +42,7 @@ export default function Catalog(props: Props) {
           <div>
             <nav aria-label="Breadcrumb" className="text-xs font-semibold uppercase tracking-[.16em] text-teal-700">Operate / Catalog</nav>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight">Catalog and discovery</h1>
-            <p className="mt-2 max-w-3xl text-sm text-slate-500">RSS health, Home merchandising, editorial programming and search relevance.</p>
+            <p className="mt-2 max-w-3xl text-sm text-slate-500">RSS health, Home merchandising, editorial programming and search relevance. Mark, unmark, and arrange Earn podcasts on the <Link href="/admin/earn-podcasts" className="font-semibold text-teal-700">Earn podcasts</Link> page.</p>
           </div>
           <span className="text-xs text-slate-500">Updated {new Date(props.freshAt).toLocaleString()}</span>
         </header>
@@ -99,7 +99,7 @@ export default function Catalog(props: Props) {
                     </td>
                     <td className="p-3 text-slate-500">{show.last_success_at ? new Date(show.last_success_at).toLocaleString() : 'Never'}</td>
                     <td className="p-3 space-x-2">
-                      <button type="button" onClick={() => void toggleEarn(show.id, !show.earn_enabled)} className="rounded-lg border border-slate-400 px-2 py-1 text-xs font-semibold text-slate-800">{show.earn_enabled ? 'Earning on' : 'Mark for Earn'}</button>
+                      <button type="button" onClick={() => void toggleEarn(show.id, !show.earn_enabled)} className="rounded-lg border border-slate-400 px-2 py-1 text-xs font-semibold text-slate-800">{show.earn_enabled ? 'Remove from Earn' : 'Mark for Earn'}</button>
                       <button type="button" onClick={() => void refresh(show.id)} className="rounded-lg border border-teal-700 px-2 py-1 text-xs font-semibold text-teal-800">Live refresh</button>
                     </td>
                   </tr>

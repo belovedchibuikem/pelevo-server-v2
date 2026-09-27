@@ -40,10 +40,11 @@ final class EarnController extends Controller
             ->where('shows.status', 'active')
             ->whereHas('episodes', fn ($query) => $query->whereNotNull('duration_seconds')->where('duration_seconds', '>=', 60))
             ->leftJoinSub($this->nicheQuery(), 'earn_niches', 'earn_niches.show_id', '=', 'shows.id')
-            ->select('shows.id', 'shows.title', 'shows.author', 'shows.artwork_url', 'earn_niches.niche')
+            ->select('shows.id', 'shows.title', 'shows.author', 'shows.artwork_url', 'shows.earn_position', 'earn_niches.niche')
             ->withCount(['episodes as episodes_count' => fn ($query) => $query->whereNotNull('duration_seconds')->where('duration_seconds', '>=', 60)])
             ->orderByRaw('CASE WHEN earn_niches.niche IS NULL THEN 1 ELSE 0 END')
             ->orderBy('earn_niches.niche')
+            ->orderBy('shows.earn_position')
             ->orderBy('shows.title')
             ->orderBy('shows.id')
             ->cursorPaginate(20);
@@ -264,11 +265,11 @@ final class EarnController extends Controller
 
     private function nicheQuery()
     {
-        return DB::table('category_show')
-            ->join('categories', 'categories.id', '=', 'category_show.category_id')
-            ->where('categories.active', true)
-            ->groupBy('category_show.show_id')
-            ->select('category_show.show_id', DB::raw('MIN(categories.name) as niche'));
+        return DB::table('shows')
+            ->leftJoin('categories', function ($join): void {
+                $join->on('categories.id', '=', 'shows.earn_category_id')->where('categories.active', true);
+            })
+            ->select('shows.id as show_id', 'categories.name as niche');
     }
 
     private function coinsFor(int $seconds): int

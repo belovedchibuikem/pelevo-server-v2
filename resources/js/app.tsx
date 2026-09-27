@@ -8,6 +8,7 @@ import MarketingLayout from './layouts/public/MarketingLayout';
 const authenticatedAdminPages = new Set([
   'Admin/Advanced',
   'Admin/Catalog',
+  'Admin/EarnCatalog',
   'Admin/Claims',
   'Admin/Creators',
   'Admin/Dashboard',

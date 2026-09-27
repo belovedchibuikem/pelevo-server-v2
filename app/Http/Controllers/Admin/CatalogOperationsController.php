@@ -46,11 +46,27 @@ final class CatalogOperationsController extends Controller
     public function earn(string $show, Request $request): JsonResponse
     {
         abort_unless(DB::table('shows')->where('id', $show)->exists(), 404);
-        $data = $request->validate(['earn_enabled' => ['required', 'boolean']]);
-        DB::table('shows')->where('id', $show)->update(['earn_enabled' => $data['earn_enabled'], 'updated_at' => now()]);
-        $audit = $this->audit($request, 'catalog.earn_flag_saved', 'App\\Models\\Show', $show, 'Earn catalog eligibility update.', ['earn_enabled' => $data['earn_enabled']]);
+        $data = $request->validate([
+            'earn_enabled' => ['required', 'boolean'],
+            'earn_category_id' => ['sometimes', 'nullable', 'integer', 'exists:categories,id'],
+            'earn_position' => ['sometimes', 'integer', 'min:0', 'max:10000'],
+        ]);
+        $values = ['earn_enabled' => $data['earn_enabled'], 'updated_at' => now()];
+        if (array_key_exists('earn_category_id', $data)) {
+            $values['earn_category_id'] = $data['earn_category_id'];
+        }
+        if (array_key_exists('earn_position', $data)) {
+            $values['earn_position'] = $data['earn_position'];
+        }
+        DB::table('shows')->where('id', $show)->update($values);
+        $audit = $this->audit($request, 'catalog.earn_flag_saved', 'App\\Models\\Show', $show, 'Earn catalog eligibility update.', $values);
 
-        return ApiResponse::success(['earn_enabled' => (bool) $data['earn_enabled'], 'audit_reference' => $audit]);
+        return ApiResponse::success([
+            'earn_enabled' => (bool) $data['earn_enabled'],
+            'earn_category_id' => $values['earn_category_id'] ?? null,
+            'earn_position' => $values['earn_position'] ?? null,
+            'audit_reference' => $audit,
+        ]);
     }
 
     public function category(Request $request, InvalidateDiscoveryCache $cache): JsonResponse

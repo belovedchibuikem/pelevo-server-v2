@@ -15,6 +15,7 @@ use App\Http\Controllers\Admin\ConfigurationWorkspaceController;
 use App\Http\Controllers\Admin\CreatorOperationsController;
 use App\Http\Controllers\Admin\CreatorPayoutController;
 use App\Http\Controllers\Admin\DashboardController;
+use App\Http\Controllers\Admin\EarnCatalogController;
 use App\Http\Controllers\Admin\FinanceController;
 use App\Http\Controllers\Admin\IntegrationSettingsController;
 use App\Http\Controllers\Admin\ModerationController;
@@ -171,6 +172,7 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
         Route::get('creators', [CreatorOperationsController::class, 'page'])->middleware('admin.permission:claims.decide')->name('creators');
         Route::get('finance', [FinanceController::class, 'page'])->middleware('admin.permission:finance.view')->name('finance');
         Route::get('catalog', [CatalogOperationsController::class, 'page'])->middleware('admin.permission:catalog.write')->name('catalog');
+        Route::get('earn-podcasts', [EarnCatalogController::class, 'page'])->middleware('admin.permission:catalog.write')->name('earn-podcasts');
         Route::get('advanced', [AdvancedOperationsController::class, 'page'])->middleware('admin.permission:audit.view')->name('advanced');
         Route::get('users', ModuleWorkspaceController::class)->defaults('module', 'users')->middleware('admin.permission:users.view')->name('users');
         Route::get('finance-records', ModuleWorkspaceController::class)->defaults('module', 'finance-records')->middleware('admin.permission:finance.view')->name('finance-records');

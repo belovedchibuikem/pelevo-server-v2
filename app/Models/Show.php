@@ -11,11 +11,11 @@ final class Show extends Model
 {
     use HasUlids;
 
-    protected $fillable = ['rss_url', 'title', 'description', 'artwork_url', 'author', 'language', 'country_code', 'explicit', 'status', 'earn_enabled'];
+    protected $fillable = ['rss_url', 'title', 'description', 'artwork_url', 'author', 'language', 'country_code', 'explicit', 'status', 'earn_enabled', 'earn_category_id', 'earn_position'];
 
     protected function casts(): array
     {
-        return ['earn_enabled' => 'boolean'];
+        return ['earn_enabled' => 'boolean', 'earn_position' => 'integer'];
     }
 
     public function setRssUrlAttribute(string $value): void
