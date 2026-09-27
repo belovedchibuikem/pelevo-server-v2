@@ -120,6 +120,13 @@ final class MobileEarnWalletTest extends TestCase
         $this->assertSame(['id', 'episode_id', 'coins', 'locked_until'], array_keys($award->json('data')));
         $this->assertSame(2, $award->json('data.coins'));
         $this->assertArrayNotHasKey('ledger_transaction_id', $award->json('data'));
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $user->id,
+            'type' => 'earn_award',
+            'title' => 'You earned 2 coins',
+        ]);
+        $this->withHeader('Idempotency-Key', 'earn-catalog')->postJson('/api/v1/earn/sessions/'.$started->json('data.id').'/complete')->assertOk();
+        $this->assertSame(1, DB::table('notifications')->where('user_id', $user->id)->where('type', 'earn_award')->count());
     }
 
     public function test_earn_catalog_lists_only_marked_shows_and_hides_locked_audio(): void
@@ -175,5 +182,26 @@ final class MobileEarnWalletTest extends TestCase
         DB::table('earn_sessions')->where('id', $session)->update(['state' => 'active', 'risk_state' => 'clear', 'verified_seconds' => 100, 'last_position' => 100]);
         $this->withHeader('Idempotency-Key', 'too-short')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertConflict()->assertJsonPath('error.code', 'MODERATION_HOLD');
         $this->assertDatabaseCount('earn_awards', 0);
+    }
+
+    public function test_same_episode_resumes_and_background_listening_counts(): void
+    {
+        config()->set('finance.public_enabled', true);
+        $user = User::factory()->create();
+        $device = Device::create(['user_id' => $user->id, 'device_identifier' => 'device-resume', 'name' => 'Phone']);
+        $show = Show::create(['rss_url' => 'https://example.com/resume.xml', 'title' => 'Resume Show', 'earn_enabled' => true, 'status' => 'active']);
+        $episode = Episode::create(['show_id' => $show->id, 'guid' => (string) Str::ulid(), 'title' => 'Resume Episode', 'audio_url' => 'https://cdn.example.com/resume.mp3', 'duration_seconds' => 600]);
+        $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertCreated();
+        $session = $started->json('data.id');
+        DB::table('earn_sessions')->where('id', $session)->update(['last_position' => 80, 'last_sequence' => 3, 'verified_seconds' => 80]);
+
+        $resumed = $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertOk();
+        $resumed->assertJsonPath('data.id', $session)->assertJsonPath('data.resume_position', 80)->assertJsonPath('data.last_sequence', 3);
+        $nonce = $resumed->json('data.nonce');
+        $token = 'v1.'.hash_hmac('sha256', implode('|', [$device->device_identifier, $session, '4', $nonce]), 'pelevo-dev-earn-integrity');
+        $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", [
+            'position' => 100, 'sequence' => 4, 'elapsed_seconds' => 20, 'playback_rate' => 1, 'foreground' => false, 'audio_active' => true, 'integrity_token' => $token, 'nonce' => $nonce,
+        ])->assertOk()->assertJsonPath('data.accepted', true);
+        $this->assertSame(100, (int) DB::table('earn_sessions')->where('id', $session)->value('verified_seconds'));
     }
 }

@@ -10,6 +10,7 @@ use App\Models\Device;
 use App\Models\Episode;
 use App\Models\FinancialAccount;
 use App\Models\Show;
+use App\Services\InAppNotificationDelivery;
 use App\Support\ApiResponse;
 use App\Support\EarnRegion;
 use Illuminate\Database\QueryException;
@@ -156,6 +157,20 @@ final class EarnController extends Controller
 
             if ($existing) {
                 $stale = $existing->nonce_expires_at && now()->greaterThan($existing->nonce_expires_at);
+                if (! $stale && $existing->episode_id === $episode->id && $existing->state === 'active') {
+                    $nonce = Str::random(64);
+                    DB::table('earn_sessions')->where('id', $existing->id)->update([
+                        'nonce_hash' => hash('sha256', $nonce),
+                        'nonce_expires_at' => now()->addHours(4),
+                        'device_id' => $device->id,
+                        'updated_at' => now(),
+                    ]);
+
+                    return ApiResponse::success(array_merge($this->presentSession($existing->id, $nonce), [
+                        'resume_position' => (int) $existing->last_position,
+                        'last_sequence' => (int) $existing->last_sequence,
+                    ]));
+                }
                 if (! $stale) {
                     return ApiResponse::error('MODERATION_HOLD', 'Only one Earn session may be active.', 409);
                 }
@@ -210,7 +225,7 @@ final class EarnController extends Controller
             $device = Device::where('id', $row->device_id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->first();
             $nonceValid = $row->nonce_hash && $row->nonce_expires_at && now()->lte($row->nonce_expires_at) && hash_equals($row->nonce_hash, hash('sha256', $data['nonce']));
             $advance = (int) $data['position'] - (int) $row->last_position;
-            $invalid = ! $device || ! $nonceValid || ! $data['foreground'] || ! $data['audio_active'] || abs((float) $data['playback_rate'] - 1.0) > 0.01 || ! $integrity->valid($data['integrity_token'], (string) $request->header('X-Device-Id'), $session, (int) $data['sequence'], $data['nonce']) || (int) $data['sequence'] !== (int) $row->last_sequence + 1 || $advance < 0 || $advance > (int) $data['elapsed_seconds'] + 3;
+            $invalid = ! $device || ! $nonceValid || ! $data['audio_active'] || abs((float) $data['playback_rate'] - 1.0) > 0.01 || ! $integrity->valid($data['integrity_token'], (string) $request->header('X-Device-Id'), $session, (int) $data['sequence'], $data['nonce']) || (int) $data['sequence'] !== (int) $row->last_sequence + 1 || $advance < 0 || $advance > (int) $data['elapsed_seconds'] + 3;
             if ($invalid) {
                 return $this->hold($session, 'Heartbeat evidence failed integrity checks.');
             }
@@ -232,24 +247,26 @@ final class EarnController extends Controller
             return ApiResponse::error('VALIDATION', 'Idempotency-Key header is required.', 422);
         }
 
-        return DB::transaction(function () use ($session, $request, $post, $key): JsonResponse {
+        $created = false;
+        $notice = null;
+        $payload = DB::transaction(function () use ($session, $request, $post, $key, &$created, &$notice): array {
             $row = DB::table('earn_sessions')->where('id', $session)->where('user_id', $request->user()->id)->lockForUpdate()->first();
             if (! $row) {
-                return ApiResponse::error('NOT_FOUND', 'Earn session not found.', 404);
+                return ['error' => ApiResponse::error('NOT_FOUND', 'Earn session not found.', 404)];
             }
             if ($row->state === 'completed') {
-                return ApiResponse::success($this->presentAward(DB::table('earn_awards')->where('earn_session_id', $row->id)->first()));
+                return ['award' => $this->presentAward(DB::table('earn_awards')->where('earn_session_id', $row->id)->first())];
             }
             if ($row->state !== 'active' || $row->risk_state !== 'clear') {
-                return ApiResponse::error('MODERATION_HOLD', 'Earn session requires review.', 409);
+                return ['error' => ApiResponse::error('MODERATION_HOLD', 'Earn session requires review.', 409)];
             }
             $episode = Episode::findOrFail($row->episode_id);
             $required = max(1, (int) floor(((int) $episode->duration_seconds) * 0.95));
             if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required) {
-                return ApiResponse::error('MODERATION_HOLD', 'Not enough verified listening evidence.', 409);
+                return ['error' => ApiResponse::error('MODERATION_HOLD', 'Not enough verified listening evidence.', 409)];
             }
             if ($this->episodeLocked($row->user_id, $row->episode_id, true)) {
-                return ApiResponse::error('EPISODE_LOCKED', 'This episode remains locked for Earn.', 409);
+                return ['error' => ApiResponse::error('EPISODE_LOCKED', 'This episode remains locked for Earn.', 409)];
             }
             $wallet = FinancialAccount::firstOrCreate(['owner_type' => get_class($request->user()), 'owner_id' => $request->user()->id, 'type' => 'earn_wallet', 'unit' => 'ECN'], ['balance' => 0]);
             $liability = FinancialAccount::firstOrCreate(['owner_type' => null, 'owner_id' => null, 'type' => 'earn_liability', 'unit' => 'ECN'], ['balance' => 0]);
@@ -258,9 +275,24 @@ final class EarnController extends Controller
             DB::table('earn_awards')->insert(['id' => $awardId, 'user_id' => $row->user_id, 'episode_id' => $row->episode_id, 'earn_session_id' => $row->id, 'ledger_transaction_id' => $transaction->id, 'coins' => $row->expected_award, 'locked_until' => now()->addHours(data_get(json_decode($row->eligibility_snapshot, true), 'lock_hours', 72)), 'created_at' => now(), 'updated_at' => now()]);
             DB::table('earn_sessions')->where('id', $row->id)->update(['state' => 'completed', 'active_guard' => null, 'nonce_hash' => null, 'completed_at' => now(), 'updated_at' => now()]);
             Cache::forget('earn_wallet:'.$row->user_id);
+            $created = true;
+            $notice = [
+                'user_id' => (string) $row->user_id,
+                'coins' => (int) $row->expected_award,
+                'episode_title' => (string) $episode->title,
+                'award_id' => $awardId,
+            ];
 
-            return ApiResponse::success($this->presentAward(DB::table('earn_awards')->find($awardId)), status: 201);
+            return ['award' => $this->presentAward(DB::table('earn_awards')->find($awardId))];
         }, 3);
+        if (isset($payload['error'])) {
+            return $payload['error'];
+        }
+        if ($created && is_array($notice)) {
+            $this->notifyEarnAward($notice);
+        }
+
+        return ApiResponse::success($payload['award'], status: $created ? 201 : 200);
     }
 
     private function nicheQuery()
@@ -323,6 +355,28 @@ final class EarnController extends Controller
         DB::table('earn_sessions')->where('id', $session)->update(['risk_state' => 'review', 'state' => 'review', 'updated_at' => now()]);
 
         return ApiResponse::error('MODERATION_HOLD', $message, 409);
+    }
+
+    /** @param array{user_id: string, coins: int, episode_title: string, award_id: string} $notice */
+    private function notifyEarnAward(array $notice): void
+    {
+        $coins = $notice['coins'];
+        $label = $coins === 1 ? '1 coin' : $coins.' coins';
+        try {
+            app(InAppNotificationDelivery::class)->deliver($notice['user_id'], [
+                'type' => 'earn_award',
+                'key' => 'earn-award:'.$notice['award_id'],
+                'title' => 'You earned '.$label,
+                'body' => 'Your Earn listen of '.$notice['episode_title'].' is complete. This episode stays locked for 72 hours.',
+                'data' => [
+                    'type' => 'earn_award',
+                    'coins' => (string) $coins,
+                    'award_id' => $notice['award_id'],
+                ],
+            ]);
+        } catch (\Throwable $error) {
+            report($error);
+        }
     }
 
     private function presentSession(string $id, string $nonce): array

@@ -32,7 +32,7 @@ final class InAppNotificationDelivery
             $options = $this->mobileOptions($preferences?->mobile_options);
             $allowed = config('features.notifications') && $user->status === 'active'
                 && ($options['in_app_enabled'] ?? true)
-                && (! ($options['high_priority_only'] ?? false) || in_array($message['type'], ['support_reply', 'live'], true));
+                && (! ($options['high_priority_only'] ?? false) || in_array($message['type'], ['support_reply', 'live', 'earn_award'], true));
             if ($message['type'] === 'new_episode') {
                 $allowed = $allowed && ($preferences?->new_episodes ?? true)
                     && in_array('new_episodes', $options['types'] ?? ['new_episodes'], true)
@@ -60,7 +60,7 @@ final class InAppNotificationDelivery
 
                 return $state;
             }
-            $resumeAt = $this->quietHoursEnd($preferences);
+            $resumeAt = $message['type'] === 'earn_award' ? null : $this->quietHoursEnd($preferences);
             if ($resumeAt !== null) {
                 DeliverInAppNotification::dispatch($userId, $message, $expiresAt)->delay($resumeAt);
                 $this->receipt($userId, $message, 'deferred');

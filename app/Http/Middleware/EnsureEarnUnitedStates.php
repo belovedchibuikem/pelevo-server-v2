@@ -20,7 +20,7 @@ final class EnsureEarnUnitedStates
 
         return ApiResponse::error(
             'REGION_RESTRICTED',
-            'Earn is available only from a United States connection. A VPN with a US exit is allowed.',
+            'Earn is available only from a United States connection.',
             403,
         );
     }

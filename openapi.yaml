@@ -503,7 +503,7 @@ paths:
   /earn/wallet:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Account-owned user_id, unit ECN, decimal-string balance, minimum_withdrawal, boolean withdrawals_enabled, coin_usd (0.004) and payout_schedule monthly. Balance is cached. Threshold follows the latest effective finance configuration. No account is created by reading.' }, '401': { description: Authentication required } } }
   /earn/access:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'allowed boolean and country. allowed is true only for a United States address, including a US VPN exit. A private or non-US address returns allowed false so the app can show a friendly screen. Catalog and session routes stay closed.' } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'allowed boolean and country. allowed is true only for a United States address. A private or non-US address returns allowed false so the app can show a friendly screen. Catalog and session routes stay closed.' } } }
   /earn/shows:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Shows marked earn_enabled, with id, title, author, artwork_url, episodes_count and niche. Podcast Index imports are excluded until an operator marks them. Meta contains cursor and has_more. RSS URLs stay off the client. United States connection required.' }, '403': { description: REGION_RESTRICTED } } }
   /earn/episodes:

@@ -9,7 +9,7 @@ use Throwable;
 
 /**
  * Earn is available only when the connection the API sees is in the United States.
- * A VPN is allowed: the check is the exit country, not whether the address is a VPN.
+ * The gate is the exit country. It does not reject an address for belonging to a tunnel.
  */
 final class EarnRegion
 {
