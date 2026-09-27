@@ -501,11 +501,13 @@ paths:
   /gifts/send:
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Replay-safe balanced gift receipt with type name, creator display name, coins and remaining balance. Ledger ids stay off the client. }, '409': { description: Insufficient gift coins or idempotency conflict }, '503': { description: Awaiting finance sign-off } } }
   /earn/wallet:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Account-owned user_id, unit ECN, decimal-string balance and minimum_withdrawal, and boolean withdrawals_enabled. Threshold follows the latest effective finance configuration. No account is created by reading. No FX rate, payout date or provider capability is implied.' }, '401': { description: Authentication required } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Account-owned user_id, unit ECN, decimal-string balance, minimum_withdrawal, boolean withdrawals_enabled, coin_usd (0.004) and payout_schedule monthly. Balance is cached. Threshold follows the latest effective finance configuration. No account is created by reading.' }, '401': { description: Authentication required } } }
+  /earn/access:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'allowed boolean and country. allowed is true only for a United States address, including a US VPN exit. A private or non-US address returns allowed false so the app can show a friendly screen. Catalog and session routes stay closed.' } } }
   /earn/shows:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Earn-eligible shows as id, title, author, artwork_url and eligible episodes_count. Meta contains cursor and has_more. RSS URLs stay off the client.' } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Shows marked earn_enabled, with id, title, author, artwork_url, episodes_count and niche. Podcast Index imports are excluded until an operator marks them. Meta contains cursor and has_more. RSS URLs stay off the client. United States connection required.' }, '403': { description: REGION_RESTRICTED } } }
   /earn/episodes:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Earn-eligible episodes as id, show_id, show_title, show_author, title, artwork_url, duration_seconds and audio_url. Optional show_id filter. Meta contains cursor and has_more. GUIDs stay off the client.' } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Earn-marked episodes as id, show_id, show_title, show_author, title, artwork_url, duration_seconds, audio_url, niche, coins, locked and locked_until. audio_url is null while the 72-hour lock is active. Optional show_id filter. United States connection required.' }, '403': { description: REGION_RESTRICTED } } }
   /earn/episodes/{episode}/sessions:
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Server-authoritative eligibility snapshot and expiring session nonce created }, '409': { description: 'Parallel session, lock, or daily cap' } } }
   /earn/sessions/{session}/heartbeat:

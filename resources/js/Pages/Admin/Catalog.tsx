@@ -6,6 +6,7 @@ type Row = {
   title: string;
   author?: string;
   status: string;
+  earn_enabled?: boolean | number;
   feed_state?: string;
   last_success_at?: string;
   last_failure_at?: string;
@@ -26,6 +27,10 @@ export default function Catalog(props: Props) {
   };
   const refresh = async (id: string) => {
     await mutate(`/api/admin/v1/catalog/shows/${id}/refresh`, 'POST', {});
+    router.reload();
+  };
+  const toggleEarn = async (id: string, earnEnabled: boolean) => {
+    await mutate(`/api/admin/v1/catalog/shows/${id}/earn`, 'PUT', { earn_enabled: earnEnabled });
     router.reload();
   };
 
@@ -93,7 +98,8 @@ export default function Catalog(props: Props) {
                       {show.last_error && <small className="mt-1 block max-w-xs truncate text-red-700" title={show.last_error}>{show.last_error}</small>}
                     </td>
                     <td className="p-3 text-slate-500">{show.last_success_at ? new Date(show.last_success_at).toLocaleString() : 'Never'}</td>
-                    <td className="p-3">
+                    <td className="p-3 space-x-2">
+                      <button type="button" onClick={() => void toggleEarn(show.id, !show.earn_enabled)} className="rounded-lg border border-slate-400 px-2 py-1 text-xs font-semibold text-slate-800">{show.earn_enabled ? 'Earning on' : 'Mark for Earn'}</button>
                       <button type="button" onClick={() => void refresh(show.id)} className="rounded-lg border border-teal-700 px-2 py-1 text-xs font-semibold text-teal-800">Live refresh</button>
                     </td>
                   </tr>

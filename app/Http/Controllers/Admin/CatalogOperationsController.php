@@ -43,6 +43,16 @@ final class CatalogOperationsController extends Controller
         return ApiResponse::success(['queued' => true, 'audit_reference' => $audit], status: 202);
     }
 
+    public function earn(string $show, Request $request): JsonResponse
+    {
+        abort_unless(DB::table('shows')->where('id', $show)->exists(), 404);
+        $data = $request->validate(['earn_enabled' => ['required', 'boolean']]);
+        DB::table('shows')->where('id', $show)->update(['earn_enabled' => $data['earn_enabled'], 'updated_at' => now()]);
+        $audit = $this->audit($request, 'catalog.earn_flag_saved', 'App\\Models\\Show', $show, 'Earn catalog eligibility update.', ['earn_enabled' => $data['earn_enabled']]);
+
+        return ApiResponse::success(['earn_enabled' => (bool) $data['earn_enabled'], 'audit_reference' => $audit]);
+    }
+
     public function category(Request $request, InvalidateDiscoveryCache $cache): JsonResponse
     {
         $data = $request->validate(['id' => ['nullable', 'integer', 'exists:categories,id'], 'name' => ['required', 'string', 'max:100'], 'slug' => ['required', 'alpha_dash', 'max:100'], 'position' => ['required', 'integer', 'min:0'], 'active' => ['required', 'boolean']]);

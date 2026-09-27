@@ -9,6 +9,7 @@ use App\Jobs\MaterializeRecommendations;
 use App\Jobs\QualifyReferrals;
 use App\Jobs\RunReconciliation;
 use App\Jobs\ScoreEarnSession;
+use App\Jobs\UnlockExpiredEarnAwards;
 use App\Models\User;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -66,6 +67,12 @@ Schedule::job(new RunReconciliation(now()->toDateString()), 'finance')
 Schedule::call(function (): void {
     DB::table('earn_sessions')->whereIn('state', ['active', 'review'])->orderBy('id')->limit(500)->pluck('id')->each(fn (string $id) => ScoreEarnSession::dispatch($id));
 })->name('earn-anomaly-scoring')->everyFifteenMinutes()->onOneServer()->withoutOverlapping(10);
+
+Schedule::job(new UnlockExpiredEarnAwards, 'finance')
+    ->name('unlock-expired-earn-awards')
+    ->everyFiveMinutes()
+    ->onOneServer()
+    ->withoutOverlapping(5);
 
 Schedule::job(new AccrueReelRevenue, 'finance')->name('accrue-reel-revenue')->hourly()->onOneServer()->withoutOverlapping(30);
 Schedule::job(new QualifyReferrals, 'finance')->name('qualify-referrals')->everyFifteenMinutes()->onOneServer()->withoutOverlapping(10);

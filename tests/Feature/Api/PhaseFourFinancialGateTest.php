@@ -76,7 +76,7 @@ final class PhaseFourFinancialGateTest extends TestCase
         config()->set('finance.public_enabled', true);
         [$user, $device, $episode] = $this->listenerEpisode(600);
         $session = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->json('data.id');
-        DB::table('earn_sessions')->where('id', $session)->update(['verified_seconds' => 600]);
+        DB::table('earn_sessions')->where('id', $session)->update(['verified_seconds' => 600, 'last_position' => 600]);
 
         $this->actingAs($user, 'sanctum')->withHeader('Idempotency-Key', 'earn-once')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertCreated()->assertJsonPath('data.coins', 2);
         $this->actingAs($user, 'sanctum')->withHeader('Idempotency-Key', 'earn-once')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertOk();
@@ -185,7 +185,7 @@ final class PhaseFourFinancialGateTest extends TestCase
     {
         $user = User::factory()->create();
         $device = Device::create(['user_id' => $user->id, 'device_identifier' => 'device-'.Str::random(6), 'name' => 'Phone']);
-        $show = Show::create(['rss_url' => 'https://example.com/'.Str::random(8).'.xml', 'title' => 'Earn Show']);
+        $show = Show::create(['rss_url' => 'https://example.com/'.Str::random(8).'.xml', 'title' => 'Earn Show', 'earn_enabled' => true]);
         $episode = Episode::create(['show_id' => $show->id, 'guid' => (string) Str::ulid(), 'title' => 'Earn Episode', 'audio_url' => 'https://cdn.example.com/audio.mp3', 'duration_seconds' => $seconds]);
 
         return [$user, $device, $episode];

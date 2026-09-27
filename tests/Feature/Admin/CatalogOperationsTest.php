@@ -36,6 +36,8 @@ final class CatalogOperationsTest extends TestCase
         $category->assertJsonStructure(['data' => ['category', 'audit_reference']]);
         $this->actingAs($admin, 'admin')->withSession($session)->putJson('/api/admin/v1/catalog/playlists', ['title' => 'Editor Picks', 'published' => true, 'position' => 1, 'episode_ids' => [$episode->id]])->assertOk()->assertJsonStructure(['data' => ['audit_reference']]);
         $this->actingAs($admin, 'admin')->withSession($session)->putJson('/api/admin/v1/catalog/search-synonyms', ['term' => 'dev', 'synonym' => 'developer', 'active' => true])->assertOk();
-        $this->assertDatabaseCount('audit_logs', 4);
+        $this->actingAs($admin, 'admin')->withSession($session)->putJson("/api/admin/v1/catalog/shows/{$show->id}/earn", ['earn_enabled' => true])->assertOk()->assertJsonPath('data.earn_enabled', true);
+        $this->assertTrue((bool) $show->fresh()->earn_enabled);
+        $this->assertDatabaseCount('audit_logs', 5);
     }
 }

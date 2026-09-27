@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\V1\CreatorPublicController;
 use App\Http\Controllers\Api\V1\CreatorPayoutSettingsController;
 use App\Http\Controllers\Api\V1\DownloadController;
 use App\Http\Controllers\Api\V1\EarnController;
+use App\Http\Middleware\EnsureEarnUnitedStates;
 use App\Http\Controllers\Api\V1\EpisodeContentController;
 use App\Http\Controllers\Api\V1\EpisodeNoteController;
 use App\Http\Controllers\Api\V1\EpisodeReactionController;
@@ -146,12 +147,15 @@ Route::prefix('v1')->group(function (): void {
         Route::get('gifts/{gift}', [GiftController::class, 'show']);
         Route::post('iap/verify', [IapController::class, 'store'])->middleware('throttle:10,1');
         Route::post('gifts/send', [GiftController::class, 'send']);
-        Route::post('earn/episodes/{episode}/sessions', [EarnController::class, 'start']);
-        Route::post('earn/sessions/{session}/heartbeat', [EarnController::class, 'heartbeat']);
-        Route::post('earn/sessions/{session}/complete', [EarnController::class, 'complete']);
         Route::get('earn/wallet', [EarnController::class, 'wallet']);
-        Route::get('earn/shows', [EarnController::class, 'shows']);
-        Route::get('earn/episodes', [EarnController::class, 'episodes']);
+        Route::get('earn/access', [EarnController::class, 'access']);
+        Route::middleware(EnsureEarnUnitedStates::class)->group(function (): void {
+            Route::post('earn/episodes/{episode}/sessions', [EarnController::class, 'start']);
+            Route::post('earn/sessions/{session}/heartbeat', [EarnController::class, 'heartbeat']);
+            Route::post('earn/sessions/{session}/complete', [EarnController::class, 'complete']);
+            Route::get('earn/shows', [EarnController::class, 'shows']);
+            Route::get('earn/episodes', [EarnController::class, 'episodes']);
+        });
         Route::post('comments', [CommentController::class, 'store'])->middleware(['throttle:30,1', 'not.sanctioned']);
         Route::get('comments', [CommentController::class, 'index']);
         Route::patch('comments/{comment}', [CommentController::class, 'update']);

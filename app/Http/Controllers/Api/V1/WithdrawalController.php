@@ -10,6 +10,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -48,6 +49,7 @@ final class WithdrawalController extends Controller
                 $tx = $post->handle('withdrawal.reserved', $key, 'ECN', [['account_id' => $wallet->id, 'amount' => -$data['coins']], ['account_id' => $payable->id, 'amount' => $data['coins']]], ['withdrawal_request_hash' => $requestHash]);
                 $id = (string) Str::ulid();
                 DB::table('withdrawals')->insert(['id' => $id, 'user_id' => $request->user()->id, 'payout_method_id' => $method->id, 'ledger_transaction_id' => $tx->id, 'coins' => $data['coins'], 'state' => 'queued', 'idempotency_key' => $key, 'request_hash' => $requestHash, 'created_at' => now(), 'updated_at' => now()]);
+                Cache::forget('earn_wallet:'.$request->user()->id);
 
                 return ApiResponse::success($this->present(DB::table('withdrawals')->find($id)), status: 201);
             }, 3);

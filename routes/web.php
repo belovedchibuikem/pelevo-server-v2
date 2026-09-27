@@ -107,6 +107,7 @@ Route::prefix('api/admin/v1')->middleware(['auth.admin', 'admin.mfa'])->group(fu
     Route::get('catalog', [CatalogOperationsController::class, 'index'])->middleware('admin.permission:catalog.write');
     Route::get('catalog/shows/{show}', [CatalogOperationsController::class, 'show'])->middleware('admin.permission:catalog.write');
     Route::post('catalog/shows/{show}/refresh', [CatalogOperationsController::class, 'refresh'])->middleware('admin.permission:catalog.write');
+    Route::put('catalog/shows/{show}/earn', [CatalogOperationsController::class, 'earn'])->middleware('admin.permission:catalog.write');
     Route::put('catalog/categories', [CatalogOperationsController::class, 'category'])->middleware('admin.permission:catalog.write');
     Route::put('catalog/playlists', [CatalogOperationsController::class, 'playlist'])->middleware('admin.permission:catalog.write');
     Route::put('catalog/home-modules/{module}', [CatalogOperationsController::class, 'homeModule'])->middleware(['admin.permission:catalog.write', 'admin.mfa.fresh']);
