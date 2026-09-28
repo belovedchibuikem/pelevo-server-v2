@@ -20,6 +20,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 final class EarnController extends Controller
@@ -216,7 +217,7 @@ final class EarnController extends Controller
 
     public function heartbeat(string $session, Request $request, EarnIntegrityVerifier $integrity): JsonResponse
     {
-        $data = $request->validate(['position' => ['required', 'integer', 'min:0'], 'sequence' => ['required', 'integer', 'min:1'], 'elapsed_seconds' => ['required', 'integer', 'between:15,30'], 'playback_rate' => ['required', 'numeric'], 'foreground' => ['required', 'boolean'], 'audio_active' => ['required', 'boolean'], 'integrity_token' => ['required', 'string', 'max:4096'], 'nonce' => ['required', 'string', 'size:64'], 'audio_fingerprint' => ['nullable', 'string', 'max:500']]);
+        $data = $request->validate(['position' => ['required', 'integer', 'min:0'], 'sequence' => ['required', 'integer', 'min:1'], 'elapsed_seconds' => ['required', 'integer', 'between:1,30'], 'playback_rate' => ['required', 'numeric'], 'foreground' => ['required', 'boolean'], 'audio_active' => ['required', 'boolean'], 'integrity_token' => ['required', 'string', 'max:4096'], 'nonce' => ['required', 'string', 'size:64'], 'audio_fingerprint' => ['nullable', 'string', 'max:500']]);
 
         return DB::transaction(function () use ($session, $request, $data, $integrity): JsonResponse {
             $row = DB::table('earn_sessions')->where('id', $session)->where('user_id', $request->user()->id)->where('state', 'active')->lockForUpdate()->first();
@@ -226,9 +227,35 @@ final class EarnController extends Controller
             $device = Device::where('id', $row->device_id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->first();
             $nonceValid = $row->nonce_hash && $row->nonce_expires_at && now()->lte($row->nonce_expires_at) && hash_equals($row->nonce_hash, hash('sha256', $data['nonce']));
             $advance = (int) $data['position'] - (int) $row->last_position;
-            $invalid = ! $device || ! $nonceValid || ! $data['audio_active'] || abs((float) $data['playback_rate'] - 1.0) > 0.01 || ! $integrity->valid($data['integrity_token'], (string) $request->header('X-Device-Id'), $session, (int) $data['sequence'], $data['nonce']) || (int) $data['sequence'] !== (int) $row->last_sequence + 1 || $advance < 0 || $advance > (int) $data['elapsed_seconds'] + 3;
-            if ($invalid) {
+            $rateOk = abs((float) $data['playback_rate'] - 1.0) <= 0.01;
+            $integrityOk = $integrity->valid($data['integrity_token'], (string) $request->header('X-Device-Id'), $session, (int) $data['sequence'], $data['nonce']);
+            $sequenceOk = (int) $data['sequence'] === (int) $row->last_sequence + 1;
+            $advanceOk = $advance >= 0 && $advance <= (int) $data['elapsed_seconds'] + 3;
+            $claimed = (int) $data['elapsed_seconds'];
+            $previousAt = DB::table('earn_heartbeats')->where('earn_session_id', $session)->orderByDesc('created_at')->value('created_at');
+            $anchorAt = Carbon::parse($previousAt ?? $row->created_at);
+            $nowTs = now()->getTimestamp();
+            $wall = $nowTs - $anchorAt->getTimestamp();
+            $sessionAge = $nowTs - Carbon::parse($row->created_at)->getTimestamp();
+            $paced = $claimed <= $wall + 2 && (int) $row->verified_seconds + $claimed <= $sessionAge + 2;
+            if (! $device || ! $nonceValid || ! $data['audio_active'] || ! $rateOk || ! $integrityOk || ! $sequenceOk || ! $advanceOk) {
+                Log::warning('earn.heartbeat.rejected', [
+                    'session' => $session,
+                    'device' => (bool) $device,
+                    'nonce' => $nonceValid,
+                    'audio_active' => (bool) $data['audio_active'],
+                    'rate' => $rateOk,
+                    'integrity' => $integrityOk,
+                    'sequence' => $sequenceOk,
+                    'advance' => $advanceOk,
+                    'expected_sequence' => (int) $row->last_sequence + 1,
+                    'got_sequence' => (int) $data['sequence'],
+                ]);
+
                 return $this->hold($session, 'Heartbeat evidence failed integrity checks.');
+            }
+            if (! $paced) {
+                return ApiResponse::error('VALIDATION', 'Listening evidence must match real playback time.', 422);
             }
             $fingerprint = isset($data['audio_fingerprint']) ? hash('sha256', $data['audio_fingerprint']) : null;
             if ($fingerprint && DB::table('earn_heartbeats')->where('audio_fingerprint_hash', $fingerprint)->where('ip_address', '!=', $request->ip())->where('created_at', '>', now()->subDay())->exists()) {
@@ -263,7 +290,8 @@ final class EarnController extends Controller
             }
             $episode = Episode::findOrFail($row->episode_id);
             $required = max(1, (int) floor(((int) $episode->duration_seconds) * 0.95));
-            if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required) {
+            $listenedFor = now()->getTimestamp() - Carbon::parse($row->created_at)->getTimestamp();
+            if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required || $listenedFor + 5 < $required) {
                 return ['error' => ApiResponse::error('MODERATION_HOLD', 'Not enough verified listening evidence.', 409)];
             }
             if ($this->episodeLocked($row->user_id, $row->episode_id, true)) {

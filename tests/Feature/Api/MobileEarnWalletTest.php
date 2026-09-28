@@ -11,6 +11,7 @@ use App\Models\Show;
 use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -115,7 +116,7 @@ final class MobileEarnWalletTest extends TestCase
             ->assertJsonPath('data.episode_id', $episode->id)->assertJsonPath('data.expected_award', 2)->assertJsonPath('data.lock_hours', 72);
         $this->assertSame(['id', 'episode_id', 'expected_award', 'nonce', 'nonce_expires_at', 'lock_hours'], array_keys($started->json('data')));
         $this->assertSame(64, strlen($started->json('data.nonce')));
-        DB::table('earn_sessions')->where('id', $started->json('data.id'))->update(['verified_seconds' => 600, 'last_position' => 600]);
+        DB::table('earn_sessions')->where('id', $started->json('data.id'))->update(['verified_seconds' => 600, 'last_position' => 600, 'created_at' => now()->subSeconds(700)]);
         $award = $this->withHeader('Idempotency-Key', 'earn-catalog')->postJson('/api/v1/earn/sessions/'.$started->json('data.id').'/complete')->assertCreated();
         $this->assertSame(['id', 'episode_id', 'coins', 'locked_until'], array_keys($award->json('data')));
         $this->assertSame(2, $award->json('data.coins'));
@@ -155,7 +156,7 @@ final class MobileEarnWalletTest extends TestCase
         $show = Show::create(['rss_url' => 'https://example.com/unlock.xml', 'title' => 'Unlock Show', 'earn_enabled' => true]);
         $episode = Episode::create(['show_id' => $show->id, 'guid' => (string) Str::ulid(), 'title' => 'Unlock Episode', 'audio_url' => 'https://cdn.example.com/unlock.mp3', 'duration_seconds' => 600]);
         $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertCreated();
-        DB::table('earn_sessions')->where('id', $started->json('data.id'))->update(['verified_seconds' => 600, 'last_position' => 600]);
+        DB::table('earn_sessions')->where('id', $started->json('data.id'))->update(['verified_seconds' => 600, 'last_position' => 600, 'created_at' => now()->subSeconds(700)]);
         $this->withHeader('Idempotency-Key', 'unlock-once')->postJson('/api/v1/earn/sessions/'.$started->json('data.id').'/complete')->assertCreated();
         $this->assertNull(DB::table('earn_awards')->value('unlocked_at'));
         (new UnlockExpiredEarnAwards)->handle();
@@ -193,7 +194,7 @@ final class MobileEarnWalletTest extends TestCase
         $episode = Episode::create(['show_id' => $show->id, 'guid' => (string) Str::ulid(), 'title' => 'Resume Episode', 'audio_url' => 'https://cdn.example.com/resume.mp3', 'duration_seconds' => 600]);
         $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertCreated();
         $session = $started->json('data.id');
-        DB::table('earn_sessions')->where('id', $session)->update(['last_position' => 80, 'last_sequence' => 3, 'verified_seconds' => 80]);
+        DB::table('earn_sessions')->where('id', $session)->update(['last_position' => 80, 'last_sequence' => 3, 'verified_seconds' => 80, 'created_at' => now()->subSeconds(120)]);
 
         $resumed = $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertOk();
         $resumed->assertJsonPath('data.id', $session)->assertJsonPath('data.resume_position', 80)->assertJsonPath('data.last_sequence', 3);
@@ -203,5 +204,31 @@ final class MobileEarnWalletTest extends TestCase
             'position' => 100, 'sequence' => 4, 'elapsed_seconds' => 20, 'playback_rate' => 1, 'foreground' => false, 'audio_active' => true, 'integrity_token' => $token, 'nonce' => $nonce,
         ])->assertOk()->assertJsonPath('data.accepted', true);
         $this->assertSame(100, (int) DB::table('earn_sessions')->where('id', $session)->value('verified_seconds'));
+    }
+
+    public function test_a_resumed_episode_cannot_be_credited_before_it_is_actually_finished(): void
+    {
+        config()->set(['finance.public_enabled' => true, 'services.earn_integrity.url' => 'https://integrity.test/check']);
+        Http::preventStrayRequests();
+        Http::fake(['https://integrity.test/check' => Http::response(['valid' => true])]);
+        $user = User::factory()->create();
+        $device = Device::create(['user_id' => $user->id, 'device_identifier' => 'device-burst', 'name' => 'Phone']);
+        $show = Show::create(['rss_url' => 'https://example.com/burst.xml', 'title' => 'Burst Show', 'earn_enabled' => true, 'status' => 'active']);
+        $episode = Episode::create(['show_id' => $show->id, 'guid' => (string) Str::ulid(), 'title' => 'Burst Episode', 'audio_url' => 'https://cdn.example.com/burst.mp3', 'duration_seconds' => 600]);
+        $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertCreated();
+        $session = $started->json('data.id');
+        $nonce = $started->json('data.nonce');
+        $heartbeat = ['position' => 30, 'sequence' => 1, 'elapsed_seconds' => 30, 'playback_rate' => 1, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'attested-token', 'nonce' => $nonce];
+
+        $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertUnprocessable();
+        $this->assertSame(0, (int) DB::table('earn_sessions')->where('id', $session)->value('verified_seconds'));
+        DB::table('earn_sessions')->where('id', $session)->update(['created_at' => now()->subSeconds(20)]);
+        $heartbeat['position'] = 10;
+        $heartbeat['elapsed_seconds'] = 10;
+        $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertOk();
+        $this->assertSame(10, (int) DB::table('earn_sessions')->where('id', $session)->value('verified_seconds'));
+        $this->withHeader('Idempotency-Key', 'burst-complete')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertConflict();
+        $this->assertDatabaseCount('earn_awards', 0);
+        $this->assertDatabaseHas('earn_sessions', ['id' => $session, 'state' => 'active']);
     }
 }

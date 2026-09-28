@@ -61,8 +61,10 @@ final class PhaseFourFinancialGateTest extends TestCase
         [$user, $device, $episode] = $this->listenerEpisode(1200);
         $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertCreated()->assertJsonPath('data.expected_award', 3);
         $session = $started->json('data.id');
-        $nonce = $started->json('data.nonce');
-        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertConflict();
+        $resumed = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertOk();
+        $resumed->assertJsonPath('data.id', $session);
+        $nonce = $resumed->json('data.nonce');
+        DB::table('earn_sessions')->where('id', $session)->update(['created_at' => now()->subSeconds(40)]);
         $heartbeat = ['position' => 30, 'sequence' => 1, 'elapsed_seconds' => 30, 'playback_rate' => 1, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'attested-token', 'nonce' => $nonce, 'audio_fingerprint' => 'audio-one'];
         $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertOk();
         $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertConflict();
@@ -76,7 +78,7 @@ final class PhaseFourFinancialGateTest extends TestCase
         config()->set('finance.public_enabled', true);
         [$user, $device, $episode] = $this->listenerEpisode(600);
         $session = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->json('data.id');
-        DB::table('earn_sessions')->where('id', $session)->update(['verified_seconds' => 600, 'last_position' => 600]);
+        DB::table('earn_sessions')->where('id', $session)->update(['verified_seconds' => 600, 'last_position' => 600, 'created_at' => now()->subSeconds(700)]);
 
         $this->actingAs($user, 'sanctum')->withHeader('Idempotency-Key', 'earn-once')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertCreated()->assertJsonPath('data.coins', 2);
         $this->actingAs($user, 'sanctum')->withHeader('Idempotency-Key', 'earn-once')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertOk();

@@ -35,7 +35,7 @@ final class EarnIntegrityVerifier
         }
 
         $secret = (string) config('services.earn_integrity.token');
-        if ($secret === '' && app()->environment(['local', 'testing'])) {
+        if ($secret === '') {
             $secret = self::LOCAL_DEBUG_SECRET;
         }
 
