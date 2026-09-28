@@ -40,11 +40,13 @@ final class EarnController extends Controller
             ->where('shows.earn_enabled', true)
             ->where('shows.status', 'active')
             ->whereHas('episodes', fn ($query) => $query->whereNotNull('duration_seconds')->where('duration_seconds', '>=', 60))
-            ->leftJoinSub($this->nicheQuery(), 'earn_niches', 'earn_niches.show_id', '=', 'shows.id')
-            ->select('shows.id', 'shows.title', 'shows.author', 'shows.artwork_url', 'shows.earn_position', 'earn_niches.niche')
+            ->leftJoin('categories as earn_categories', function ($join): void {
+                $join->on('earn_categories.id', '=', 'shows.earn_category_id')->where('earn_categories.active', true);
+            })
+            ->select('shows.id', 'shows.title', 'shows.author', 'shows.artwork_url', 'shows.earn_position', 'earn_categories.name as niche')
             ->withCount(['episodes as episodes_count' => fn ($query) => $query->whereNotNull('duration_seconds')->where('duration_seconds', '>=', 60)])
-            ->orderByRaw('CASE WHEN earn_niches.niche IS NULL THEN 1 ELSE 0 END')
-            ->orderBy('earn_niches.niche')
+            ->orderByRaw('CASE WHEN earn_categories.name IS NULL THEN 1 ELSE 0 END')
+            ->orderBy('earn_categories.name')
             ->orderBy('shows.earn_position')
             ->orderBy('shows.title')
             ->orderBy('shows.id')
@@ -68,8 +70,10 @@ final class EarnController extends Controller
             ->where('shows.status', 'active')
             ->whereNotNull('episodes.duration_seconds')
             ->where('episodes.duration_seconds', '>=', 60)
-            ->leftJoinSub($this->nicheQuery(), 'earn_niches', 'earn_niches.show_id', '=', 'shows.id')
-            ->select('episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.duration_seconds', 'episodes.audio_url', 'shows.title as show_title', 'shows.author as show_author', 'shows.artwork_url as artwork_url', 'earn_niches.niche')
+            ->leftJoin('categories as earn_categories', function ($join): void {
+                $join->on('earn_categories.id', '=', 'shows.earn_category_id')->where('earn_categories.active', true);
+            })
+            ->select('episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.duration_seconds', 'episodes.audio_url', 'shows.title as show_title', 'shows.author as show_author', 'shows.artwork_url as artwork_url', 'earn_categories.name as niche')
             ->orderByDesc('episodes.published_at')
             ->orderByDesc('episodes.id');
         if ($request->filled('show_id')) {
@@ -171,11 +175,8 @@ final class EarnController extends Controller
                         'last_sequence' => (int) $existing->last_sequence,
                     ]));
                 }
-                if (! $stale) {
-                    return ApiResponse::error('MODERATION_HOLD', 'Only one Earn session may be active.', 409);
-                }
                 DB::table('earn_sessions')->where('id', $existing->id)->update([
-                    'state' => 'expired',
+                    'state' => $stale ? 'expired' : 'abandoned',
                     'active_guard' => null,
                     'nonce_hash' => null,
                     'updated_at' => now(),
@@ -295,15 +296,6 @@ final class EarnController extends Controller
         return ApiResponse::success($payload['award'], status: $created ? 201 : 200);
     }
 
-    private function nicheQuery()
-    {
-        return DB::table('shows')
-            ->leftJoin('categories', function ($join): void {
-                $join->on('categories.id', '=', 'shows.earn_category_id')->where('categories.active', true);
-            })
-            ->select('shows.id as show_id', 'categories.name as niche');
-    }
-
     private function coinsFor(int $seconds): int
     {
         $minutes = intdiv($seconds, 60);
@@ -352,7 +344,7 @@ final class EarnController extends Controller
 
     private function hold(string $session, string $message): JsonResponse
     {
-        DB::table('earn_sessions')->where('id', $session)->update(['risk_state' => 'review', 'state' => 'review', 'updated_at' => now()]);
+        DB::table('earn_sessions')->where('id', $session)->update(['risk_state' => 'review', 'state' => 'review', 'active_guard' => null, 'updated_at' => now()]);
 
         return ApiResponse::error('MODERATION_HOLD', $message, 409);
     }

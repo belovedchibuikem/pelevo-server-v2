@@ -21,14 +21,14 @@ final class FinanceOperationsTest extends TestCase
     public function test_payout_destination_is_verified_encrypted_and_rejected_withdrawal_releases_reservation(): void
     {
         Mail::fake();
-        config()->set(['finance.public_enabled' => true, 'services.paystack.payout_verification_url' => 'https://paystack.test/resolve']);
+        config()->set(['finance.public_enabled' => true, 'services.paypal.payout_verification_url' => 'https://paypal.test/resolve']);
         Http::preventStrayRequests();
-        Http::fake(['https://paystack.test/resolve' => Http::response(['verified' => true, 'reference' => 'resolve-1', 'account_name' => 'Verified Person'])]);
+        Http::fake(['https://paypal.test/resolve' => Http::response(['verified' => true, 'reference' => 'resolve-1', 'account_name' => 'Verified Person'])]);
         $user = User::factory()->create();
-        $payload = ['provider' => 'paystack', 'kind' => 'bank', 'destination' => ['account_number' => '0123456789', 'bank_code' => '058']];
+        $payload = ['provider' => 'paypal', 'kind' => 'paypal', 'destination' => ['email' => 'earn@example.com']];
         $method = $this->actingAs($user, 'sanctum')->postJson('/api/v1/payout-methods', $payload)->assertCreated()->assertJsonMissing(['destination_encrypted'])->json('data.id');
         $ciphertext = DB::table('payout_methods')->where('id', $method)->value('destination_encrypted');
-        $this->assertStringNotContainsString('0123456789', $ciphertext);
+        $this->assertStringNotContainsString('earn@example.com', $ciphertext);
 
         $wallet = FinancialAccount::firstOrCreate(['owner_type' => get_class($user), 'owner_id' => $user->id, 'type' => 'earn_wallet', 'unit' => 'ECN'], ['balance' => 0]);
         $source = FinancialAccount::create(['type' => 'earn_funding', 'unit' => 'ECN', 'balance' => 0]);

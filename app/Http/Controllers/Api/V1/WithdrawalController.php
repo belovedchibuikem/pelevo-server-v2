@@ -33,6 +33,9 @@ final class WithdrawalController extends Controller
         if (! $method || ! $method->verified_at) {
             return ApiResponse::error('PAYOUT_METHOD_UNVERIFIED', 'A verified payout method is required.', 409);
         }
+        if ($method->provider !== 'paypal') {
+            return ApiResponse::error('VALIDATION', 'Earn coins can only be withdrawn to PayPal.', 422);
+        }
         $requestHash = hash('sha256', json_encode([$request->user()->id, $method->id, (int) $data['coins']], JSON_THROW_ON_ERROR));
         try {
             return DB::transaction(function () use ($request, $post, $key, $data, $method, $requestHash): JsonResponse {

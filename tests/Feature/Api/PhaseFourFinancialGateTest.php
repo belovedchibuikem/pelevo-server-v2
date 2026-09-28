@@ -155,15 +155,16 @@ final class PhaseFourFinancialGateTest extends TestCase
         $this->assertDatabaseHas('ledger_entries', ['id' => $entry->id, 'amount' => $entry->amount]);
     }
 
-    public function test_earn_start_returns_conflict_instead_of_500_when_an_active_session_exists(): void
+    public function test_earn_start_replaces_the_previous_session_when_a_new_episode_starts(): void
     {
         config()->set('finance.public_enabled', true);
         [$user, $device, $first] = $this->listenerEpisode(600);
         $second = Episode::create(['show_id' => $first->show_id, 'guid' => (string) Str::ulid(), 'title' => 'Next Earn Episode', 'audio_url' => 'https://cdn.example.com/next.mp3', 'duration_seconds' => 600]);
-        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$first->id}/sessions")->assertCreated();
+        $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$first->id}/sessions")->assertCreated();
         $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$second->id}/sessions")
-            ->assertConflict()
-            ->assertJsonPath('error.code', 'MODERATION_HOLD');
+            ->assertCreated()
+            ->assertJsonPath('data.episode_id', $second->id);
+        $this->assertDatabaseHas('earn_sessions', ['id' => $started->json('data.id'), 'state' => 'abandoned', 'active_guard' => null]);
         $this->assertSame(1, DB::table('earn_sessions')->where('user_id', $user->id)->where('active_guard', 'active')->count());
     }
 
