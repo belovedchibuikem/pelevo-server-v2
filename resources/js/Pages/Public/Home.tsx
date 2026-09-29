@@ -16,7 +16,7 @@ const story = [
     id: 'discovery',
     kicker: 'Discovery',
     title: 'Trending, for real.',
-    body: 'See what\'s actually rising in Nigeria right now — not a global chart that treats Lagos like a rounding error. Rate shows, follow creators, and get recommendations that learn what you\'re into, not what\'s popular in a market you\'re not part of.',
+    body: 'See what\'s actually rising in Africa right now — not a global chart that treats Lagos like a rounding error. Rate shows, follow creators, and get recommendations that learn what you\'re into, not what\'s popular in a market you\'re not part of.',
     accent: '#287be0',
   },
   {
@@ -43,7 +43,7 @@ export default function Home() {
       <Head title="Pelevo — African podcasts, finally home.">
         <meta
           name="description"
-          content="Discover the shows Nigerians are actually talking about, support the creators behind them, and never lose a good episode in a WhatsApp forward again."
+          content="Discover the shows Africans are actually talking about, support the creators behind them, and never lose a good episode in a WhatsApp forward again."
         />
       </Head>
 
@@ -51,12 +51,12 @@ export default function Home() {
         <div className="mkt-hero-copy">
           <div className="mkt-proof-pill">
             <span className="mkt-proof-avatars" aria-hidden="true"><i /><i /><i /></span>
-            <span>First 500 founders circle · Nigeria</span>
+            <span>First 500 founders circle · Africa</span>
           </div>
           <p className="mkt-kicker">African podcasts, finally home</p>
           <h1>African podcasts,<br /><em>finally home.</em></h1>
           <p className="mkt-lede">
-            Discover the shows Nigerians are actually talking about, support the creators behind them,
+            Discover the shows Africans are actually talking about, support the creators behind them,
             and never lose a good episode in a WhatsApp forward again.
           </p>
           <div className="mkt-actions" id="download">

@@ -445,9 +445,17 @@ html.marketing body {
 .mkt-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 
 .mkt-legal h1 { font-size: clamp(2.4rem, 5vw, 4rem); }
+.mkt-legal .mkt-lede { max-width: 760px; }
 .mkt-legal article { max-width: 760px; }
 .mkt-legal h2 { margin: 32px 0 10px; font-size: 1.4rem; }
-.mkt-legal p { color: var(--p-muted); line-height: 1.6; }
+.mkt-legal p, .mkt-legal li { color: var(--p-muted); line-height: 1.6; }
+.mkt-legal ul { margin: 8px 0 16px; padding-left: 1.25rem; }
+.mkt-legal li { margin: 6px 0; }
+.mkt-legal a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.mkt-legal-table-wrap { overflow-x: auto; margin: 12px 0 20px; }
+.mkt-legal table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+.mkt-legal th, .mkt-legal td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.12); }
+.mkt-legal th { font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
 
 .mkt-form {
     display: grid;
@@ -1012,7 +1020,9 @@ html.marketing body {
     background: rgba(255,255,255,.86);
     box-shadow: 0 15px 50px rgba(44,50,40,.06);
 }
-.mkt-legal p, .mkt-form label { color: #626960; }
+.mkt-legal p, .mkt-legal li, .mkt-legal td, .mkt-form label { color: #626960; }
+.mkt-legal th { color: #191c18; }
+.mkt-legal th, .mkt-legal td { border-bottom-color: #dfe2d7; }
 .mkt-form input, .mkt-form select, .mkt-form textarea {
     color: #171a16;
     border-color: #d8dcd1;

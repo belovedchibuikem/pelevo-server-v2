@@ -28,8 +28,16 @@ final class MarketingSiteTest extends TestCase
         $this->get('/privacy')->assertOk()->assertInertia(fn (Assert $page) => $page
             ->component('Public/Legal')
             ->where('document.title', 'Privacy Policy')
-            ->has('document.sections'));
-        $this->get('/terms')->assertOk()->assertInertia(fn (Assert $page) => $page->where('document.title', 'Terms of Use'));
+            ->where('document.updated', '30th September 2026')
+            ->where('document.kicker', 'Last updated: 30th September 2026')
+            ->where('document.sections.0.heading', '1. Who We Are')
+            ->has('document.sections', 14));
+        $this->get('/terms')->assertOk()->assertInertia(fn (Assert $page) => $page
+            ->where('document.title', 'Terms and Conditions of Use')
+            ->where('document.kicker', 'Last updated: 30th September 2026')
+            ->has('document.sections', 18)
+            ->where('document.sections.0.heading', '1. Eligibility')
+            ->where('document.sections.17.heading', '18. Contact'));
         $this->get('/contact')->assertOk()->assertInertia(fn (Assert $page) => $page->component('Public/Contact'));
     }
 

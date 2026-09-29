@@ -75,7 +75,7 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
           <ul>
             <li><Link href="/contact">Contact us</Link></li>
             <li><Link href="/privacy">Privacy Policy</Link></li>
-            <li><Link href="/terms">Terms of Use</Link></li>
+            <li><Link href="/terms">Terms and Conditions</Link></li>
           </ul>
         </div>
         <div>

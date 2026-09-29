@@ -31,8 +31,9 @@ final class MarketingController extends Controller
             ...$this->shared(),
             'document' => [
                 'title' => 'Privacy Policy',
-                'updated' => '9 September 2026',
-                'intro' => 'How Pelevo collects, uses, and protects listener, creator, and financial data.',
+                'updated' => '30th September 2026',
+                'kicker' => 'Last updated: 30th September 2026',
+                'intro' => '',
                 'sections' => MarketingLegal::privacy(),
             ],
         ]);
@@ -43,9 +44,13 @@ final class MarketingController extends Controller
         return Inertia::render('Public/Legal', [
             ...$this->shared(),
             'document' => [
-                'title' => 'Terms of Use',
-                'updated' => '9 September 2026',
-                'intro' => 'The contract for using Pelevo apps, Creator Studio, Earn, gifts, and Premium.',
+                'title' => 'Terms and Conditions of Use',
+                'updated' => '30th September 2026',
+                'kicker' => 'Last updated: 30th September 2026',
+                'intro' => [
+                    'These Terms and Conditions ("Terms") govern your access to and use of the Pelevo mobile application and any related services (together, the "Service"), provided by Pod Emeralds Limited ("Pelevo," "we," "us," or "our"), a company incorporated under the laws of the Federal Republic of Nigeria, registered address Plot 109, Girls Mall Estate, Coal City Garden, Enugu State, Nigeria.',
+                    'By creating an account, downloading the app, or otherwise using the Service, you agree to be bound by these Terms and by our [Privacy Policy](/privacy) (available in the app and at pelevo.com), which is incorporated by reference. If you do not agree, do not use the Service.',
+                ],
                 'sections' => MarketingLegal::terms(),
             ],
         ]);
