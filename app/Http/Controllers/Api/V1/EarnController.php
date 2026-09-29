@@ -13,6 +13,7 @@ use App\Models\Show;
 use App\Services\InAppNotificationDelivery;
 use App\Support\ApiResponse;
 use App\Support\EarnRegion;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
@@ -35,9 +36,14 @@ final class EarnController extends Controller
         ]);
     }
 
-    public function shows(): JsonResponse
+    public function shows(Request $request): JsonResponse
     {
-        $page = Show::query()
+        $filters = $request->validate([
+            'q' => ['sometimes', 'string', 'max:80'],
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'between:1,20'],
+        ]);
+        $query = Show::query()
             ->where('shows.earn_enabled', true)
             ->where('shows.status', 'active')
             ->whereHas('episodes', fn ($query) => $query->whereNotNull('duration_seconds')->where('duration_seconds', '>=', 60))
@@ -50,8 +56,14 @@ final class EarnController extends Controller
             ->orderBy('earn_categories.name')
             ->orderBy('shows.earn_position')
             ->orderBy('shows.title')
-            ->orderBy('shows.id')
-            ->cursorPaginate(20);
+            ->orderBy('shows.id');
+        if (! empty($filters['q'])) {
+            $term = $this->likeTerm($filters['q']);
+            $query->where(function ($inner) use ($term): void {
+                $inner->where('shows.title', 'like', $term)->orWhere('shows.author', 'like', $term);
+            });
+        }
+        $page = $query->paginate($filters['per_page'] ?? 10, ['*'], 'page', $filters['page'] ?? 1);
 
         return ApiResponse::success(collect($page->items())->map(fn (Show $show): array => [
             'id' => $show->id,
@@ -60,11 +72,17 @@ final class EarnController extends Controller
             'artwork_url' => $show->artwork_url,
             'episodes_count' => (int) $show->episodes_count,
             'niche' => $show->getAttribute('niche'),
-        ])->values(), ['cursor' => $page->nextCursor()?->encode(), 'has_more' => $page->hasMorePages()]);
+        ])->values(), $this->pageMeta($page));
     }
 
     public function episodes(Request $request): JsonResponse
     {
+        $filters = $request->validate([
+            'show_id' => ['sometimes', 'string', 'exists:shows,id'],
+            'q' => ['sometimes', 'string', 'max:80'],
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'between:1,20'],
+        ]);
         $query = Episode::query()
             ->join('shows', 'shows.id', '=', 'episodes.show_id')
             ->where('shows.earn_enabled', true)
@@ -77,10 +95,16 @@ final class EarnController extends Controller
             ->select('episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.duration_seconds', 'episodes.audio_url', 'shows.title as show_title', 'shows.author as show_author', 'shows.artwork_url as artwork_url', 'earn_categories.name as niche')
             ->orderByDesc('episodes.published_at')
             ->orderByDesc('episodes.id');
-        if ($request->filled('show_id')) {
-            $query->where('episodes.show_id', $request->validate(['show_id' => ['required', 'exists:shows,id']])['show_id']);
+        if (! empty($filters['show_id'])) {
+            $query->where('episodes.show_id', $filters['show_id']);
         }
-        $page = $query->cursorPaginate(20);
+        if (! empty($filters['q'])) {
+            $term = $this->likeTerm($filters['q']);
+            $query->where(function ($inner) use ($term): void {
+                $inner->where('episodes.title', 'like', $term)->orWhere('shows.title', 'like', $term);
+            });
+        }
+        $page = $query->paginate($filters['per_page'] ?? 10, ['*'], 'page', $filters['page'] ?? 1);
         $ids = collect($page->items())->pluck('id');
         $locks = $ids->isEmpty() ? collect() : DB::table('earn_awards')
             ->where('user_id', $request->user()->id)
@@ -107,7 +131,24 @@ final class EarnController extends Controller
                 'locked' => $locked,
                 'locked_until' => $locked ? Carbon::parse($lockedUntil)->toIso8601String() : null,
             ];
-        })->values(), ['cursor' => $page->nextCursor()?->encode(), 'has_more' => $page->hasMorePages()]);
+        })->values(), $this->pageMeta($page));
+    }
+
+    private function likeTerm(string $value): string
+    {
+        return '%'.addcslashes(trim($value), '%_\\').'%';
+    }
+
+    private function pageMeta(LengthAwarePaginator $page): array
+    {
+        return [
+            'page' => $page->currentPage(),
+            'per_page' => $page->perPage(),
+            'total' => $page->total(),
+            'last_page' => $page->lastPage(),
+            'has_more' => $page->hasMorePages(),
+            'cursor' => null,
+        ];
     }
 
     public function wallet(Request $request): JsonResponse

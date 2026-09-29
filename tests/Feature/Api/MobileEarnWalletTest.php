@@ -105,6 +105,36 @@ final class MobileEarnWalletTest extends TestCase
         $this->getJson('/api/v1/earn/episodes?show_id='.$show->id)->assertOk()->assertJsonPath('data.0.id', $episode->id);
     }
 
+    public function test_earn_episode_pages_stay_on_one_podcast_and_search(): void
+    {
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/alpha-pages.xml', 'title' => 'Alpha Show', 'author' => 'Alpha Host', 'earn_enabled' => true]);
+        $other = Show::create(['rss_url' => 'https://example.com/beta-pages.xml', 'title' => 'Beta Show', 'author' => 'Beta Host', 'earn_enabled' => true]);
+        foreach (range(1, 12) as $number) {
+            Episode::create([
+                'show_id' => $show->id,
+                'guid' => (string) Str::ulid(),
+                'title' => 'Alpha Episode '.$number,
+                'audio_url' => 'https://cdn.example.com/alpha-'.$number.'.mp3',
+                'duration_seconds' => 600,
+                'published_at' => now()->subMinutes($number),
+            ]);
+        }
+        Episode::create(['show_id' => $other->id, 'guid' => (string) Str::ulid(), 'title' => 'Beta Only', 'audio_url' => 'https://cdn.example.com/beta.mp3', 'duration_seconds' => 600, 'published_at' => now()]);
+
+        $this->actingAs($user, 'sanctum');
+        $first = $this->getJson('/api/v1/earn/episodes?show_id='.$show->id.'&per_page=10&page=1')->assertOk()
+            ->assertJsonPath('meta.page', 1)->assertJsonPath('meta.has_more', true)->assertJsonPath('meta.total', 12)->assertJsonCount(10, 'data');
+        $second = $this->getJson('/api/v1/earn/episodes?show_id='.$show->id.'&per_page=10&page=2')->assertOk()
+            ->assertJsonPath('meta.page', 2)->assertJsonPath('meta.has_more', false)->assertJsonCount(2, 'data');
+        $this->assertNotContains($first->json('data.0.id'), collect($second->json('data'))->pluck('id'));
+        $this->assertNotContains($other->id, collect($second->json('data'))->pluck('show_id'));
+        $this->getJson('/api/v1/earn/episodes?show_id='.$show->id.'&q=Episode%2012')->assertOk()
+            ->assertJsonPath('data.0.title', 'Alpha Episode 12')->assertJsonCount(1, 'data');
+        $this->getJson('/api/v1/earn/shows?q=Beta')->assertOk()
+            ->assertJsonPath('data.0.title', 'Beta Show')->assertJsonCount(1, 'data');
+    }
+
     public function test_started_session_and_award_omit_integrity_and_ledger_secrets(): void
     {
         config()->set('finance.public_enabled', true);
