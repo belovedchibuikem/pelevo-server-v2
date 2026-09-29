@@ -32,6 +32,17 @@ function RichText({ text }: { text: string }) {
 
 function Block({ block }: { block: BodyBlock }) {
   if (typeof block === 'string') {
+    const clause = block.match(/^(\d+\.\d+)\.\s+([^.]{2,90}?)[.:]\s*([\s\S]*)$/);
+    if (clause) {
+      const [, number, title, rest] = clause;
+      return (
+        <>
+          <h3><span>{number}.</span> {title}</h3>
+          {rest.trim() ? <p><RichText text={rest.trim()} /></p> : null}
+        </>
+      );
+    }
+
     return <p><RichText text={block} /></p>;
   }
   if ('list' in block) {
@@ -66,12 +77,12 @@ export default function Legal({ document }: { document: Document }) {
   const intro = (Array.isArray(document.intro) ? document.intro : [document.intro]).filter((paragraph) => paragraph.trim() !== '');
 
   return (
-    <main className="mkt-section mkt-legal" style={{ paddingTop: 56 }}>
+    <main className="mkt-section mkt-legal">
       <Head title={`${document.title} · Pelevo`}>
         <meta name="description" content={intro[0] || document.title} />
       </Head>
-      <p className="mkt-kicker">{document.kicker ?? `Effective ${document.updated}`}</p>
       <h1>{document.title}</h1>
+      <p className="mkt-legal-updated">{document.kicker ?? `Effective ${document.updated}`}</p>
       {intro.length === 1 ? <p className="mkt-lede">{intro[0]}</p> : null}
       <article>
         {intro.length > 1 && intro.map((paragraph) => (
