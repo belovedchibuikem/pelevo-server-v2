@@ -67,9 +67,12 @@ final class PhaseFourFinancialGateTest extends TestCase
         DB::table('earn_sessions')->where('id', $session)->update(['created_at' => now()->subSeconds(40)]);
         $heartbeat = ['position' => 30, 'sequence' => 1, 'elapsed_seconds' => 30, 'playback_rate' => 1, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'attested-token', 'nonce' => $nonce, 'audio_fingerprint' => 'audio-one'];
         $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertOk();
-        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertConflict();
+        $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)
+            ->assertConflict()
+            ->assertJsonPath('error.code', 'EARN_RESYNC');
         $this->actingAs($user, 'sanctum')->withHeader('Idempotency-Key', 'earn-complete')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertConflict();
-        $this->assertDatabaseHas('earn_sessions', ['id' => $session, 'state' => 'review', 'risk_state' => 'review']);
+        $this->assertDatabaseHas('earn_sessions', ['id' => $session, 'state' => 'active', 'risk_state' => 'clear']);
+        $this->assertSame(30, (int) DB::table('earn_sessions')->where('id', $session)->value('verified_seconds'));
         $this->assertDatabaseCount('earn_awards', 0);
     }
 

@@ -238,7 +238,7 @@ final class EarnController extends Controller
             $wall = $nowTs - $anchorAt->getTimestamp();
             $sessionAge = $nowTs - Carbon::parse($row->created_at)->getTimestamp();
             $paced = $claimed <= $wall + 2 && (int) $row->verified_seconds + $claimed <= $sessionAge + 2;
-            if (! $device || ! $nonceValid || ! $data['audio_active'] || ! $rateOk || ! $integrityOk || ! $sequenceOk || ! $advanceOk) {
+            if (! $device || ! $nonceValid || ! $data['audio_active'] || ! $rateOk || ! $integrityOk) {
                 Log::warning('earn.heartbeat.rejected', [
                     'session' => $session,
                     'device' => (bool) $device,
@@ -253,6 +253,12 @@ final class EarnController extends Controller
                 ]);
 
                 return $this->hold($session, 'Heartbeat evidence failed integrity checks.');
+            }
+            if (! $sequenceOk || ! $advanceOk) {
+                return ApiResponse::error('EARN_RESYNC', 'Listening is still in progress.', 409, [
+                    'last_sequence' => (string) $row->last_sequence,
+                    'last_position' => (string) $row->last_position,
+                ]);
             }
             if (! $paced) {
                 return ApiResponse::error('VALIDATION', 'Listening evidence must match real playback time.', 422);
