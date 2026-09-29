@@ -222,6 +222,17 @@ final class EarnController extends Controller
         return DB::transaction(function () use ($session, $request, $data, $integrity): JsonResponse {
             $row = DB::table('earn_sessions')->where('id', $session)->where('user_id', $request->user()->id)->where('state', 'active')->lockForUpdate()->first();
             if (! $row) {
+                $existing = DB::table('earn_sessions')->where('id', $session)->first(['state', 'risk_state', 'verified_seconds', 'last_position']);
+                Log::warning('earn.heartbeat', [
+                    'result' => 'missing',
+                    'reason' => $existing ? 'session_not_active' : 'session_not_found',
+                    'session' => $session,
+                    'state' => $existing->state ?? null,
+                    'risk_state' => $existing->risk_state ?? null,
+                    'verified_seconds' => $existing->verified_seconds ?? null,
+                    'last_position' => $existing->last_position ?? null,
+                ]);
+
                 return ApiResponse::error('NOT_FOUND', 'Earn session not found.', 404);
             }
             $device = Device::where('id', $row->device_id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->first();
@@ -239,36 +250,91 @@ final class EarnController extends Controller
             $sessionAge = $nowTs - Carbon::parse($row->created_at)->getTimestamp();
             $paced = $claimed <= $wall + 2 && (int) $row->verified_seconds + $claimed <= $sessionAge + 2;
             if (! $device || ! $nonceValid || ! $data['audio_active'] || ! $rateOk || ! $integrityOk) {
-                Log::warning('earn.heartbeat.rejected', [
+                $reasons = array_keys(array_filter([
+                    'device' => ! $device,
+                    'nonce' => ! $nonceValid,
+                    'audio_inactive' => ! $data['audio_active'],
+                    'rate' => ! $rateOk,
+                    'integrity' => ! $integrityOk,
+                ]));
+                Log::warning('earn.heartbeat', [
+                    'result' => 'rejected',
+                    'reason' => implode(',', $reasons),
                     'session' => $session,
                     'device' => (bool) $device,
                     'nonce' => $nonceValid,
                     'audio_active' => (bool) $data['audio_active'],
                     'rate' => $rateOk,
                     'integrity' => $integrityOk,
+                    'token_kind' => str_starts_with((string) $data['integrity_token'], 'v1.') ? 'v1' : 'other',
+                    'secret_set' => filled(config('services.earn_integrity.token')),
+                    'secret_matches_app' => config('services.earn_integrity.token') === 'pelevo-dev-earn-integrity',
                     'sequence' => $sequenceOk,
                     'advance' => $advanceOk,
                     'expected_sequence' => (int) $row->last_sequence + 1,
                     'got_sequence' => (int) $data['sequence'],
+                    'position' => (int) $data['position'],
+                    'last_position' => (int) $row->last_position,
+                    'verified_seconds' => (int) $row->verified_seconds,
                 ]);
 
                 return $this->hold($session, 'Heartbeat evidence failed integrity checks.');
             }
             if (! $sequenceOk || ! $advanceOk) {
+                Log::warning('earn.heartbeat', [
+                    'result' => 'resync',
+                    'reason' => ! $sequenceOk ? 'sequence' : 'advance',
+                    'session' => $session,
+                    'expected_sequence' => (int) $row->last_sequence + 1,
+                    'got_sequence' => (int) $data['sequence'],
+                    'position' => (int) $data['position'],
+                    'last_position' => (int) $row->last_position,
+                    'elapsed_seconds' => $claimed,
+                    'advance' => $advance,
+                    'verified_seconds' => (int) $row->verified_seconds,
+                ]);
+
                 return ApiResponse::error('EARN_RESYNC', 'Listening is still in progress.', 409, [
                     'last_sequence' => (string) $row->last_sequence,
                     'last_position' => (string) $row->last_position,
                 ]);
             }
             if (! $paced) {
+                Log::warning('earn.heartbeat', [
+                    'result' => 'pace',
+                    'reason' => 'faster_than_real_time',
+                    'session' => $session,
+                    'claimed' => $claimed,
+                    'wall' => $wall,
+                    'session_age' => $sessionAge,
+                    'verified_seconds' => (int) $row->verified_seconds,
+                    'position' => (int) $data['position'],
+                ]);
+
                 return ApiResponse::error('VALIDATION', 'Listening evidence must match real playback time.', 422);
             }
             $fingerprint = isset($data['audio_fingerprint']) ? hash('sha256', $data['audio_fingerprint']) : null;
             if ($fingerprint && DB::table('earn_heartbeats')->where('audio_fingerprint_hash', $fingerprint)->where('ip_address', '!=', $request->ip())->where('created_at', '>', now()->subDay())->exists()) {
+                Log::warning('earn.heartbeat', [
+                    'result' => 'rejected',
+                    'reason' => 'fingerprint',
+                    'session' => $session,
+                    'verified_seconds' => (int) $row->verified_seconds,
+                ]);
+
                 return $this->hold($session, 'Heartbeat requires fraud review.');
             }
+            $verified = (int) $row->verified_seconds + $claimed;
             DB::table('earn_heartbeats')->insert(['id' => (string) Str::ulid(), 'earn_session_id' => $session, 'sequence' => $data['sequence'], 'position' => $data['position'], 'elapsed_seconds' => $data['elapsed_seconds'], 'playback_rate' => $data['playback_rate'], 'foreground' => $data['foreground'], 'audio_active' => $data['audio_active'], 'integrity_token_hash' => hash('sha256', $data['integrity_token']), 'audio_fingerprint_hash' => $fingerprint, 'ip_address' => $request->ip(), 'created_at' => now(), 'updated_at' => now()]);
-            DB::table('earn_sessions')->where('id', $session)->update(['last_position' => $data['position'], 'last_sequence' => $data['sequence'], 'verified_seconds' => $row->verified_seconds + $data['elapsed_seconds'], 'updated_at' => now()]);
+            DB::table('earn_sessions')->where('id', $session)->update(['last_position' => $data['position'], 'last_sequence' => $data['sequence'], 'verified_seconds' => $verified, 'updated_at' => now()]);
+            Log::info('earn.heartbeat', [
+                'result' => 'accepted',
+                'session' => $session,
+                'sequence' => (int) $data['sequence'],
+                'position' => (int) $data['position'],
+                'elapsed_seconds' => $claimed,
+                'verified_seconds' => $verified,
+            ]);
 
             return ApiResponse::success(['accepted' => true]);
         }, 3);
@@ -286,18 +352,43 @@ final class EarnController extends Controller
         $payload = DB::transaction(function () use ($session, $request, $post, $key, &$created, &$notice): array {
             $row = DB::table('earn_sessions')->where('id', $session)->where('user_id', $request->user()->id)->lockForUpdate()->first();
             if (! $row) {
+                Log::warning('earn.complete', ['result' => 'refused', 'reason' => 'session_not_found', 'session' => $session]);
+
                 return ['error' => ApiResponse::error('NOT_FOUND', 'Earn session not found.', 404)];
             }
             if ($row->state === 'completed') {
+                Log::info('earn.complete', ['result' => 'already_awarded', 'session' => $session]);
+
                 return ['award' => $this->presentAward(DB::table('earn_awards')->where('earn_session_id', $row->id)->first())];
             }
             if ($row->state !== 'active' || $row->risk_state !== 'clear') {
+                Log::warning('earn.complete', [
+                    'result' => 'refused',
+                    'reason' => 'session_not_active',
+                    'session' => $session,
+                    'state' => $row->state,
+                    'risk_state' => $row->risk_state,
+                    'verified_seconds' => (int) $row->verified_seconds,
+                    'last_position' => (int) $row->last_position,
+                ]);
+
                 return ['error' => ApiResponse::error('MODERATION_HOLD', 'Earn session requires review.', 409)];
             }
             $episode = Episode::findOrFail($row->episode_id);
             $required = max(1, (int) floor(((int) $episode->duration_seconds) * 0.95));
             $listenedFor = now()->getTimestamp() - Carbon::parse($row->created_at)->getTimestamp();
             if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required || $listenedFor + 5 < $required) {
+                Log::warning('earn.complete', [
+                    'result' => 'refused',
+                    'reason' => 'short',
+                    'session' => $session,
+                    'verified_seconds' => (int) $row->verified_seconds,
+                    'last_position' => (int) $row->last_position,
+                    'required' => $required,
+                    'listened_for' => $listenedFor,
+                    'duration_seconds' => (int) $episode->duration_seconds,
+                ]);
+
                 return ['error' => ApiResponse::error('MODERATION_HOLD', 'Not enough verified listening evidence.', 409)];
             }
             if ($this->episodeLocked($row->user_id, $row->episode_id, true)) {
@@ -311,6 +402,13 @@ final class EarnController extends Controller
             DB::table('earn_sessions')->where('id', $row->id)->update(['state' => 'completed', 'active_guard' => null, 'nonce_hash' => null, 'completed_at' => now(), 'updated_at' => now()]);
             Cache::forget('earn_wallet:'.$row->user_id);
             $created = true;
+            Log::info('earn.complete', [
+                'result' => 'awarded',
+                'session' => $session,
+                'coins' => (int) $row->expected_award,
+                'verified_seconds' => (int) $row->verified_seconds,
+                'required' => $required,
+            ]);
             $notice = [
                 'user_id' => (string) $row->user_id,
                 'coins' => (int) $row->expected_award,
