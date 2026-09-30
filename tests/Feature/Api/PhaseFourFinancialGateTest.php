@@ -90,6 +90,73 @@ final class PhaseFourFinancialGateTest extends TestCase
         $this->assertSame(2, (int) FinancialAccount::where('owner_id', $user->id)->where('type', 'earn_wallet')->value('balance'));
     }
 
+    public function test_final_heartbeat_credits_once_in_real_time_and_locks_the_episode(): void
+    {
+        config()->set(['finance.public_enabled' => true, 'services.earn_integrity.url' => 'https://integrity.test/check']);
+        Http::preventStrayRequests();
+        Http::fake(['https://integrity.test/check' => Http::response(['valid' => true])]);
+        [$user, $device, $episode] = $this->listenerEpisode(60);
+        $started = $this->actingAs($user, 'sanctum')
+            ->withHeader('X-Device-Id', $device->device_identifier)
+            ->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")
+            ->assertCreated();
+        $session = $started->json('data.id');
+        $nonce = $started->json('data.nonce');
+        DB::table('earn_sessions')->where('id', $session)->update([
+            'verified_seconds' => 30,
+            'last_position' => 30,
+            'last_sequence' => 1,
+            'created_at' => now()->subSeconds(70),
+        ]);
+        $heartbeat = [
+            'position' => 59,
+            'sequence' => 2,
+            'elapsed_seconds' => 29,
+            'playback_rate' => 1,
+            'foreground' => true,
+            'audio_active' => true,
+            'integrity_token' => 'attested-token',
+            'nonce' => $nonce,
+        ];
+
+        $this->withHeader('X-Device-Id', $device->device_identifier)
+            ->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)
+            ->assertOk()
+            ->assertJsonPath('data.accepted', true)
+            ->assertJsonPath('data.verified_seconds', 59)
+            ->assertJsonPath('data.required_seconds', 60)
+            ->assertJsonPath('data.awarded', false)
+            ->assertJsonPath('data.award', null);
+        $this->assertDatabaseCount('earn_awards', 0);
+
+        $heartbeat['position'] = 60;
+        $heartbeat['sequence'] = 3;
+        $heartbeat['elapsed_seconds'] = 1;
+        $this->withHeader('X-Device-Id', $device->device_identifier)
+            ->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)
+            ->assertOk()
+            ->assertJsonPath('data.accepted', true)
+            ->assertJsonPath('data.verified_seconds', 60)
+            ->assertJsonPath('data.required_seconds', 60)
+            ->assertJsonPath('data.awarded', true)
+            ->assertJsonPath('data.award.coins', 1);
+
+        $this->assertDatabaseHas('earn_sessions', ['id' => $session, 'state' => 'completed', 'active_guard' => null]);
+        $this->assertDatabaseCount('earn_awards', 1);
+        $this->assertSame(1, (int) FinancialAccount::where('owner_id', $user->id)->where('type', 'earn_wallet')->value('balance'));
+        $this->assertSame(1, DB::table('notifications')->where('user_id', $user->id)->where('type', 'earn_award')->count());
+
+        $this->withHeader('X-Device-Id', $device->device_identifier)
+            ->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)
+            ->assertNotFound();
+        $this->withHeader('X-Device-Id', $device->device_identifier)
+            ->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")
+            ->assertConflict()
+            ->assertJsonPath('error.code', 'EPISODE_LOCKED');
+        $this->assertDatabaseCount('earn_awards', 1);
+        $this->assertSame(1, (int) FinancialAccount::where('owner_id', $user->id)->where('type', 'earn_wallet')->value('balance'));
+    }
+
     public function test_ledger_reversal_is_immutable_idempotent_and_reconciliation_detects_drift(): void
     {
         $source = FinancialAccount::create(['type' => 'platform', 'unit' => 'PCN', 'balance' => 0]);

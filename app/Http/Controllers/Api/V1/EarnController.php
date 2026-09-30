@@ -256,11 +256,12 @@ final class EarnController extends Controller
         }, 3);
     }
 
-    public function heartbeat(string $session, Request $request, EarnIntegrityVerifier $integrity): JsonResponse
+    public function heartbeat(string $session, Request $request, EarnIntegrityVerifier $integrity, PostLedgerTransaction $post): JsonResponse
     {
         $data = $request->validate(['position' => ['required', 'integer', 'min:0'], 'sequence' => ['required', 'integer', 'min:1'], 'elapsed_seconds' => ['required', 'integer', 'between:1,30'], 'playback_rate' => ['required', 'numeric'], 'foreground' => ['required', 'boolean'], 'audio_active' => ['required', 'boolean'], 'integrity_token' => ['required', 'string', 'max:4096'], 'nonce' => ['required', 'string', 'size:64'], 'audio_fingerprint' => ['nullable', 'string', 'max:500']]);
 
-        return DB::transaction(function () use ($session, $request, $data, $integrity): JsonResponse {
+        $notice = null;
+        $response = DB::transaction(function () use ($session, $request, $data, $integrity, $post, &$notice): JsonResponse {
             $row = DB::table('earn_sessions')->where('id', $session)->where('user_id', $request->user()->id)->where('state', 'active')->lockForUpdate()->first();
             if (! $row) {
                 $existing = DB::table('earn_sessions')->where('id', $session)->first(['state', 'risk_state', 'verified_seconds', 'last_position']);
@@ -368,17 +369,49 @@ final class EarnController extends Controller
             $verified = (int) $row->verified_seconds + $claimed;
             DB::table('earn_heartbeats')->insert(['id' => (string) Str::ulid(), 'earn_session_id' => $session, 'sequence' => $data['sequence'], 'position' => $data['position'], 'elapsed_seconds' => $data['elapsed_seconds'], 'playback_rate' => $data['playback_rate'], 'foreground' => $data['foreground'], 'audio_active' => $data['audio_active'], 'integrity_token_hash' => hash('sha256', $data['integrity_token']), 'audio_fingerprint_hash' => $fingerprint, 'ip_address' => $request->ip(), 'created_at' => now(), 'updated_at' => now()]);
             DB::table('earn_sessions')->where('id', $session)->update(['last_position' => $data['position'], 'last_sequence' => $data['sequence'], 'verified_seconds' => $verified, 'updated_at' => now()]);
+            $episode = Episode::findOrFail($row->episode_id);
+            $required = $this->requiredListeningSeconds($episode);
+            $award = null;
+            if ($verified >= $required && (int) $data['position'] >= $required && $sessionAge >= $required) {
+                if ($this->episodeLocked($row->user_id, $row->episode_id, true)) {
+                    return ApiResponse::error('EPISODE_LOCKED', 'This episode remains locked for Earn.', 409);
+                }
+                $awarded = $this->awardSession(
+                    $row,
+                    $request,
+                    $episode,
+                    $post,
+                    'earn-session:'.$row->id,
+                    'heartbeat',
+                    $verified,
+                    $required,
+                );
+                $award = $awarded['award'];
+                $notice = $awarded['notice'];
+            }
             Log::info('earn.heartbeat', [
-                'result' => 'accepted',
+                'result' => $award === null ? 'accepted' : 'awarded',
                 'session' => $session,
                 'sequence' => (int) $data['sequence'],
                 'position' => (int) $data['position'],
                 'elapsed_seconds' => $claimed,
                 'verified_seconds' => $verified,
+                'required_seconds' => $required,
             ]);
 
-            return ApiResponse::success(['accepted' => true]);
+            return ApiResponse::success([
+                'accepted' => true,
+                'verified_seconds' => $verified,
+                'required_seconds' => $required,
+                'awarded' => $award !== null,
+                'award' => $award,
+            ]);
         }, 3);
+        if (is_array($notice)) {
+            $this->notifyEarnAward($notice);
+        }
+
+        return $response;
     }
 
     public function complete(string $session, Request $request, PostLedgerTransaction $post): JsonResponse
@@ -416,9 +449,9 @@ final class EarnController extends Controller
                 return ['error' => ApiResponse::error('MODERATION_HOLD', 'Earn session requires review.', 409)];
             }
             $episode = Episode::findOrFail($row->episode_id);
-            $required = max(1, (int) floor(((int) $episode->duration_seconds) * 0.95));
+            $required = $this->requiredListeningSeconds($episode);
             $listenedFor = now()->getTimestamp() - Carbon::parse($row->created_at)->getTimestamp();
-            if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required || $listenedFor + 5 < $required) {
+            if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required || $listenedFor < $required) {
                 Log::warning('earn.complete', [
                     'result' => 'refused',
                     'reason' => 'short',
@@ -435,29 +468,20 @@ final class EarnController extends Controller
             if ($this->episodeLocked($row->user_id, $row->episode_id, true)) {
                 return ['error' => ApiResponse::error('EPISODE_LOCKED', 'This episode remains locked for Earn.', 409)];
             }
-            $wallet = FinancialAccount::firstOrCreate(['owner_type' => get_class($request->user()), 'owner_id' => $request->user()->id, 'type' => 'earn_wallet', 'unit' => 'ECN'], ['balance' => 0]);
-            $liability = FinancialAccount::firstOrCreate(['owner_type' => null, 'owner_id' => null, 'type' => 'earn_liability', 'unit' => 'ECN'], ['balance' => 0]);
-            $transaction = $post->handle('earn.awarded', $key, 'ECN', [['account_id' => $liability->id, 'amount' => -$row->expected_award], ['account_id' => $wallet->id, 'amount' => $row->expected_award]], ['eligibility_snapshot' => json_decode($row->eligibility_snapshot, true)]);
-            $awardId = (string) Str::ulid();
-            DB::table('earn_awards')->insert(['id' => $awardId, 'user_id' => $row->user_id, 'episode_id' => $row->episode_id, 'earn_session_id' => $row->id, 'ledger_transaction_id' => $transaction->id, 'coins' => $row->expected_award, 'locked_until' => now()->addHours(data_get(json_decode($row->eligibility_snapshot, true), 'lock_hours', 72)), 'created_at' => now(), 'updated_at' => now()]);
-            DB::table('earn_sessions')->where('id', $row->id)->update(['state' => 'completed', 'active_guard' => null, 'nonce_hash' => null, 'completed_at' => now(), 'updated_at' => now()]);
-            Cache::forget('earn_wallet:'.$row->user_id);
+            $awarded = $this->awardSession(
+                $row,
+                $request,
+                $episode,
+                $post,
+                $key,
+                'complete',
+                (int) $row->verified_seconds,
+                $required,
+            );
             $created = true;
-            Log::info('earn.complete', [
-                'result' => 'awarded',
-                'session' => $session,
-                'coins' => (int) $row->expected_award,
-                'verified_seconds' => (int) $row->verified_seconds,
-                'required' => $required,
-            ]);
-            $notice = [
-                'user_id' => (string) $row->user_id,
-                'coins' => (int) $row->expected_award,
-                'episode_title' => (string) $episode->title,
-                'award_id' => $awardId,
-            ];
+            $notice = $awarded['notice'];
 
-            return ['award' => $this->presentAward(DB::table('earn_awards')->find($awardId))];
+            return ['award' => $awarded['award']];
         }, 3);
         if (isset($payload['error'])) {
             return $payload['error'];
@@ -467,6 +491,84 @@ final class EarnController extends Controller
         }
 
         return ApiResponse::success($payload['award'], status: $created ? 201 : 200);
+    }
+
+    private function requiredListeningSeconds(Episode $episode): int
+    {
+        return max(1, (int) $episode->duration_seconds);
+    }
+
+    /**
+     * @return array{
+     *     award: array{id: mixed, episode_id: mixed, coins: int, locked_until: mixed},
+     *     notice: array{user_id: string, coins: int, episode_title: string, award_id: string}
+     * }
+     */
+    private function awardSession(
+        object $row,
+        Request $request,
+        Episode $episode,
+        PostLedgerTransaction $post,
+        string $idempotencyKey,
+        string $source,
+        int $verified,
+        int $required,
+    ): array {
+        $wallet = FinancialAccount::firstOrCreate([
+            'owner_type' => get_class($request->user()),
+            'owner_id' => $request->user()->id,
+            'type' => 'earn_wallet',
+            'unit' => 'ECN',
+        ], ['balance' => 0]);
+        $liability = FinancialAccount::firstOrCreate([
+            'owner_type' => null,
+            'owner_id' => null,
+            'type' => 'earn_liability',
+            'unit' => 'ECN',
+        ], ['balance' => 0]);
+        $snapshot = json_decode((string) $row->eligibility_snapshot, true);
+        $transaction = $post->handle('earn.awarded', $idempotencyKey, 'ECN', [
+            ['account_id' => $liability->id, 'amount' => -$row->expected_award],
+            ['account_id' => $wallet->id, 'amount' => $row->expected_award],
+        ], ['eligibility_snapshot' => $snapshot]);
+        $awardId = (string) Str::ulid();
+        DB::table('earn_awards')->insert([
+            'id' => $awardId,
+            'user_id' => $row->user_id,
+            'episode_id' => $row->episode_id,
+            'earn_session_id' => $row->id,
+            'ledger_transaction_id' => $transaction->id,
+            'coins' => $row->expected_award,
+            'locked_until' => now()->addHours(data_get($snapshot, 'lock_hours', 72)),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        DB::table('earn_sessions')->where('id', $row->id)->update([
+            'state' => 'completed',
+            'active_guard' => null,
+            'nonce_hash' => null,
+            'completed_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Cache::forget('earn_wallet:'.$row->user_id);
+        Log::info('earn.complete', [
+            'result' => 'awarded',
+            'source' => $source,
+            'session' => $row->id,
+            'coins' => (int) $row->expected_award,
+            'verified_seconds' => $verified,
+            'required' => $required,
+        ]);
+
+        return [
+            'award' => $this->presentAward(DB::table('earn_awards')->find($awardId)),
+            'notice' => [
+                'user_id' => (string) $row->user_id,
+                'coins' => (int) $row->expected_award,
+                'episode_title' => (string) $episode->title,
+                'award_id' => $awardId,
+            ],
+        ];
     }
 
     private function coinsFor(int $seconds): int
