@@ -65,7 +65,7 @@ final class PhaseFourFinancialGateTest extends TestCase
         $resumed->assertJsonPath('data.id', $session);
         $nonce = $resumed->json('data.nonce');
         DB::table('earn_sessions')->where('id', $session)->update(['created_at' => now()->subSeconds(40)]);
-        $heartbeat = ['position' => 30, 'sequence' => 1, 'elapsed_seconds' => 30, 'playback_rate' => 1, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'attested-token', 'nonce' => $nonce, 'audio_fingerprint' => 'audio-one'];
+        $heartbeat = ['position' => 30, 'sequence' => 1, 'elapsed_seconds' => 30, 'media_duration_seconds' => 1200, 'playback_rate' => 1, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'attested-token', 'nonce' => $nonce, 'audio_fingerprint' => 'audio-one'];
         $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertOk();
         $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)
             ->assertConflict()
@@ -112,6 +112,7 @@ final class PhaseFourFinancialGateTest extends TestCase
             'position' => 59,
             'sequence' => 2,
             'elapsed_seconds' => 29,
+            'media_duration_seconds' => 70,
             'playback_rate' => 1,
             'foreground' => true,
             'audio_active' => true,
@@ -124,7 +125,7 @@ final class PhaseFourFinancialGateTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.accepted', true)
             ->assertJsonPath('data.verified_seconds', 59)
-            ->assertJsonPath('data.required_seconds', 60)
+            ->assertJsonPath('data.required_seconds', 70)
             ->assertJsonPath('data.awarded', false)
             ->assertJsonPath('data.award', null);
         $this->assertDatabaseCount('earn_awards', 0);
@@ -137,7 +138,22 @@ final class PhaseFourFinancialGateTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.accepted', true)
             ->assertJsonPath('data.verified_seconds', 60)
-            ->assertJsonPath('data.required_seconds', 60)
+            ->assertJsonPath('data.required_seconds', 70)
+            ->assertJsonPath('data.awarded', false)
+            ->assertJsonPath('data.award', null);
+        $this->assertDatabaseCount('earn_awards', 0);
+
+        DB::table('earn_heartbeats')->where('earn_session_id', $session)->where('sequence', 2)->update(['created_at' => now()->subSeconds(20)]);
+        DB::table('earn_heartbeats')->where('earn_session_id', $session)->where('sequence', 3)->update(['created_at' => now()->subSeconds(10)]);
+        $heartbeat['position'] = 70;
+        $heartbeat['sequence'] = 4;
+        $heartbeat['elapsed_seconds'] = 10;
+        $this->withHeader('X-Device-Id', $device->device_identifier)
+            ->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)
+            ->assertOk()
+            ->assertJsonPath('data.accepted', true)
+            ->assertJsonPath('data.verified_seconds', 70)
+            ->assertJsonPath('data.required_seconds', 70)
             ->assertJsonPath('data.awarded', true)
             ->assertJsonPath('data.award.coins', 1);
 

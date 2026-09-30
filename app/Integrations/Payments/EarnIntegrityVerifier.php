@@ -10,8 +10,16 @@ final class EarnIntegrityVerifier
     /** Shared with Flutter debug HMAC (`EarnIntegrity` debug secret). */
     private const LOCAL_DEBUG_SECRET = 'pelevo-dev-earn-integrity';
 
-    public function valid(string $token, string $deviceIdentifier, string $sessionId, int $sequence, string $nonce): bool
-    {
+    public function valid(
+        string $token,
+        string $deviceIdentifier,
+        string $sessionId,
+        int $sequence,
+        string $nonce,
+        int $position,
+        int $elapsedSeconds,
+        int $mediaDurationSeconds,
+    ): bool {
         if ($nonce === '' || $token === '') {
             return false;
         }
@@ -27,6 +35,9 @@ final class EarnIntegrityVerifier
                         'session_id' => $sessionId,
                         'sequence' => $sequence,
                         'nonce' => $nonce,
+                        'position' => $position,
+                        'elapsed_seconds' => $elapsedSeconds,
+                        'media_duration_seconds' => $mediaDurationSeconds,
                     ])
                     ->successful();
             } catch (Throwable) {
@@ -39,8 +50,16 @@ final class EarnIntegrityVerifier
             $secret = self::LOCAL_DEBUG_SECRET;
         }
 
-        if ($secret !== '' && str_starts_with($token, 'v1.')) {
-            $expected = 'v1.'.hash_hmac('sha256', implode('|', [$deviceIdentifier, $sessionId, (string) $sequence, $nonce]), $secret);
+        if ($secret !== '' && str_starts_with($token, 'v2.')) {
+            $expected = 'v2.'.hash_hmac('sha256', implode('|', [
+                $deviceIdentifier,
+                $sessionId,
+                (string) $sequence,
+                $nonce,
+                (string) $position,
+                (string) $elapsedSeconds,
+                (string) $mediaDurationSeconds,
+            ]), $secret);
 
             return hash_equals($expected, $token);
         }

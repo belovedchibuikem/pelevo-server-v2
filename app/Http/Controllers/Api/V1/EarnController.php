@@ -192,7 +192,7 @@ final class EarnController extends Controller
             return ApiResponse::error('MODERATION_HOLD', 'Daily Earn completion limit reached.', 409);
         }
         $campaign = DB::table('earn_campaigns')->where('state', 'active')->where(fn ($q) => $q->whereNull('starts_at')->orWhere('starts_at', '<=', now()))->where(fn ($q) => $q->whereNull('ends_at')->orWhere('ends_at', '>', now()))->latest('starts_at')->first();
-        $snapshot = ['config_version' => $config?->version, 'campaign_version' => $campaign?->config_version, 'award' => $award, 'lock_hours' => data_get($config?->payload, 'money.earn_lock_hours', 72), 'risk_policy' => 1];
+        $snapshot = ['config_version' => $config?->version, 'campaign_version' => $campaign?->config_version, 'award' => $award, 'lock_hours' => data_get($config?->payload, 'money.earn_lock_hours', 72), 'risk_policy' => 1, 'required_seconds' => (int) $episode->duration_seconds];
 
         return DB::transaction(function () use ($request, $episode, $device, $campaign, $award, $snapshot): JsonResponse {
             $existing = DB::table('earn_sessions')
@@ -258,7 +258,7 @@ final class EarnController extends Controller
 
     public function heartbeat(string $session, Request $request, EarnIntegrityVerifier $integrity, PostLedgerTransaction $post): JsonResponse
     {
-        $data = $request->validate(['position' => ['required', 'integer', 'min:0'], 'sequence' => ['required', 'integer', 'min:1'], 'elapsed_seconds' => ['required', 'integer', 'between:1,30'], 'playback_rate' => ['required', 'numeric'], 'foreground' => ['required', 'boolean'], 'audio_active' => ['required', 'boolean'], 'integrity_token' => ['required', 'string', 'max:4096'], 'nonce' => ['required', 'string', 'size:64'], 'audio_fingerprint' => ['nullable', 'string', 'max:500']]);
+        $data = $request->validate(['position' => ['required', 'integer', 'min:0'], 'sequence' => ['required', 'integer', 'min:1'], 'elapsed_seconds' => ['required', 'integer', 'between:1,30'], 'media_duration_seconds' => ['required', 'integer', 'between:1,172800'], 'playback_rate' => ['required', 'numeric'], 'foreground' => ['required', 'boolean'], 'audio_active' => ['required', 'boolean'], 'integrity_token' => ['required', 'string', 'max:4096'], 'nonce' => ['required', 'string', 'size:64'], 'audio_fingerprint' => ['nullable', 'string', 'max:500']]);
 
         $notice = null;
         $response = DB::transaction(function () use ($session, $request, $data, $integrity, $post, &$notice): JsonResponse {
@@ -277,11 +277,30 @@ final class EarnController extends Controller
 
                 return ApiResponse::error('NOT_FOUND', 'Earn session not found.', 404);
             }
+            $episode = Episode::findOrFail($row->episode_id);
+            $catalogRequired = $this->requiredListeningSeconds($episode);
+            $mediaDuration = (int) $data['media_duration_seconds'];
+            if ($mediaDuration < $catalogRequired) {
+                return ApiResponse::error('VALIDATION', 'Resolved playback duration cannot be shorter than the episode duration.', 422);
+            }
+            $snapshot = json_decode((string) $row->eligibility_snapshot, true) ?: [];
+            $required = max($catalogRequired, (int) data_get($snapshot, 'required_seconds', 0), $mediaDuration);
+            $snapshot['required_seconds'] = $required;
+            $snapshot['media_duration_seconds'] = $mediaDuration;
             $device = Device::where('id', $row->device_id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->first();
             $nonceValid = $row->nonce_hash && $row->nonce_expires_at && now()->lte($row->nonce_expires_at) && hash_equals($row->nonce_hash, hash('sha256', $data['nonce']));
             $advance = (int) $data['position'] - (int) $row->last_position;
             $rateOk = abs((float) $data['playback_rate'] - 1.0) <= 0.01;
-            $integrityOk = $integrity->valid($data['integrity_token'], (string) $request->header('X-Device-Id'), $session, (int) $data['sequence'], $data['nonce']);
+            $integrityOk = $integrity->valid(
+                $data['integrity_token'],
+                (string) $request->header('X-Device-Id'),
+                $session,
+                (int) $data['sequence'],
+                $data['nonce'],
+                (int) $data['position'],
+                (int) $data['elapsed_seconds'],
+                $mediaDuration,
+            );
             $sequenceOk = (int) $data['sequence'] === (int) $row->last_sequence + 1;
             $advanceOk = $advance >= 0 && $advance <= (int) $data['elapsed_seconds'] + 3;
             $claimed = (int) $data['elapsed_seconds'];
@@ -308,7 +327,7 @@ final class EarnController extends Controller
                     'audio_active' => (bool) $data['audio_active'],
                     'rate' => $rateOk,
                     'integrity' => $integrityOk,
-                    'token_kind' => str_starts_with((string) $data['integrity_token'], 'v1.') ? 'v1' : 'other',
+                    'token_kind' => str_starts_with((string) $data['integrity_token'], 'v2.') ? 'v2' : 'other',
                     'secret_set' => filled(config('services.earn_integrity.token')),
                     'secret_matches_app' => config('services.earn_integrity.token') === 'pelevo-dev-earn-integrity',
                     'sequence' => $sequenceOk,
@@ -368,9 +387,7 @@ final class EarnController extends Controller
             }
             $verified = (int) $row->verified_seconds + $claimed;
             DB::table('earn_heartbeats')->insert(['id' => (string) Str::ulid(), 'earn_session_id' => $session, 'sequence' => $data['sequence'], 'position' => $data['position'], 'elapsed_seconds' => $data['elapsed_seconds'], 'playback_rate' => $data['playback_rate'], 'foreground' => $data['foreground'], 'audio_active' => $data['audio_active'], 'integrity_token_hash' => hash('sha256', $data['integrity_token']), 'audio_fingerprint_hash' => $fingerprint, 'ip_address' => $request->ip(), 'created_at' => now(), 'updated_at' => now()]);
-            DB::table('earn_sessions')->where('id', $session)->update(['last_position' => $data['position'], 'last_sequence' => $data['sequence'], 'verified_seconds' => $verified, 'updated_at' => now()]);
-            $episode = Episode::findOrFail($row->episode_id);
-            $required = $this->requiredListeningSeconds($episode);
+            DB::table('earn_sessions')->where('id', $session)->update(['last_position' => $data['position'], 'last_sequence' => $data['sequence'], 'verified_seconds' => $verified, 'eligibility_snapshot' => json_encode($snapshot, JSON_THROW_ON_ERROR), 'updated_at' => now()]);
             $award = null;
             if ($verified >= $required && (int) $data['position'] >= $required && $sessionAge >= $required) {
                 if ($this->episodeLocked($row->user_id, $row->episode_id, true)) {
@@ -449,7 +466,7 @@ final class EarnController extends Controller
                 return ['error' => ApiResponse::error('MODERATION_HOLD', 'Earn session requires review.', 409)];
             }
             $episode = Episode::findOrFail($row->episode_id);
-            $required = $this->requiredListeningSeconds($episode);
+            $required = $this->requiredListeningSeconds($episode, $row);
             $listenedFor = now()->getTimestamp() - Carbon::parse($row->created_at)->getTimestamp();
             if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required || $listenedFor < $required) {
                 Log::warning('earn.complete', [
@@ -493,9 +510,15 @@ final class EarnController extends Controller
         return ApiResponse::success($payload['award'], status: $created ? 201 : 200);
     }
 
-    private function requiredListeningSeconds(Episode $episode): int
+    private function requiredListeningSeconds(Episode $episode, ?object $session = null): int
     {
-        return max(1, (int) $episode->duration_seconds);
+        $catalog = max(1, (int) $episode->duration_seconds);
+        if ($session === null) {
+            return $catalog;
+        }
+        $snapshot = json_decode((string) $session->eligibility_snapshot, true);
+
+        return max($catalog, (int) data_get($snapshot, 'required_seconds', 0));
     }
 
     /**

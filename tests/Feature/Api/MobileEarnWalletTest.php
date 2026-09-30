@@ -208,7 +208,7 @@ final class MobileEarnWalletTest extends TestCase
         $session = $started->json('data.id');
         $nonce = $started->json('data.nonce');
         $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", [
-            'position' => 30, 'sequence' => 1, 'elapsed_seconds' => 20, 'playback_rate' => 2, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'token', 'nonce' => $nonce,
+            'position' => 30, 'sequence' => 1, 'elapsed_seconds' => 20, 'media_duration_seconds' => 600, 'playback_rate' => 2, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'token', 'nonce' => $nonce,
         ])->assertConflict();
         DB::table('earn_sessions')->where('id', $session)->update(['state' => 'active', 'risk_state' => 'clear', 'verified_seconds' => 100, 'last_position' => 100]);
         $this->withHeader('Idempotency-Key', 'too-short')->postJson("/api/v1/earn/sessions/{$session}/complete")->assertConflict()->assertJsonPath('error.code', 'MODERATION_HOLD');
@@ -229,9 +229,9 @@ final class MobileEarnWalletTest extends TestCase
         $resumed = $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertOk();
         $resumed->assertJsonPath('data.id', $session)->assertJsonPath('data.resume_position', 80)->assertJsonPath('data.last_sequence', 3);
         $nonce = $resumed->json('data.nonce');
-        $token = 'v1.'.hash_hmac('sha256', implode('|', [$device->device_identifier, $session, '4', $nonce]), 'pelevo-dev-earn-integrity');
+        $token = 'v2.'.hash_hmac('sha256', implode('|', [$device->device_identifier, $session, '4', $nonce, '100', '20', '600']), 'pelevo-dev-earn-integrity');
         $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", [
-            'position' => 100, 'sequence' => 4, 'elapsed_seconds' => 20, 'playback_rate' => 1, 'foreground' => false, 'audio_active' => true, 'integrity_token' => $token, 'nonce' => $nonce,
+            'position' => 100, 'sequence' => 4, 'elapsed_seconds' => 20, 'media_duration_seconds' => 600, 'playback_rate' => 1, 'foreground' => false, 'audio_active' => true, 'integrity_token' => $token, 'nonce' => $nonce,
         ])->assertOk()->assertJsonPath('data.accepted', true);
         $this->assertSame(100, (int) DB::table('earn_sessions')->where('id', $session)->value('verified_seconds'));
     }
@@ -248,7 +248,7 @@ final class MobileEarnWalletTest extends TestCase
         $started = $this->actingAs($user, 'sanctum')->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/episodes/{$episode->id}/sessions")->assertCreated();
         $session = $started->json('data.id');
         $nonce = $started->json('data.nonce');
-        $heartbeat = ['position' => 30, 'sequence' => 1, 'elapsed_seconds' => 30, 'playback_rate' => 1, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'attested-token', 'nonce' => $nonce];
+        $heartbeat = ['position' => 30, 'sequence' => 1, 'elapsed_seconds' => 30, 'media_duration_seconds' => 600, 'playback_rate' => 1, 'foreground' => true, 'audio_active' => true, 'integrity_token' => 'attested-token', 'nonce' => $nonce];
 
         $this->withHeader('X-Device-Id', $device->device_identifier)->postJson("/api/v1/earn/sessions/{$session}/heartbeat", $heartbeat)->assertUnprocessable();
         $this->assertSame(0, (int) DB::table('earn_sessions')->where('id', $session)->value('verified_seconds'));
