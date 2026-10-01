@@ -25,6 +25,10 @@ final class AccrueReelRevenue implements ShouldBeUnique, ShouldQueue
 
     public function handle(PostLedgerTransaction $post): void
     {
+        if (! config('reels_ads.legacy_pcn_accrual_enabled', false)) {
+            return;
+        }
+
         $fee = DB::table('fee_versions')->where('type', 'reel_platform')->where('active', true)->where('effective_at', '<=', now())->latest('effective_at')->first();
         if (! $fee) {
             return;

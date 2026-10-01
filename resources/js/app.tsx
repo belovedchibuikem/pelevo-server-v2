@@ -11,6 +11,7 @@ const authenticatedAdminPages = new Set([
   'Admin/EarnCatalog',
   'Admin/Claims',
   'Admin/Creators',
+  'Admin/FoundingCreators',
   'Admin/Dashboard',
   'Admin/Finance',
   'Admin/Moderation',

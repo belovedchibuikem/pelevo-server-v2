@@ -1,14 +1,16 @@
 <?php
 
-use App\Jobs\AccrueReelRevenue;
 use App\Jobs\DispatchNotificationBroadcast;
-use App\Jobs\SendNotificationDigests;
 use App\Jobs\ExpireClaims;
+use App\Jobs\ExpirePendingReelAdImpressions;
 use App\Jobs\MaterializeHomeFeed;
 use App\Jobs\MaterializeRecommendations;
+use App\Jobs\MonitorReelAdMonetization;
 use App\Jobs\QualifyReferrals;
+use App\Jobs\ReleaseReconciledReelAdRevenue;
 use App\Jobs\RunReconciliation;
 use App\Jobs\ScoreEarnSession;
+use App\Jobs\SendNotificationDigests;
 use App\Jobs\UnlockExpiredEarnAwards;
 use App\Models\User;
 use Illuminate\Foundation\Inspiring;
@@ -74,7 +76,24 @@ Schedule::job(new UnlockExpiredEarnAwards, 'finance')
     ->onOneServer()
     ->withoutOverlapping(5);
 
-Schedule::job(new AccrueReelRevenue, 'finance')->name('accrue-reel-revenue')->hourly()->onOneServer()->withoutOverlapping(30);
+Schedule::job(new ExpirePendingReelAdImpressions, 'finance')
+    ->name('expire-pending-reel-ad-impressions')
+    ->everyFiveMinutes()
+    ->onOneServer()
+    ->withoutOverlapping(5);
+Schedule::job(new MonitorReelAdMonetization, 'finance')
+    ->name('monitor-reel-ad-monetization')
+    ->hourly()
+    ->onOneServer()
+    ->withoutOverlapping(10);
+Schedule::call(function (): void {
+    DB::table('admob_reconciliation_batches')
+        ->whereIn('status', ['approved', 'posted'])
+        ->orderBy('statement_month')
+        ->limit(120)
+        ->pluck('id')
+        ->each(fn (string $id) => ReleaseReconciledReelAdRevenue::dispatch($id));
+})->name('release-reconciled-reel-ad-revenue')->hourly()->onOneServer()->withoutOverlapping(10);
 Schedule::job(new QualifyReferrals, 'finance')->name('qualify-referrals')->everyFifteenMinutes()->onOneServer()->withoutOverlapping(10);
 
 Schedule::call(function (): void {

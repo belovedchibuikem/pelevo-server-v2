@@ -347,7 +347,80 @@ paths:
   /reels/trending:
     get: { security: [{ bearerAuth: [] }], description: Reels ranked by qualified views with the same public feed fields as for-you., responses: { '200': { description: Reels ranked by qualified views } } }
   /reels/{reel}/view-heartbeat:
-    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: View evidence accepted and capped-count result returned } } }
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Accepts monotonic foreground and audible playback evidence. The server calculates watched time, applies the 30-second or short-reel completion rule and rolling 24-hour deduplication, and may return a server-created Native Advanced ad slot after 5-8 valid views.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, feed_session_id, sequence, playback_position_ms, completed, app_foreground, audible, ad_eligible]
+              properties:
+                session_id: { type: string, format: uuid }
+                feed_session_id: { type: string, format: uuid }
+                sequence: { type: integer, minimum: 1 }
+                playback_position_ms: { type: integer, minimum: 0 }
+                completed: { type: boolean }
+                app_foreground: { type: boolean }
+                audible: { type: boolean }
+                ad_eligible: { type: boolean }
+      responses:
+        '200': { description: Server-counted progress, valid-view result and optional ad_due instruction }
+        '403': { description: User is sanctioned }
+        '422': { description: Invalid heartbeat evidence }
+  /reels/ad-impressions/{adImpression}/watched:
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Idempotently confirms a Native Advanced SDK impression. Loading an ad is not sufficient. Creator pending allocation begins only after this transition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_event_id, feed_session_id]
+              properties:
+                client_event_id: { type: string, format: uuid }
+                feed_session_id: { type: string, format: uuid }
+      responses:
+        '200': { description: Impression confirmed or existing confirmation returned }
+        '409': { description: Impression expired, bounced, or session/device/platform mismatch }
+  /reels/ad-impressions/{adImpression}/bounce:
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Best-effort bounce report for a failed load, skip, or closed feed session. Server expiry remains authoritative.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [feed_session_id, reason]
+              properties:
+                feed_session_id: { type: string, format: uuid }
+                reason: { type: string, enum: [load_failed, skipped, session_closed] }
+      responses:
+        '200': { description: Pending impression marked bounced }
+        '409': { description: Impression is no longer pending }
+  /reels/ad-impressions/{adImpression}/paid:
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Records SDK estimated paid-event telemetry. It never creates or releases creator money.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value_micros, currency_code, precision]
+              properties:
+                value_micros: { type: integer, minimum: 0 }
+                currency_code: { type: string, minLength: 3, maxLength: 3 }
+                precision: { type: string, maxLength: 32 }
+      responses:
+        '200': { description: Estimate recorded }
   /reels/{reel}/episode-links:
     post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator linked episode } } }
   /comments/{comment}/pin:

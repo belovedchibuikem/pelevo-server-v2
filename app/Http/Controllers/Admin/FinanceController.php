@@ -22,7 +22,7 @@ final class FinanceController extends Controller
 {
     public function page(Request $request): Response
     {
-        $desk = $request->validate(['desk' => ['nullable', 'in:fx,iap,earn,withdrawals,payouts,premium,ledger']])['desk'] ?? 'fx';
+        $desk = $request->validate(['desk' => ['nullable', 'in:fx,iap,earn,withdrawals,payouts,reels-ads,premium,ledger']])['desk'] ?? 'fx';
 
         return Inertia::render('Admin/Finance', [...$this->workspace(), 'desk' => $desk]);
     }
@@ -172,10 +172,41 @@ final class FinanceController extends Controller
             return ApiResponse::error('CONFLICT', 'An FX version already exists for this pair and effective time.', 409);
         }
         $id = (string) Str::ulid();
-        DB::table('fx_rate_versions')->insert(['id' => $id, 'base_unit' => $base, 'quote_currency' => $quote, 'rate' => $data['rate'], 'source' => $data['source'], 'effective_at' => $effectiveAt, 'created_at' => now(), 'updated_at' => now()]);
-        $this->audit($request, 'fx_version.published', 'App\\Models\\FxRateVersion', $id, $data['reason'], ['base_unit' => $base, 'quote_currency' => $quote, 'rate' => $data['rate'], 'effective_at' => $effectiveAt->toIso8601String()]);
+        DB::table('fx_rate_versions')->insert(['id' => $id, 'base_unit' => $base, 'quote_currency' => $quote, 'rate' => $data['rate'], 'source' => $data['source'], 'effective_at' => $effectiveAt, 'approval_state' => 'draft', 'created_by' => auth('admin')->id(), 'created_at' => now(), 'updated_at' => now()]);
+        $this->audit($request, 'fx_version.proposed', 'App\\Models\\FxRateVersion', $id, $data['reason'], ['base_unit' => $base, 'quote_currency' => $quote, 'rate' => $data['rate'], 'effective_at' => $effectiveAt->toIso8601String()]);
 
         return ApiResponse::success(DB::table('fx_rate_versions')->find($id), status: 201);
+    }
+
+    public function approveFxVersion(string $rate, Request $request): JsonResponse
+    {
+        $data = $request->validate(['reason' => ['required', 'string', 'min:10', 'max:2000']]);
+
+        return DB::transaction(function () use ($rate, $request, $data): JsonResponse {
+            $row = DB::table('fx_rate_versions')->where('id', $rate)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'FX rate version not found.', 404);
+            }
+            if ($row->created_by === auth('admin')->id()) {
+                return ApiResponse::error('MAKER_CHECKER_REQUIRED', 'A different finance administrator must approve this FX rate.', 409);
+            }
+            if ($row->approval_state !== 'draft') {
+                return ApiResponse::error('CONFLICT', 'Only draft FX rates can be approved.', 409);
+            }
+            DB::table('fx_rate_versions')->where('id', $rate)->update([
+                'approval_state' => 'approved',
+                'approved_by' => auth('admin')->id(),
+                'approved_at' => now(),
+                'updated_at' => now(),
+            ]);
+            $this->audit($request, 'fx_version.approved', 'App\\Models\\FxRateVersion', $rate, $data['reason'], [
+                'base_unit' => $row->base_unit,
+                'quote_currency' => $row->quote_currency,
+                'rate' => $row->rate,
+            ]);
+
+            return ApiResponse::success(DB::table('fx_rate_versions')->find($rate));
+        }, 3);
     }
 
     public function coinProduct(Request $request): JsonResponse
@@ -272,6 +303,7 @@ final class FinanceController extends Controller
             ['key' => 'earn', 'title' => 'Earn liability', 'blurb' => 'Outstanding coins, daily issuance, farms', 'count' => $earnReviewCount],
             ['key' => 'withdrawals', 'title' => 'Listener withdrawals', 'blurb' => 'Queue, paid, failed, gateway status', 'count' => DB::table('withdrawals')->whereIn('state', ['queued', 'processing'])->count()],
             ['key' => 'payouts', 'title' => 'Creator payouts', 'blurb' => 'Monthly batch, hold, maker-checker', 'count' => DB::table('creator_payout_batches')->whereIn('state', ['draft', 'approved'])->count()],
+            ['key' => 'reels-ads', 'title' => 'Reels ads', 'blurb' => 'AdMob statements, 30-day holds, USD reserve, and USD/NGN releases', 'count' => DB::table('creator_ad_revenue_allocations')->where('status', 'pending')->count()],
             ['key' => 'premium', 'title' => 'Premium', 'blurb' => 'MRR, churn, failed charges, refunds', 'count' => DB::table('premium_subscriptions')->where('state', 'active')->count()],
             ['key' => 'ledger', 'title' => 'Ledger explorer', 'blurb' => 'Immutable credits and reversing entries', 'count' => DB::table('ledger_transactions')->count()],
         ];
@@ -303,6 +335,17 @@ final class FinanceController extends Controller
             'payouts' => [
                 'batches' => DB::table('creator_payout_batches')->latest()->limit(50)->get(),
                 'revenue' => DB::table('creator_revenue_events')->latest('occurred_at')->limit(30)->get(),
+            ],
+            'reelsAds' => [
+                'batches' => DB::table('admob_reconciliation_batches')->latest('statement_month')->limit(36)->get(),
+                'pendingUsdMicros' => (int) DB::table('creator_ad_revenue_allocations')->where('status', 'pending')->sum('gross_usd_micros'),
+                'confirmedUsdMicros' => (int) DB::table('financial_accounts')->where('type', 'reels_ad_confirmed')->where('unit', 'USD')->sum('balance'),
+                'reserveUsdMicros' => (int) DB::table('financial_accounts')->where('type', 'reels_ad_reserve')->where('unit', 'USD')->sum('balance'),
+                'available' => DB::table('financial_accounts')->where('type', 'reels_ad_available')->whereIn('unit', ['USD', 'NGN'])->groupBy('unit')->select('unit', DB::raw('sum(balance) as balance'))->get(),
+                'fxClearing' => DB::table('financial_accounts')->where('type', 'reels_ad_fx_clearing')->whereIn('unit', ['USD', 'NGN'])->select('id', 'unit', 'balance')->get(),
+                'reviewQueue' => DB::table('ad_impressions')->where('fraud_state', 'review')->latest('triggered_at')->limit(50)->get(),
+                'recentAllocations' => DB::table('creator_ad_revenue_allocations')->latest()->limit(40)->get(),
+                'recentConversions' => DB::table('currency_conversions')->latest()->limit(40)->get(),
             ],
             'premium' => [
                 'mrrMinor' => (int) DB::table('premium_subscriptions')->join('premium_plans', 'premium_plans.id', '=', 'premium_subscriptions.premium_plan_id')->where('premium_subscriptions.state', 'active')->selectRaw("COALESCE(SUM(CASE WHEN premium_plans.interval = 'year' THEN FLOOR(premium_plans.price_minor / 12) ELSE premium_plans.price_minor END), 0) as mrr")->value('mrr'),

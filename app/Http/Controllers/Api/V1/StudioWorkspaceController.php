@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 final class StudioWorkspaceController extends Controller
@@ -66,7 +67,7 @@ final class StudioWorkspaceController extends Controller
             'audio' => ['required', 'file', 'max:512000', 'mimetypes:audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/m4a,audio/aac,audio/wav,audio/x-wav,audio/wave'],
         ]);
         $stored = $data['audio']->store('episode-audio/'.$request->user()->id.'/'.$episode, 'public');
-        $url = url(\Illuminate\Support\Facades\Storage::disk('public')->url($stored));
+        $url = url(Storage::disk('public')->url($stored));
         DB::table('episodes')->where('id', $episode)->update([
             'audio_url' => $url,
             'updated_at' => now(),
@@ -135,7 +136,15 @@ final class StudioWorkspaceController extends Controller
     {
         $creators = $this->creatorIds($request);
 
-        return ApiResponse::success(['gifts_received' => DB::table('gifts')->whereIn('creator_profile_id', $creators)->count(), 'payouts_count' => DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->count(), 'accounts' => DB::table('financial_accounts')->where('owner_type', 'App\\Models\\CreatorProfile')->whereIn('owner_id', $creators)->select('id', 'owner_id', 'type', 'unit', 'balance')->get(), 'tax_profiles' => DB::table('tax_profiles')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'country_code', 'state')->get()]);
+        return ApiResponse::success([
+            'gifts_received' => DB::table('gifts')->whereIn('creator_profile_id', $creators)->count(),
+            'payouts_count' => DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->count(),
+            'accounts' => DB::table('financial_accounts')->where('owner_type', 'App\\Models\\CreatorProfile')->whereIn('owner_id', $creators)->select('id', 'owner_id', 'type', 'unit', 'balance')->get(),
+            'ad_revenue_allocations' => DB::table('creator_ad_revenue_allocations')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'status', 'gross_usd_micros', 'confirmed_usd_micros', 'reserve_usd_micros', 'clawback_usd_micros', 'available_currency', 'available_amount_minor', 'held_until', 'released_at')->latest()->limit(100)->get(),
+            'currency_conversions' => DB::table('currency_conversions')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'source_currency', 'source_amount_minor', 'destination_currency', 'destination_amount_minor', 'gross_rate', 'net_rate', 'spread_bps', 'rate_source', 'quoted_at', 'created_at')->latest()->limit(100)->get(),
+            'payout_settings' => DB::table('creator_payout_settings')->whereIn('creator_profile_id', $creators)->select('creator_profile_id', 'currency', 'ad_payout_currency', 'ad_payout_currency_effective_at', 'compliance_state')->get(),
+            'tax_profiles' => DB::table('tax_profiles')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'country_code', 'state')->get(),
+        ]);
     }
 
     public function followers(Request $request): JsonResponse
@@ -168,7 +177,16 @@ final class StudioWorkspaceController extends Controller
         if ($accountIds->isEmpty()) {
             return ApiResponse::success([], ['cursor' => null, 'has_more' => false]);
         }
-        $items = DB::table('ledger_transactions')->whereExists(fn ($q) => $q->selectRaw('1')->from('ledger_entries')->whereColumn('ledger_entries.ledger_transaction_id', 'ledger_transactions.id')->whereIn('financial_account_id', $accountIds))->when($kind === 'gifts', fn ($q) => $q->where('event_type', 'gift.sent'))->when($kind === 'payouts', fn ($q) => $q->where('event_type', 'like', 'creator_payout.%'))->when($kind === 'reels', fn ($q) => $q->where('event_type', 'reel.revenue'))->when($kind === 'earnings', fn ($q) => $q->whereIn('event_type', ['gift.sent', 'reel.revenue']))->select('id', 'reference', 'event_type', 'created_at')->orderByDesc('created_at')->orderByDesc('id')->cursorPaginate($this->limit($request));
+        $items = DB::table('ledger_transactions')
+            ->whereExists(fn ($q) => $q->selectRaw('1')->from('ledger_entries')->whereColumn('ledger_entries.ledger_transaction_id', 'ledger_transactions.id')->whereIn('financial_account_id', $accountIds))
+            ->when($kind === 'gifts', fn ($q) => $q->where('event_type', 'gift.sent'))
+            ->when($kind === 'payouts', fn ($q) => $q->where('event_type', 'like', 'creator_payout.%'))
+            ->when($kind === 'reels', fn ($q) => $q->where(fn ($events) => $events->where('event_type', 'reel.revenue')->orWhere('event_type', 'like', 'reel.ad.%')))
+            ->when($kind === 'earnings', fn ($q) => $q->where(fn ($events) => $events->whereIn('event_type', ['gift.sent', 'reel.revenue'])->orWhere('event_type', 'like', 'reel.ad.%')))
+            ->select('id', 'reference', 'event_type', 'created_at')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->cursorPaginate($this->limit($request));
 
         return ApiResponse::success($this->presentTransactions(collect($items->items()), $accountIds), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages()]);
     }

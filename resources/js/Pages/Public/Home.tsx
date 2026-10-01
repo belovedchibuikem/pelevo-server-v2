@@ -99,9 +99,10 @@ export default function Home() {
           actually get paid — no chasing a system built for somewhere else.
         </p>
         <div className="mkt-actions" style={{ marginTop: 28 }}>
-          <Link className="mkt-cta" href="/contact?audience=creator">Claim your podcast →</Link>
+          <Link className="mkt-cta" href="/founding-creators">Reserve your founding creator spot →</Link>
           <Link className="mkt-ghost" href="/how-it-works#creators">See how claiming works</Link>
         </div>
+        <p className="mkt-microcopy" style={{ marginTop: 14 }}>Free · takes under a minute · claim your show on launch day</p>
       </section>
 
       <section className="mkt-band" id="join">

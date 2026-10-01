@@ -14,6 +14,7 @@ const navigation: NavItem[] = [
   { label: 'Catalog', href: '/admin/catalog', group: 'Operate', keywords: 'shows episodes rss podcast index discovery', permission: 'catalog.write' },
   { label: 'Earn podcasts', href: '/admin/earn-podcasts', group: 'Operate', keywords: 'earn monetized niche mark unmark ordinary podcasts', permission: 'catalog.write' },
   { label: 'Creators & Claims', href: '/admin/creators', group: 'Operate', keywords: 'studios verification disputes monetization', permission: 'claims.decide' },
+  { label: 'Founding Creators', href: '/admin/founding-creators', group: 'Operate', keywords: 'founding creators sign-ups waitlist reserve spot launch form export csv', permission: 'claims.decide' },
   { label: 'Claim Queue', href: '/admin/claims', group: 'Operate', keywords: 'review verification rss ownership', permission: 'claims.decide' },
   { label: 'Reels & Live', href: '/admin/reels-live', group: 'Operate', keywords: 'processing reports appeals livestream', permission: 'moderation.act' },
   { label: 'Reel Moderation', href: '/admin/moderation', group: 'Operate', keywords: 'approve publish unpublish reject strike delete reels', permission: 'moderation.act' },

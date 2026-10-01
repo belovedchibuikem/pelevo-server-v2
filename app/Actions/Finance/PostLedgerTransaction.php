@@ -45,7 +45,16 @@ final class PostLedgerTransaction
                 $account = $accounts->get($entry['account_id']) ?? throw new InvalidArgumentException('Account not found.');
                 if ($account->unit !== $unit) {
                     throw new InvalidArgumentException('Ledger units must match.');
-                } if (($account->balance + $entry['amount']) < 0 && in_array($account->type, ['gift_wallet', 'earn_wallet', 'creator_balance'], true)) {
+                } if (($account->balance + $entry['amount']) < 0 && in_array($account->type, [
+                    'gift_wallet',
+                    'earn_wallet',
+                    'creator_balance',
+                    'reels_ad_pending',
+                    'reels_ad_confirmed',
+                    'reels_ad_reserve',
+                    'reels_ad_available',
+                    'creator_payout_payable',
+                ], true)) {
                     throw new InvalidArgumentException('INSUFFICIENT_COINS');
                 }
             }

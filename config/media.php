@@ -13,7 +13,7 @@ return [
     'process_inline' => filter_var(env('MEDIA_PROCESS_INLINE', env('APP_ENV') === 'local'), FILTER_VALIDATE_BOOL),
     'ffprobe_binary' => env('FFPROBE_BINARY', 'ffprobe'),
     'ffmpeg_binary' => env('FFMPEG_BINARY', 'ffmpeg'),
-    'qualified_view_ms' => (int) env('REEL_QUALIFIED_VIEW_MS', 3000),
-    'view_window_minutes' => (int) env('REEL_VIEW_WINDOW_MINUTES', 60),
+    'qualified_view_ms' => (int) env('REEL_QUALIFIED_VIEW_MS', 30000),
+    'view_window_minutes' => (int) env('REEL_VIEW_WINDOW_MINUTES', 1440),
     'qualified_views_per_window' => (int) env('REEL_QUALIFIED_VIEWS_PER_WINDOW', 1),
 ];

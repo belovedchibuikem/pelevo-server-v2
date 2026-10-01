@@ -9,6 +9,7 @@ type Attention = { label: string; count: number; desk: string; severity: 'info' 
 type Products = { fees: Row[]; fx: Row[]; gifts: Row[]; packs: Row[]; minWithdrawCoins: number; dailyEarnCap: number; reelQualifiedViewPcn: number };
 type Earn = { liability: number; issuedToday: number; review: Row[]; campaigns: Row[] };
 type Premium = { mrrMinor: number; active: number; churnedThisMonth: number; failedInvoices: number; refunds: number; plans: Row[]; subscriptions: Row[]; invoices: Row[] };
+type ReelsAds = { batches: Row[]; pendingUsdMicros: number; confirmedUsdMicros: number; reserveUsdMicros: number; available: Row[]; fxClearing: Row[]; reviewQueue: Row[]; recentAllocations: Row[]; recentConversions: Row[] };
 type Props = {
   desk: string;
   desks: Desk[];
@@ -18,6 +19,7 @@ type Props = {
   earn: Earn;
   withdrawals: { queued: Row[]; processing: Row[]; failed: Row[] };
   payouts: { batches: Row[]; revenue: Row[] };
+  reelsAds: ReelsAds;
   premium: Premium;
   ledger: { accounts: Row[]; transactions: Row[] };
   exceptions: Row[];
@@ -26,7 +28,7 @@ type Props = {
   freshAt: string;
 };
 
-const desksOrder = ['fx', 'iap', 'earn', 'withdrawals', 'payouts', 'premium', 'ledger'] as const;
+const desksOrder = ['fx', 'iap', 'earn', 'withdrawals', 'payouts', 'reels-ads', 'premium', 'ledger'] as const;
 
 export default function Finance(props: Props) {
   const [refreshing, setRefreshing] = useState(false);
@@ -69,7 +71,7 @@ export default function Finance(props: Props) {
           <h2 className="font-semibold">{props.desks.find(desk => desk.key === active)?.title ?? 'Choose a desk'}</h2>
           <p className="mt-1 text-sm text-slate-500">{props.desks.find(desk => desk.key === active)?.blurb ?? 'Select one of the seven finance surfaces to review queues and governed actions.'}</p>
         </div>
-        <div className="p-5">{active === 'fx' ? <FxDesk products={props.products} accounts={props.ledger.accounts} /> : active === 'iap' ? <IapDesk unmatched={props.iap.unmatched} /> : active === 'earn' ? <EarnDesk earn={props.earn} /> : active === 'withdrawals' ? <WithdrawalDesk withdrawals={props.withdrawals} /> : active === 'payouts' ? <PayoutDesk payouts={props.payouts} /> : active === 'premium' ? <PremiumDesk premium={props.premium} /> : active === 'ledger' ? <LedgerDesk ledger={props.ledger} exceptions={props.exceptions} reconciliation={props.reconciliation} settlements={props.settlements} /> : <p className="text-sm text-slate-500">Open a desk above. Start with any amber attention card when a queue is non-zero.</p>}</div>
+        <div className="p-5">{active === 'fx' ? <FxDesk products={props.products} accounts={props.ledger.accounts} /> : active === 'iap' ? <IapDesk unmatched={props.iap.unmatched} /> : active === 'earn' ? <EarnDesk earn={props.earn} /> : active === 'withdrawals' ? <WithdrawalDesk withdrawals={props.withdrawals} /> : active === 'payouts' ? <PayoutDesk payouts={props.payouts} /> : active === 'reels-ads' ? <ReelsAdsDesk reelsAds={props.reelsAds} /> : active === 'premium' ? <PremiumDesk premium={props.premium} /> : active === 'ledger' ? <LedgerDesk ledger={props.ledger} exceptions={props.exceptions} reconciliation={props.reconciliation} settlements={props.settlements} /> : <p className="text-sm text-slate-500">Open a desk above. Start with any amber attention card when a queue is non-zero.</p>}</div>
       </section>
     </div>
   </main>;
@@ -87,9 +89,12 @@ function FxDesk({ products, accounts }: { products: Products; accounts: Row[] })
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">FX versions</h3>
-        <FinanceAction title="Publish FX version" description="Stores a dated FX rate used by future payout conversions. Historical payouts keep the rate attached at reservation." trigger="Publish FX rate" method="POST" endpoint="/api/admin/v1/finance/fx" fields={[{ name: 'base_unit', label: 'Base unit', defaultValue: 'PCN' }, { name: 'quote_currency', label: 'Quote currency', defaultValue: 'NGN' }, { name: 'rate', label: 'Rate', type: 'number', min: 0, step: 0.00000001 }, { name: 'source', label: 'Source', defaultValue: 'manual' }, { name: 'effective_at', label: 'Effective from', type: 'datetime-local' }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+        <div className="flex gap-2">
+          <FinanceAction title="Propose FX version" description="Stores a dated draft FX rate. A different finance administrator must approve it before any future conversion can use it." trigger="Propose FX rate" method="POST" endpoint="/api/admin/v1/finance/fx" fields={[{ name: 'base_unit', label: 'Base unit', defaultValue: 'USD' }, { name: 'quote_currency', label: 'Quote currency', defaultValue: 'NGN' }, { name: 'rate', label: 'Rate', type: 'number', min: 0, step: 0.00000001 }, { name: 'source', label: 'Source', defaultValue: 'manual' }, { name: 'effective_at', label: 'Effective from', type: 'datetime-local' }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <FinanceAction title="Approve FX version" description="Maker-checker approval. The administrator who proposed the rate cannot approve it." trigger="Approve rate" method="POST" endpoint="/api/admin/v1/finance/fx/{rate}/approval" pathParam="rate" fields={[{ name: 'rate', label: 'FX rate version ID' }, { name: 'reason', label: 'Approval reason', type: 'textarea' }]} />
+        </div>
       </div>
-      <List rows={products.fx} empty="No FX rates stored yet.">{row => <Item key={String(row.id)}><div><b>{row.base_unit} → {row.quote_currency}</b><small className="block text-slate-500">{String(row.source)} · {formatDate(row.effective_at)}</small></div><strong className="tabular-nums">{Number(row.rate).toLocaleString()}</strong></Item>}</List>
+      <List rows={products.fx} empty="No FX rates stored yet.">{row => <Item key={String(row.id)}><div><b>{row.base_unit} → {row.quote_currency}</b><small className="block text-slate-500">{String(row.source)} · {String(row.approval_state ?? 'approved')} · {formatDate(row.effective_at)}</small></div><strong className="tabular-nums">{Number(row.rate).toLocaleString()}</strong></Item>}</List>
     </div>
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -176,7 +181,7 @@ function WithdrawalDesk({ withdrawals }: { withdrawals: Props['withdrawals'] }) 
 function PayoutDesk({ payouts }: { payouts: Props['payouts'] }) {
   return <>
     <div className="mb-6">
-      <FinanceAction title="Prepare monthly creator payout batch" description="Selects verified creators at or above their minimum (default ₦5,000 equivalent in PCN). A different finance administrator must approve." trigger="Prepare payout batch" method="POST" endpoint="/api/admin/v1/finance/creator-payout-batches" idempotent fields={[{ name: 'period_start', label: 'Period start', type: 'date' }, { name: 'period_end', label: 'Period end', type: 'date' }, { name: 'unit', label: 'Unit', type: 'select', options: ['PCN'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+      <FinanceAction title="Prepare monthly creator payout batch" description="Selects verified creators at or above their currency-specific minimum. USD and NGN ad balances are never mixed. A different finance administrator must approve." trigger="Prepare payout batch" method="POST" endpoint="/api/admin/v1/finance/creator-payout-batches" idempotent fields={[{ name: 'period_start', label: 'Period start', type: 'date' }, { name: 'period_end', label: 'Period end', type: 'date' }, { name: 'unit', label: 'Ledger currency', type: 'select', options: ['USD', 'NGN', 'PCN'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
     </div>
     <h3 className="font-semibold">Payout batches</h3>
     <List rows={payouts.batches} empty="No creator payout batches have been prepared.">{row => <Item key={String(row.id)}>
@@ -190,6 +195,110 @@ function PayoutDesk({ payouts }: { payouts: Props['payouts'] }) {
     <List rows={payouts.revenue} empty="No creator revenue events yet.">{row => <Item key={String(row.id)}><div><b>{String(row.source_type ?? row.type)}</b><code className="block text-xs text-slate-500">{String(row.id)}</code></div><strong>{Number(row.net_amount).toLocaleString()} {row.unit}</strong></Item>}</List>
     <div className="mt-4"><Link className="text-sm font-semibold text-teal-700" href="/admin/finance-records?view=payouts">Creator payout records →</Link></div>
   </>;
+}
+
+function ReelsAdsDesk({ reelsAds }: { reelsAds: ReelsAds }) {
+  return <div className="space-y-4">
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <Stat label="Pending 30-day hold" value={formatMoney(reelsAds.pendingUsdMicros, 'USD_MICROS')} />
+      <Stat label="Confirmed awaiting release" value={formatMoney(reelsAds.confirmedUsdMicros, 'USD_MICROS')} />
+      <Stat label="Standing USD reserve" value={formatMoney(reelsAds.reserveUsdMicros, 'USD_MICROS')} />
+      <Stat label="Available creator balances" value={reelsAds.available.length ? reelsAds.available.map((row) => formatMoney(Number(row.balance ?? 0), String(row.unit))).join(' · ') : '—'} />
+    </div>
+    <div className="grid gap-3 lg:grid-cols-2">
+      <FinanceAction
+        title="Preview reconciliation"
+        description="Read-only validation of the statement month. Returns the pending pool, maximum confirmable amount, scale ratio, hold eligibility, and fraud-review count."
+        trigger="Preview statement"
+        method="POST"
+        endpoint="/api/admin/v1/finance/reels-ad-settlements/preview"
+        fields={[
+          { name: 'statement_month', label: 'Statement month', type: 'month' },
+          { name: 'finalized_usd_micros', label: 'Finalized revenue (USD micros)', type: 'number', min: 0, step: 1 },
+          { name: 'timezone', label: 'Reporting timezone', defaultValue: 'America/Los_Angeles' },
+        ]}
+      />
+      <FinanceAction
+        title="Import finalized AdMob statement"
+        description="Imports one finalized monthly USD statement. Estimates and screenshots must not be entered here. Approval by a different administrator is required before release."
+        trigger="Import statement"
+        method="POST"
+        endpoint="/api/admin/v1/finance/reels-ad-settlements"
+        fields={[
+          { name: 'admob_account_id', label: 'AdMob account ID' },
+          { name: 'statement_month', label: 'Statement month', type: 'month' },
+          { name: 'finalized_usd_micros', label: 'Finalized revenue (USD micros)', type: 'number', min: 0, step: 1 },
+          { name: 'estimated_usd_micros', label: 'Prior estimate (USD micros, optional)', type: 'number', min: 0, step: 1, required: false },
+          { name: 'source_checksum', label: 'Statement SHA-256 checksum' },
+          { name: 'source_reference', label: 'Secure source reference', required: false },
+          { name: 'timezone', label: 'Reporting timezone', defaultValue: 'America/Los_Angeles' },
+          { name: 'notes', label: 'Import notes (minimum 10 characters)', type: 'textarea' },
+        ]}
+      />
+      <FinanceAction
+        title="Approve reconciliation"
+        description="Maker-checker control: the statement importer cannot approve their own batch. Approval schedules eligible held allocations for release; NGN uses the current approved USD/NGN rate."
+        trigger="Approve batch"
+        method="POST"
+        endpoint="/api/admin/v1/finance/reels-ad-settlements/{batch}/approval"
+        pathParam="batch"
+        fields={[
+          { name: 'batch', label: 'Reconciliation batch ID' },
+          { name: 'reason', label: 'Approval reason (minimum 10 characters)', type: 'textarea' },
+        ]}
+      />
+    </div>
+    <div className="grid gap-3 lg:grid-cols-2">
+      <FinanceAction
+        title="Review blocked impression"
+        description="Clear a reviewed impression or reject it and reverse every still-pending creator credit. Released impressions require the reserve recovery workflow."
+        trigger="Record review"
+        method="POST"
+        endpoint="/api/admin/v1/finance/reels-ad-impressions/{impression}/review"
+        pathParam="impression"
+        fields={[
+          { name: 'impression', label: 'Ad impression ID' },
+          { name: 'decision', label: 'Decision', type: 'select', options: ['clear', 'reject'] },
+          { name: 'reason_code', label: 'Reason code' },
+          { name: 'reason', label: 'Review reason (minimum 10 characters)', type: 'textarea' },
+        ]}
+      />
+      <FinanceAction
+        title="Reserve true-up or deduction"
+        description="Moves an audited USD-micros amount from a creator reserve. Release sends it to USD available. Deduct uses reserve first and records any remainder as an offset against future confirmed USD. It never converts an existing balance."
+        trigger="Post reserve action"
+        method="POST"
+        endpoint="/api/admin/v1/finance/reels-ad-reserve/true-up"
+        idempotent
+        fields={[
+          { name: 'creator_profile_id', label: 'Creator profile ID' },
+          { name: 'action', label: 'Action', type: 'select', options: ['release', 'deduct'] },
+          { name: 'usd_micros', label: 'Amount (USD micros)', type: 'number', min: 1, step: 1 },
+          { name: 'reason_code', label: 'Reason code' },
+          { name: 'reason', label: 'Reason (minimum 10 characters)', type: 'textarea' },
+        ]}
+      />
+    </div>
+    <FinanceAction
+      title="Settle FX clearing leg"
+      description="Records an external provider settlement against one open currency leg. USD is recorded in micros; NGN is recorded in kobo. Settle each currency independently with the provider reference."
+      trigger="Settle clearing"
+      method="POST"
+      endpoint="/api/admin/v1/finance/reels-ad-fx-clearing/settlements"
+      idempotent
+      fields={[
+        { name: 'unit', label: 'Currency', type: 'select', options: ['USD', 'NGN'] },
+        { name: 'amount_minor', label: 'Amount (USD micros or NGN kobo)', type: 'number', min: 1, step: 1 },
+        { name: 'provider_reference', label: 'Provider settlement reference' },
+        { name: 'reason', label: 'Reason (minimum 10 characters)', type: 'textarea' },
+      ]}
+    />
+    <Table title="Open FX clearing accounts" rows={reelsAds.fxClearing} columns={['unit', 'balance', 'id']} />
+    <Table title="Fraud review queue" rows={reelsAds.reviewQueue} columns={['triggered_at', 'status', 'fraud_state', 'platform', 'eligible_view_count', 'payout_pool_usd_micros', 'user_id', 'id']} />
+    <Table title="AdMob reconciliation batches" rows={reelsAds.batches} columns={['statement_month', 'status', 'finalized_usd_micros', 'adjustment_usd_micros', 'admob_account_id', 'imported_by', 'approved_by', 'approved_at', 'id']} />
+    <Table title="Recent creator allocations" rows={reelsAds.recentAllocations} columns={['status', 'gross_usd_micros', 'confirmed_usd_micros', 'reserve_usd_micros', 'clawback_usd_micros', 'available_currency', 'available_amount_minor', 'held_until', 'released_at', 'creator_profile_id', 'id']} />
+    <Table title="Recent USD/NGN conversions" rows={reelsAds.recentConversions} columns={['source_currency', 'source_amount_minor', 'destination_currency', 'destination_amount_minor', 'gross_rate', 'net_rate', 'rate_source', 'quoted_at', 'creator_profile_id', 'id']} />
+  </div>;
 }
 
 function PremiumDesk({ premium }: { premium: Premium }) {

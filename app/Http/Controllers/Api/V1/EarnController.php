@@ -284,7 +284,7 @@ final class EarnController extends Controller
                 return ApiResponse::error('VALIDATION', 'Resolved playback duration cannot be shorter than the episode duration.', 422);
             }
             $snapshot = json_decode((string) $row->eligibility_snapshot, true) ?: [];
-            $required = max($catalogRequired, (int) data_get($snapshot, 'required_seconds', 0), $mediaDuration);
+            $required = max($catalogRequired, $mediaDuration);
             $snapshot['required_seconds'] = $required;
             $snapshot['media_duration_seconds'] = $mediaDuration;
             $device = Device::where('id', $row->device_id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->first();
@@ -389,7 +389,7 @@ final class EarnController extends Controller
             DB::table('earn_heartbeats')->insert(['id' => (string) Str::ulid(), 'earn_session_id' => $session, 'sequence' => $data['sequence'], 'position' => $data['position'], 'elapsed_seconds' => $data['elapsed_seconds'], 'playback_rate' => $data['playback_rate'], 'foreground' => $data['foreground'], 'audio_active' => $data['audio_active'], 'integrity_token_hash' => hash('sha256', $data['integrity_token']), 'audio_fingerprint_hash' => $fingerprint, 'ip_address' => $request->ip(), 'created_at' => now(), 'updated_at' => now()]);
             DB::table('earn_sessions')->where('id', $session)->update(['last_position' => $data['position'], 'last_sequence' => $data['sequence'], 'verified_seconds' => $verified, 'eligibility_snapshot' => json_encode($snapshot, JSON_THROW_ON_ERROR), 'updated_at' => now()]);
             $award = null;
-            if ($verified >= $required && (int) $data['position'] >= $required && $sessionAge >= $required) {
+            if ($verified >= $required && (int) $data['position'] >= $required && $sessionAge + 1 >= $required) {
                 if ($this->episodeLocked($row->user_id, $row->episode_id, true)) {
                     return ApiResponse::error('EPISODE_LOCKED', 'This episode remains locked for Earn.', 409);
                 }
@@ -425,7 +425,7 @@ final class EarnController extends Controller
             ]);
         }, 3);
         if (is_array($notice)) {
-            $this->notifyEarnAward($notice);
+            app()->terminating(fn () => $this->notifyEarnAward($notice));
         }
 
         return $response;
@@ -468,7 +468,7 @@ final class EarnController extends Controller
             $episode = Episode::findOrFail($row->episode_id);
             $required = $this->requiredListeningSeconds($episode, $row);
             $listenedFor = now()->getTimestamp() - Carbon::parse($row->created_at)->getTimestamp();
-            if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required || $listenedFor < $required) {
+            if ((int) $row->verified_seconds < $required || (int) $row->last_position < $required || $listenedFor + 1 < $required) {
                 Log::warning('earn.complete', [
                     'result' => 'refused',
                     'reason' => 'short',
@@ -504,7 +504,7 @@ final class EarnController extends Controller
             return $payload['error'];
         }
         if ($created && is_array($notice)) {
-            $this->notifyEarnAward($notice);
+            app()->terminating(fn () => $this->notifyEarnAward($notice));
         }
 
         return ApiResponse::success($payload['award'], status: $created ? 201 : 200);

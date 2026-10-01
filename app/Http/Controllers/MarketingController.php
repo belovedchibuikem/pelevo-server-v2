@@ -4,12 +4,14 @@ namespace App\Http\Controllers;
 
 use App\Mail\PelevoNotice;
 use App\Services\MailPreference;
+use App\Support\FoundingCreators;
 use App\Support\MarketingLegal;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -104,6 +106,92 @@ final class MarketingController extends Controller
         ));
 
         return back()->with('status', 'Thank you. A member of the Pelevo team will reply to the email you provided.');
+    }
+
+    public function foundingCreators(): Response
+    {
+        return Inertia::render('Public/FoundingCreators', [
+            ...$this->shared(),
+            'frequencies' => FoundingCreators::options(FoundingCreators::FREQUENCIES),
+        ]);
+    }
+
+    public function submitFoundingCreator(Request $request): RedirectResponse
+    {
+        $success = 'You are on the list. We will email your claim link closer to launch.';
+        if (filled($request->input('company_website'))) {
+            return back()->with('status', $success);
+        }
+
+        $showUrl = trim((string) $request->input('show_url'));
+        if ($showUrl !== '' && ! preg_match('#^https?://#i', $showUrl)) {
+            $request->merge(['show_url' => 'https://'.$showUrl]);
+        }
+
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:120'],
+            'show_name' => ['required', 'string', 'max:191'],
+            'show_url' => ['required', 'url:http,https', 'max:500'],
+            'email' => ['required', 'email', 'max:191'],
+            'social_handle' => ['nullable', 'string', 'max:120'],
+            'publish_frequency' => ['nullable', Rule::in(array_keys(FoundingCreators::FREQUENCIES))],
+            'notes' => ['nullable', 'string', 'max:3000'],
+        ], [
+            'show_url.url' => 'Enter a link to your show, for example a Spotify, Apple Podcasts or hosting page.',
+        ], [
+            'show_name' => 'podcast/show name',
+            'show_url' => 'show link',
+        ]);
+
+        $email = Str::lower($data['email']);
+        $values = [
+            'name' => $data['name'],
+            'show_name' => $data['show_name'],
+            'show_url' => $data['show_url'],
+            'email' => $email,
+            'social_handle' => $data['social_handle'] ?? null,
+            'publish_frequency' => $data['publish_frequency'] ?? null,
+            'notes' => $data['notes'] ?? null,
+            'updated_at' => now(),
+        ];
+        $existing = DB::table('founding_creator_applications')
+            ->where('email', $email)
+            ->whereRaw('LOWER(show_name) = ?', [Str::lower($data['show_name'])])
+            ->first();
+
+        if ($existing) {
+            DB::table('founding_creator_applications')->where('id', $existing->id)->update([
+                ...$values,
+                'submission_count' => $existing->submission_count + 1,
+            ]);
+
+            return back()->with('status', $success);
+        }
+
+        DB::table('founding_creator_applications')->insert([
+            ...$values,
+            'id' => (string) Str::ulid(),
+            'state' => 'new',
+            'created_at' => now(),
+        ]);
+
+        $mail = app(MailPreference::class);
+        $mail->queueTransactional($email, new PelevoNotice(
+            subjectLine: 'Your Pelevo founding creator spot is reserved',
+            eyebrow: 'Founding creators',
+            heading: 'You are on the list',
+            intro: 'Hi '.$data['name'].', thanks for reserving a founding creator spot for '.$data['show_name'].'. We will email your claim link to this address closer to launch.',
+            detail: 'No action is needed right now. Reply to this email if anything about your show changes.',
+        ));
+        $mail->queueTransactional(config('mail.from.address'), new PelevoNotice(
+            subjectLine: 'Founding creator: '.$data['show_name'],
+            eyebrow: 'Operations',
+            heading: 'New founding creator sign-up',
+            intro: $data['name'].' ('.$email.') reserved a spot for '.$data['show_name'].'.',
+            detail: $data['show_url'],
+        ));
+
+        return back()->with('status', $success);
     }
 
     /**

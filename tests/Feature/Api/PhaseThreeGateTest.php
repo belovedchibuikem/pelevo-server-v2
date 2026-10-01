@@ -46,11 +46,53 @@ final class PhaseThreeGateTest extends TestCase
     {
         [, $reel] = $this->creatorReel('published');
         $fan = User::factory()->create();
-        $first = $this->actingAs($fan, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", ['session_id' => (string) Str::uuid(), 'watched_ms' => 3000])->assertOk();
-        $second = $this->actingAs($fan, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", ['session_id' => (string) Str::uuid(), 'watched_ms' => 3000])->assertOk();
+        $firstSession = (string) Str::uuid();
+        $firstFeed = (string) Str::uuid();
+        $this->actingAs($fan, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", [
+            'session_id' => $firstSession,
+            'feed_session_id' => $firstFeed,
+            'sequence' => 1,
+            'playback_position_ms' => 0,
+            'completed' => false,
+            'app_foreground' => true,
+            'audible' => true,
+        ])->assertOk();
+        $this->travel(10)->seconds();
+        $first = $this->actingAs($fan, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", [
+            'session_id' => $firstSession,
+            'feed_session_id' => $firstFeed,
+            'sequence' => 2,
+            'playback_position_ms' => 10000,
+            'completed' => true,
+            'app_foreground' => true,
+            'audible' => true,
+        ])->assertOk();
+        $secondSession = (string) Str::uuid();
+        $secondFeed = (string) Str::uuid();
+        $this->actingAs($fan, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", [
+            'session_id' => $secondSession,
+            'feed_session_id' => $secondFeed,
+            'sequence' => 1,
+            'playback_position_ms' => 0,
+            'completed' => false,
+            'app_foreground' => true,
+            'audible' => true,
+        ])->assertOk();
+        $this->travel(10)->seconds();
+        $second = $this->actingAs($fan, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", [
+            'session_id' => $secondSession,
+            'feed_session_id' => $secondFeed,
+            'sequence' => 2,
+            'playback_position_ms' => 10000,
+            'completed' => true,
+            'app_foreground' => true,
+            'audible' => true,
+        ])->assertOk();
         $first->assertJsonPath('data.counted', true);
         $second->assertJsonPath('data.counted', false);
-        $this->assertDatabaseCount('reel_view_credits', 1);
+        $this->assertDatabaseCount('reel_views', 2);
+        $this->assertDatabaseCount('reel_view_heartbeats', 4);
+        $this->assertSame(1, DB::table('reel_views')->whereNotNull('counted_at')->count());
     }
 
     public function test_live_status_is_public_and_transitions_persist_events(): void

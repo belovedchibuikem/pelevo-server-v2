@@ -4,7 +4,7 @@ import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useFocusScope } from './useFocusScope';
 import { useUnsavedChanges } from './useUnsavedChanges';
 
-type Field = { name: string; label: string; type?: 'text' | 'number' | 'date' | 'datetime-local' | 'textarea' | 'select' | 'hidden'; options?: string[]; min?: number; max?: number; step?: number; required?: boolean; defaultValue?: string | number };
+type Field = { name: string; label: string; type?: 'text' | 'number' | 'date' | 'month' | 'datetime-local' | 'textarea' | 'select' | 'hidden'; options?: string[]; min?: number; max?: number; step?: number; required?: boolean; defaultValue?: string | number };
 
 export default function FinanceAction({ title, description, endpoint, method, fields, trigger, idempotent = false }: { title: string; description: string; endpoint: string; method: 'POST' | 'PUT'; fields: Field[]; trigger: string; idempotent?: boolean }) {
   const [open, setOpen] = useState(false);

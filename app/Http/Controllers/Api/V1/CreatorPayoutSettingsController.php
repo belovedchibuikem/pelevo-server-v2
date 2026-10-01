@@ -24,7 +24,8 @@ final class CreatorPayoutSettingsController extends Controller
         $creator = CreatorProfile::where('user_id', $request->user()->id)->firstOrFail();
         $data = $request->validate([
             'payout_method_id' => ['sometimes', 'string'],
-            'currency' => ['sometimes', 'string', 'size:3'],
+            'currency' => ['sometimes', 'in:USD,NGN'],
+            'ad_payout_currency' => ['sometimes', 'in:USD,NGN'],
             'schedule' => ['sometimes', 'in:weekly,monthly,manual'],
             'minimum_amount' => ['sometimes', 'integer', 'min:1000'],
             'country_code' => ['required_with:tax_details', 'string', 'size:2'],
@@ -46,6 +47,10 @@ final class CreatorPayoutSettingsController extends Controller
             $settings = [
                 'payout_method_id' => $methodId,
                 'currency' => strtoupper($data['currency'] ?? $existing?->currency ?? 'USD'),
+                'ad_payout_currency' => strtoupper($data['ad_payout_currency'] ?? $existing?->ad_payout_currency ?? $data['currency'] ?? $existing?->currency ?? 'USD'),
+                'ad_payout_currency_effective_at' => array_key_exists('ad_payout_currency', $data)
+                    ? now()
+                    : $existing?->ad_payout_currency_effective_at,
                 'schedule' => $data['schedule'] ?? $existing?->schedule ?? 'monthly',
                 'minimum_amount' => $data['minimum_amount'] ?? $existing?->minimum_amount ?? 1000,
                 'compliance_state' => $resetsCompliance ? 'pending' : ($existing?->compliance_state ?? 'pending'),

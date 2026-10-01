@@ -22,17 +22,39 @@ final class CommunityAndLiveTest extends TestCase
         $user = User::factory()->create();
         $creator = CreatorProfile::create(['user_id' => User::factory()->create()->id, 'display_name' => 'Creator']);
         $reel = (string) Str::ulid();
-        DB::table('reels')->insert(['id' => $reel, 'creator_profile_id' => $creator->id, 'state' => 'published', 'duration_ms' => 10000, 'published_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('reels')->insert(['id' => $reel, 'creator_profile_id' => $creator->id, 'state' => 'published', 'duration_ms' => 40000, 'published_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
 
         $this->actingAs($user, 'sanctum')->putJson("/api/v1/reels/$reel/engagement", ['action' => 'like'])->assertOk()->assertJsonPath('data.liked', 1);
         $this->actingAs($user, 'sanctum')->putJson("/api/v1/reels/$reel/engagement", ['action' => 'like'])->assertOk();
         $session = (string) Str::uuid();
-        $this->actingAs($user, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", ['session_id' => $session, 'watched_ms' => 2999])->assertOk()->assertJsonPath('data.qualified', 0);
-        $second = $this->actingAs($user, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", ['session_id' => $session, 'watched_ms' => 3000])->assertOk();
-        $second->assertJsonPath('data.qualified', 1);
-        $this->assertNotEmpty($second->json('data.id'));
+        $feedSession = (string) Str::uuid();
+        foreach ([8000, 16000, 24000, 29999] as $index => $position) {
+            if ($index > 0) {
+                $this->travel(8)->seconds();
+            }
+            $this->actingAs($user, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", [
+                'session_id' => $session,
+                'feed_session_id' => $feedSession,
+                'sequence' => $index + 1,
+                'playback_position_ms' => $position,
+                'app_foreground' => true,
+                'audible' => true,
+            ])->assertOk()->assertJsonPath('data.qualified', false);
+        }
+        $this->travel(1)->seconds();
+        $second = $this->actingAs($user, 'sanctum')->postJson("/api/v1/reels/$reel/view-heartbeat", [
+            'session_id' => $session,
+            'feed_session_id' => $feedSession,
+            'sequence' => 5,
+            'playback_position_ms' => 30000,
+            'app_foreground' => true,
+            'audible' => true,
+        ])->assertOk();
+        $second->assertJsonPath('data.qualified', true);
+        $this->assertNotEmpty($second->json('data.view_id'));
         $this->assertDatabaseCount('reel_engagements', 1);
         $this->assertDatabaseCount('reel_views', 1);
+        $this->assertDatabaseCount('reel_view_heartbeats', 5);
     }
 
     public function test_comment_thread_integrity_likes_deletion_and_reporting(): void

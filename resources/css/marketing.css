@@ -1176,3 +1176,171 @@ html.marketing body {
     .mkt .mkt-legal h1 { font-size: 1.45rem; }
     .mkt .mkt-section.mkt-legal h2 { font-size: 1rem; }
 }
+
+/* Founding creators */
+.mkt .mkt-fc {
+    display: grid;
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+    gap: clamp(32px, 6vw, 80px);
+    align-items: start;
+    padding-top: clamp(48px, 7vw, 96px);
+}
+
+.mkt-fc-intro { position: sticky; top: 110px; }
+.mkt .mkt-fc-intro h1 { font-size: clamp(3rem, 5.4vw, 5.2rem); line-height: .92; }
+
+.mkt-fc-perks {
+    display: grid;
+    gap: 12px;
+    margin: 28px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.mkt-fc-perks li {
+    position: relative;
+    padding-left: 34px;
+    color: #2f352d;
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+.mkt-fc-perks li::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    top: -1px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: #e7f8e9;
+    color: #185a2e;
+    font-size: .75rem;
+    font-weight: 800;
+}
+
+.mkt-fc-note { margin-top: 26px; color: #747b71; font-size: .95rem; }
+
+.mkt-fc-card {
+    padding: clamp(22px, 4vw, 40px);
+    border: 1px solid #dfe2d7;
+    border-radius: 28px;
+    background: rgba(255, 255, 255, .92);
+    box-shadow: 0 20px 60px rgba(44, 50, 40, .08);
+}
+
+.mkt-fc-form { display: grid; gap: 26px; }
+
+.mkt-fc-form fieldset {
+    display: grid;
+    gap: 18px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.mkt-fc-form fieldset + fieldset { padding-top: 24px; border-top: 1px solid #ecede6; }
+
+.mkt-fc-form legend {
+    margin-bottom: 14px;
+    padding: 0;
+    color: #7d251f;
+    font-size: .72rem;
+    font-weight: 800;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+}
+
+.mkt-fc-field { display: grid; gap: 6px; }
+
+.mkt-fc-label { color: #171a16; font-weight: 700; font-size: .98rem; }
+.mkt-fc-label em { color: var(--p-red); font-style: normal; }
+.mkt-fc-label small { margin-left: 6px; color: #899087; font-size: .78rem; font-weight: 600; }
+.mkt-fc-hint { color: #6a7167; font-size: .88rem; line-height: 1.4; }
+
+.mkt-fc-field input,
+.mkt-fc-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 50px;
+    margin-top: 2px;
+    padding: 12px 14px;
+    border: 1px solid #d8dcd1;
+    border-radius: 14px;
+    background: #f8f9f5;
+    color: #171a16;
+    font: inherit;
+    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+
+.mkt-fc-field textarea { min-height: 110px; resize: vertical; }
+
+.mkt-fc-field input::placeholder,
+.mkt-fc-field textarea::placeholder { color: #a4aaa1; }
+
+.mkt-fc-field input:focus,
+.mkt-fc-field textarea:focus {
+    outline: none;
+    border-color: #141713;
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(20, 23, 19, .08);
+}
+
+.mkt-fc-field.has-error input,
+.mkt-fc-field.has-error textarea { border-color: var(--p-red); background: #fff8f8; }
+
+.mkt-fc-error { color: #9c101b; font-size: .86rem; font-weight: 600; }
+
+.mkt-fc-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+.mkt-fc-pills label {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-height: 42px;
+    padding: 0 16px;
+    border: 1px solid #d8dcd1;
+    border-radius: 999px;
+    background: #f8f9f5;
+    color: #2f352d;
+    font-size: .92rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+
+.mkt-fc-pills label:hover { border-color: #141713; }
+.mkt-fc-pills label.is-active { border-color: #141713; background: #141713; color: #fff; }
+.mkt-fc-pills label:focus-within { box-shadow: 0 0 0 4px rgba(20, 23, 19, .12); }
+.mkt-fc-pills input { position: absolute; opacity: 0; pointer-events: none; }
+
+.mkt-fc-submit { display: grid; gap: 12px; padding-top: 4px; }
+.mkt-fc-submit .mkt-cta { width: 100%; min-height: 54px; font-size: 1rem; cursor: pointer; }
+.mkt-fc-submit .mkt-cta:disabled { opacity: .6; cursor: progress; transform: none; }
+.mkt-fc-submit p { margin: 0; color: #899087; font-size: .84rem; text-align: center; }
+.mkt-fc-submit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+
+.mkt-fc-done { padding: clamp(12px, 3vw, 28px) 0; text-align: center; }
+.mkt-fc-done h2 { margin: 18px 0 10px; font-size: clamp(2rem, 4vw, 2.8rem); letter-spacing: -.04em; }
+.mkt-fc-done p { max-width: 30rem; margin: 0 auto 26px; color: #5f665d; line-height: 1.55; }
+.mkt-fc-done .mkt-actions { justify-content: center; }
+.mkt-fc-done .mkt-ghost { cursor: pointer; font: inherit; font-weight: 700; }
+
+.mkt-fc-done-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 999px;
+    background: #e7f8e9;
+    color: #185a2e;
+    font-size: 1.8rem;
+    font-weight: 800;
+}
+
+@media (max-width: 980px) {
+    .mkt .mkt-fc { grid-template-columns: 1fr; }
+    .mkt-fc-intro { position: static; }
+}

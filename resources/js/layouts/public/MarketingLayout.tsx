@@ -67,6 +67,7 @@ export default function MarketingLayout({ children }: { children: ReactNode }) {
           <ul>
             <li><Link href="/#discovery">For listeners</Link></li>
             <li><Link href="/#creators">For creators</Link></li>
+            <li><Link href="/founding-creators">Founding creators</Link></li>
             <li><Link href="/#join">Join the first 500</Link></li>
           </ul>
         </div>

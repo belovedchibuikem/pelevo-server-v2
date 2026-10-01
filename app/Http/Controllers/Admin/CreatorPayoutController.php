@@ -20,7 +20,7 @@ final class CreatorPayoutController extends Controller
         if ($key === '') {
             return ApiResponse::error('VALIDATION', 'Idempotency-Key header is required.', 422);
         }
-        $data = $request->validate(['period_start' => ['required', 'date_format:Y-m-d'], 'period_end' => ['required', 'date_format:Y-m-d', 'after_or_equal:period_start'], 'unit' => ['required', 'in:PCN'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
+        $data = $request->validate(['period_start' => ['required', 'date_format:Y-m-d'], 'period_end' => ['required', 'date_format:Y-m-d', 'after_or_equal:period_start'], 'unit' => ['required', 'in:PCN,USD,NGN'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
 
         return DB::transaction(function () use ($request, $data, $key): JsonResponse {
             $existing = DB::table('creator_payout_batches')->where('idempotency_key', $key)->first();
@@ -33,16 +33,32 @@ final class CreatorPayoutController extends Controller
             $total = 0;
             $settings = DB::table('creator_payout_settings')->where('compliance_state', 'verified')->whereNotNull('payout_method_id')->orderBy('creator_profile_id')->get();
             foreach ($settings as $setting) {
-                $account = FinancialAccount::where('owner_type', 'App\\Models\\CreatorProfile')->where('owner_id', $setting->creator_profile_id)->where('type', 'creator_balance')->where('unit', $data['unit'])->first();
-                if (! $account || $account->balance < $setting->minimum_amount) {
+                $isAdRevenue = in_array($data['unit'], ['USD', 'NGN'], true);
+                $accountType = $isAdRevenue ? 'reels_ad_available' : 'creator_balance';
+                $account = FinancialAccount::where('owner_type', 'App\\Models\\CreatorProfile')->where('owner_id', $setting->creator_profile_id)->where('type', $accountType)->where('unit', $data['unit'])->first();
+                if (! $account) {
                     continue;
                 }
-                $fx = DB::table('fx_rate_versions')->where('base_unit', $data['unit'])->where('quote_currency', $setting->currency)->where('effective_at', '<=', $data['period_end'].' 23:59:59')->latest('effective_at')->first();
-                if (! $fx) {
+                $fx = null;
+                if ($isAdRevenue) {
+                    $amountMinor = $data['unit'] === 'USD'
+                        ? intdiv((int) $account->balance, 10_000)
+                        : (int) $account->balance;
+                    $amount = $data['unit'] === 'USD' ? $amountMinor * 10_000 : $amountMinor;
+                    $currency = $data['unit'];
+                } else {
+                    $fx = DB::table('fx_rate_versions')->where('base_unit', $data['unit'])->where('quote_currency', $setting->currency)->where('approval_state', 'approved')->where('effective_at', '<=', $data['period_end'].' 23:59:59')->latest('effective_at')->first();
+                    if (! $fx) {
+                        continue;
+                    }
+                    $amount = (int) $account->balance;
+                    $amountMinor = (int) round($amount * (float) $fx->rate);
+                    $currency = $setting->currency;
+                }
+                if ($amount < 1 || $amountMinor < (int) $setting->minimum_amount) {
                     continue;
                 }
-                $amount = (int) $account->balance;
-                DB::table('creator_payouts')->insert(['id' => (string) Str::ulid(), 'creator_payout_batch_id' => $batchId, 'creator_profile_id' => $setting->creator_profile_id, 'payout_method_id' => $setting->payout_method_id, 'fx_rate_version_id' => $fx->id, 'unit' => $data['unit'], 'amount' => $amount, 'currency' => $setting->currency, 'amount_minor' => (int) round($amount * (float) $fx->rate), 'state' => 'queued', 'idempotency_key' => 'creator-payout:'.$batchId.':'.$setting->creator_profile_id, 'created_at' => now(), 'updated_at' => now()]);
+                DB::table('creator_payouts')->insert(['id' => (string) Str::ulid(), 'creator_payout_batch_id' => $batchId, 'creator_profile_id' => $setting->creator_profile_id, 'payout_method_id' => $setting->payout_method_id, 'fx_rate_version_id' => $fx?->id, 'unit' => $data['unit'], 'amount' => $amount, 'currency' => $currency, 'amount_minor' => $amountMinor, 'state' => 'queued', 'idempotency_key' => 'creator-payout:'.$batchId.':'.$setting->creator_profile_id, 'created_at' => now(), 'updated_at' => now()]);
                 $count++;
                 $total += $amount;
             }
@@ -79,7 +95,8 @@ final class CreatorPayoutController extends Controller
                 return ApiResponse::error('CONFLICT', 'Only draft payout batches can be approved.', 409);
             }
             foreach (DB::table('creator_payouts')->where('creator_payout_batch_id', $batch)->orderBy('creator_profile_id')->lockForUpdate()->get() as $payout) {
-                $source = FinancialAccount::where('owner_type', 'App\\Models\\CreatorProfile')->where('owner_id', $payout->creator_profile_id)->where('type', 'creator_balance')->where('unit', $payout->unit)->firstOrFail();
+                $sourceType = in_array($payout->unit, ['USD', 'NGN'], true) ? 'reels_ad_available' : 'creator_balance';
+                $source = FinancialAccount::where('owner_type', 'App\\Models\\CreatorProfile')->where('owner_id', $payout->creator_profile_id)->where('type', $sourceType)->where('unit', $payout->unit)->firstOrFail();
                 $payable = FinancialAccount::firstOrCreate(['owner_type' => 'App\\Models\\CreatorProfile', 'owner_id' => $payout->creator_profile_id, 'type' => 'creator_payout_payable', 'unit' => $payout->unit], ['balance' => 0]);
                 $transaction = $post->handle('creator_payout.reserved', $payout->idempotency_key, $payout->unit, [['account_id' => $source->id, 'amount' => -$payout->amount], ['account_id' => $payable->id, 'amount' => $payout->amount]], ['batch_id' => $batch, 'fx_rate_version_id' => $payout->fx_rate_version_id]);
                 DB::table('creator_payouts')->where('id', $payout->id)->update(['ledger_transaction_id' => $transaction->id, 'state' => 'approved', 'updated_at' => now()]);

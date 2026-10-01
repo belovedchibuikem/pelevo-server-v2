@@ -17,12 +17,14 @@ use App\Http\Controllers\Admin\CreatorPayoutController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\EarnCatalogController;
 use App\Http\Controllers\Admin\FinanceController;
+use App\Http\Controllers\Admin\FoundingCreatorController;
 use App\Http\Controllers\Admin\IntegrationSettingsController;
 use App\Http\Controllers\Admin\ModerationController;
 use App\Http\Controllers\Admin\ModerationOperationsController;
 use App\Http\Controllers\Admin\ModerationQueueController;
 use App\Http\Controllers\Admin\ModuleWorkspaceController;
 use App\Http\Controllers\Admin\OperationsController;
+use App\Http\Controllers\Admin\ReelAdSettlementController;
 use App\Http\Controllers\Admin\SupportWorkspaceController;
 use App\Http\Controllers\Admin\UserOperationsController;
 use App\Http\Controllers\Admin\WorkspaceToolsController;
@@ -38,6 +40,8 @@ Route::get('/privacy', [MarketingController::class, 'privacy'])->name('privacy')
 Route::get('/terms', [MarketingController::class, 'terms'])->name('terms');
 Route::get('/contact', [MarketingController::class, 'contact'])->name('contact');
 Route::post('/contact', [MarketingController::class, 'submitContact'])->middleware('throttle:contact')->name('contact.store');
+Route::get('/founding-creators', [MarketingController::class, 'foundingCreators'])->name('founding-creators');
+Route::post('/founding-creators', [MarketingController::class, 'submitFoundingCreator'])->middleware('throttle:contact')->name('founding-creators.store');
 Route::get('/operations/health', [OperationsController::class, 'readiness'])->middleware('throttle:60,1')->name('operations.health');
 
 Route::get('/s/{token}', [ShareRedirectController::class, 'show'])
@@ -93,6 +97,8 @@ Route::prefix('api/admin/v1')->middleware(['auth.admin', 'admin.mfa'])->group(fu
     Route::get('creators', [CreatorOperationsController::class, 'index'])->middleware('admin.permission:claims.decide');
     Route::get('creators/{creator}', [CreatorOperationsController::class, 'show'])->middleware('admin.permission:claims.decide');
     Route::put('claim-disputes/{dispute}', [CreatorOperationsController::class, 'dispute'])->middleware('admin.permission:claims.decide');
+    Route::get('founding-creators/export', [FoundingCreatorController::class, 'export'])->middleware(['admin.permission:claims.decide', 'throttle:10,1'])->name('admin.founding-creators.export');
+    Route::put('founding-creators/{application}', [FoundingCreatorController::class, 'update'])->whereUlid('application')->middleware('admin.permission:claims.decide');
     Route::put('comments/{comment}/moderation', [ModerationController::class, 'comment'])->middleware('admin.permission:moderation.act');
     Route::put('reels/{reel}/moderation', [ModerationController::class, 'reel'])->middleware('admin.permission:moderation.act');
     Route::get('moderation', [ModerationQueueController::class, 'index'])->middleware('admin.permission:moderation.act');
@@ -105,6 +111,13 @@ Route::prefix('api/admin/v1')->middleware(['auth.admin', 'admin.mfa'])->group(fu
     Route::get('moderation/live/{session}', [ModerationOperationsController::class, 'live'])->middleware('admin.permission:moderation.act');
     Route::post('moderation/live/{session}/takedown', [ModerationOperationsController::class, 'takedown'])->middleware(['admin.permission:moderation.act', 'admin.mfa.fresh']);
     Route::get('finance', [FinanceController::class, 'index'])->middleware('admin.permission:finance.view');
+    Route::get('finance/reels-ad-settlements', [ReelAdSettlementController::class, 'index'])->middleware('admin.permission:finance.view');
+    Route::post('finance/reels-ad-settlements/preview', [ReelAdSettlementController::class, 'preview'])->middleware('admin.permission:finance.view');
+    Route::post('finance/reels-ad-settlements', [ReelAdSettlementController::class, 'store'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
+    Route::post('finance/reels-ad-settlements/{batch}/approval', [ReelAdSettlementController::class, 'approve'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh']);
+    Route::post('finance/reels-ad-impressions/{impression}/review', [ReelAdSettlementController::class, 'reviewImpression'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
+    Route::post('finance/reels-ad-reserve/true-up', [ReelAdSettlementController::class, 'reserveTrueUp'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
+    Route::post('finance/reels-ad-fx-clearing/settlements', [ReelAdSettlementController::class, 'settleFxClearing'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::get('catalog', [CatalogOperationsController::class, 'index'])->middleware('admin.permission:catalog.write');
     Route::get('catalog/shows/{show}', [CatalogOperationsController::class, 'show'])->middleware('admin.permission:catalog.write');
     Route::post('catalog/shows/{show}/refresh', [CatalogOperationsController::class, 'refresh'])->middleware('admin.permission:catalog.write');
@@ -130,6 +143,7 @@ Route::prefix('api/admin/v1')->middleware(['auth.admin', 'admin.mfa'])->group(fu
     Route::put('finance/premium/plans', [FinanceController::class, 'premiumPlan'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::post('finance/fees', [FinanceController::class, 'feeVersion'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::post('finance/fx', [FinanceController::class, 'fxVersion'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
+    Route::post('finance/fx/{rate}/approval', [FinanceController::class, 'approveFxVersion'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh']);
     Route::put('settings/fx', [FinanceController::class, 'fxVersion'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::post('finance/coin-products', [FinanceController::class, 'coinProduct'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::put('finance/coin-products/{product}', [FinanceController::class, 'coinProductState'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
@@ -170,6 +184,7 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
         Route::get('moderation', [ModerationQueueController::class, 'page'])->middleware('admin.permission:moderation.act')->name('moderation');
         Route::get('claims', ClaimWorkspaceController::class)->middleware('admin.permission:claims.decide')->name('claims');
         Route::get('creators', [CreatorOperationsController::class, 'page'])->middleware('admin.permission:claims.decide')->name('creators');
+        Route::get('founding-creators', [FoundingCreatorController::class, 'page'])->middleware('admin.permission:claims.decide')->name('founding-creators');
         Route::get('finance', [FinanceController::class, 'page'])->middleware('admin.permission:finance.view')->name('finance');
         Route::get('catalog', [CatalogOperationsController::class, 'page'])->middleware('admin.permission:catalog.write')->name('catalog');
         Route::get('earn-podcasts', [EarnCatalogController::class, 'page'])->middleware('admin.permission:catalog.write')->name('earn-podcasts');

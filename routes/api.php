@@ -10,11 +10,10 @@ use App\Http\Controllers\Api\V1\ConnectedAccountController;
 use App\Http\Controllers\Api\V1\ContentReportController;
 use App\Http\Controllers\Api\V1\CreatorController;
 use App\Http\Controllers\Api\V1\CreatorFollowController;
-use App\Http\Controllers\Api\V1\CreatorPublicController;
 use App\Http\Controllers\Api\V1\CreatorPayoutSettingsController;
+use App\Http\Controllers\Api\V1\CreatorPublicController;
 use App\Http\Controllers\Api\V1\DownloadController;
 use App\Http\Controllers\Api\V1\EarnController;
-use App\Http\Middleware\EnsureEarnUnitedStates;
 use App\Http\Controllers\Api\V1\EpisodeContentController;
 use App\Http\Controllers\Api\V1\EpisodeNoteController;
 use App\Http\Controllers\Api\V1\EpisodeReactionController;
@@ -35,11 +34,12 @@ use App\Http\Controllers\Api\V1\PlatformController;
 use App\Http\Controllers\Api\V1\PlaybackController;
 use App\Http\Controllers\Api\V1\PlayerSessionController;
 use App\Http\Controllers\Api\V1\PremiumController;
-use App\Http\Controllers\Api\V1\PushTokenController;
 use App\Http\Controllers\Api\V1\PrivacyRequestController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\PublicLiveController;
+use App\Http\Controllers\Api\V1\PushTokenController;
 use App\Http\Controllers\Api\V1\QueueController;
+use App\Http\Controllers\Api\V1\ReelAdImpressionController;
 use App\Http\Controllers\Api\V1\ReelController;
 use App\Http\Controllers\Api\V1\ReelDraftController;
 use App\Http\Controllers\Api\V1\ReelEngagementController;
@@ -52,6 +52,8 @@ use App\Http\Controllers\Api\V1\StudioController;
 use App\Http\Controllers\Api\V1\StudioWorkspaceController;
 use App\Http\Controllers\Api\V1\SupportController;
 use App\Http\Controllers\Api\V1\WithdrawalController;
+use App\Http\Controllers\ShareRedirectController;
+use App\Http\Middleware\EnsureEarnUnitedStates;
 use App\Support\ApiResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -62,7 +64,7 @@ Route::prefix('v1')->group(function (): void {
     Route::get('cms/about', [SupportController::class, 'about']);
     Route::get('cms/guidelines', [SupportController::class, 'guidelines']);
     Route::get('cms/{slug}', [SupportController::class, 'cms'])->whereIn('slug', ['terms', 'privacy']);
-    Route::get('s/{token}', [\App\Http\Controllers\ShareRedirectController::class, 'resolve'])
+    Route::get('s/{token}', [ShareRedirectController::class, 'resolve'])
         ->where('token', '[A-Za-z0-9]{16,64}')
         ->middleware('throttle:60,1');
     Route::middleware('throttle:auth')->group(function (): void {
@@ -241,7 +243,10 @@ Route::prefix('v1')->group(function (): void {
         Route::post('reels/{reel}/save', [ReelEngagementController::class, 'save']);
         Route::delete('reels/{reel}/save', [ReelEngagementController::class, 'unsave']);
         Route::post('reels/{reel}/not-interested', [ReelEngagementController::class, 'notInterested']);
-        Route::post('reels/{reel}/view-heartbeat', [ReelEngagementController::class, 'heartbeat'])->middleware('throttle:20,1');
+        Route::post('reels/{reel}/view-heartbeat', [ReelEngagementController::class, 'heartbeat'])->middleware(['throttle:20,1', 'not.sanctioned']);
+        Route::post('reels/ad-impressions/{adImpression}/watched', [ReelAdImpressionController::class, 'watched'])->middleware(['throttle:20,1', 'not.sanctioned']);
+        Route::post('reels/ad-impressions/{adImpression}/bounce', [ReelAdImpressionController::class, 'bounce'])->middleware('throttle:20,1');
+        Route::post('reels/ad-impressions/{adImpression}/paid', [ReelAdImpressionController::class, 'paid'])->middleware('throttle:20,1');
         Route::get('live-sessions', [LiveSessionController::class, 'index']);
         Route::post('live-sessions', [LiveSessionController::class, 'store'])->middleware('not.sanctioned');
         Route::put('live-sessions/{session}/state', [LiveSessionController::class, 'transition']);

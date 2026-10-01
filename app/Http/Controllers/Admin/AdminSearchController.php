@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Support\AdminAccess;
 use App\Support\ApiResponse;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Http\JsonResponse;
@@ -18,7 +19,7 @@ class AdminSearchController extends Controller
     public function __invoke(Request $request): JsonResponse
     {
         $term = $request->validate(['q' => ['required', 'string', 'min:2', 'max:100']])['q'];
-        $permissions = \App\Support\AdminAccess::permissions($request->user('admin'));
+        $permissions = AdminAccess::permissions($request->user('admin'));
         $can = fn (string $permission): bool => $permissions->contains($permission);
         $groups = [];
 
@@ -34,6 +35,7 @@ class AdminSearchController extends Controller
         if ($can('claims.decide')) {
             $rows = DB::table('show_claims')->join('shows', 'shows.id', '=', 'show_claims.show_id')->where(fn (Builder $query) => $query->where('shows.title', 'like', "%{$term}%")->orWhere('show_claims.id', 'like', "%{$term}%"))->select('show_claims.id', 'shows.title', 'show_claims.state as subtitle')->limit(6)->get();
             $groups[] = $this->group('Claims', $rows, fn ($row): string => '/admin/claims?claim='.$row->id);
+            $groups[] = $this->group('Founding creators', DB::table('founding_creator_applications')->where(fn (Builder $query) => $query->where('show_name', 'like', "%{$term}%")->orWhere('name', 'like', "%{$term}%")->orWhere('email', 'like', "%{$term}%"))->select('id', 'show_name as title', 'email as subtitle')->limit(6)->get(), fn ($row): string => '/admin/founding-creators?q='.rawurlencode($row->subtitle));
         }
         if ($can('moderation.act')) {
             $groups[] = $this->group('Reels', DB::table('reels')->where(fn (Builder $query) => $query->where('caption', 'like', "%{$term}%")->orWhere('id', 'like', "%{$term}%"))->select('id', 'caption as title', 'state as subtitle')->limit(6)->get(), fn ($row): string => '/admin/records/reels/'.$row->id);
