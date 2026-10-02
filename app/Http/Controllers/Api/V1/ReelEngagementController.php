@@ -129,10 +129,10 @@ class ReelEngagementController extends Controller
             $interval = max(1000, (int) config('reels_ads.heartbeat_interval_ms'));
             $grace = max(0, (int) config('reels_ads.heartbeat_grace_ms'));
             $wallClockAllowance = $lastHeartbeatAt
-                ? min($interval + $grace, max(0, $lastHeartbeatAt->diffInMilliseconds($now)))
+                ? min($interval + $grace, max(0, (int) floor($lastHeartbeatAt->diffInMilliseconds($now))))
                 : min($interval + $grace, $position);
             $countedDelta = ($foreground && $audible)
-                ? min($positionDelta, $wallClockAllowance)
+                ? (int) min($positionDelta, $wallClockAllowance)
                 : 0;
             $serverWatched = (int) ($existing?->server_watched_ms ?? 0) + $countedDelta;
             $duration = max(0, (int) ($reelRow->duration_ms ?? 0));

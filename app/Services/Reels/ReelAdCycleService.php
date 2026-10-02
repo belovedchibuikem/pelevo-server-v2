@@ -200,7 +200,7 @@ final class ReelAdCycleService
 
         $first = CarbonImmutable::parse($ordered->first()->counted_at);
         $last = CarbonImmutable::parse($ordered->last()->counted_at);
-        $elapsedMs = max(0, $first->diffInMilliseconds($last));
+        $elapsedMs = max(0, (int) floor($first->diffInMilliseconds($last)));
         $minimumMs = $ordered
             ->slice(1)
             ->sum(fn (object $view): int => min(
