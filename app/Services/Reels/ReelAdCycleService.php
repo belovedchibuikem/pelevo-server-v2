@@ -114,7 +114,6 @@ final class ReelAdCycleService
                     'reels.duration_ms',
                     'creator_profiles.user_id as creator_user_id',
                 )
-                ->lockForUpdate()
                 ->get()
                 ->keyBy('reel_view_id');
 
