@@ -309,7 +309,7 @@ final class EarnController extends Controller
             $nowTs = now()->getTimestamp();
             $wall = $nowTs - $anchorAt->getTimestamp();
             $sessionAge = $nowTs - Carbon::parse($row->created_at)->getTimestamp();
-            $paced = $claimed <= $wall + 2 && (int) $row->verified_seconds + $claimed <= $sessionAge + 2;
+            $paced = (int) $row->verified_seconds + $claimed <= $sessionAge + 2;
             if (! $device || ! $nonceValid || ! $data['audio_active'] || ! $rateOk || ! $integrityOk) {
                 $reasons = array_keys(array_filter([
                     'device' => ! $device,
