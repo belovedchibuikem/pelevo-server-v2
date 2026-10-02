@@ -22,7 +22,7 @@ final class ReelAdCycleService
             return null;
         }
 
-        $key = "reels:ad-cycle:{$userId}:{$feedSessionId}";
+        $key = "reels:ad-cycle:{$userId}";
         $lock = Cache::lock($key.':lock', 10);
 
         try {

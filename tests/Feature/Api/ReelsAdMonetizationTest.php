@@ -140,6 +140,28 @@ final class ReelsAdMonetizationTest extends TestCase
         $this->assertDatabaseCount('creator_ad_revenue_allocations', 0);
     }
 
+    public function test_ad_cycle_progress_survives_new_feed_session(): void
+    {
+        config()->set('reels_ads.enabled', true);
+        config()->set('reels_ads.threshold_min', 2);
+        config()->set('reels_ads.threshold_max', 2);
+
+        $fan = User::factory()->create();
+        $creator = CreatorProfile::create(['user_id' => User::factory()->create()->id, 'display_name' => 'Creator']);
+        $headers = ['X-Platform' => 'android', 'X-Device-Id' => 'android-device'];
+
+        $this->completeReel($fan, $this->reel($creator->id), (string) Str::uuid(), $headers)
+            ->assertJsonPath('data.ad_due', null);
+
+        $reopenedFeed = (string) Str::uuid();
+        $second = $this->completeReel($fan, $this->reel($creator->id), $reopenedFeed, $headers);
+        $impressionId = $second->json('data.ad_due.ad_impression_id');
+
+        $this->assertNotEmpty($impressionId);
+        $this->assertDatabaseHas('ad_impressions', ['id' => $impressionId, 'feed_session_id' => $reopenedFeed]);
+        $this->assertDatabaseCount('ad_impression_attributions', 2);
+    }
+
     private function reel(string $creatorId): string
     {
         $id = (string) Str::ulid();
