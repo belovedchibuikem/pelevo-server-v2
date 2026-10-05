@@ -18,6 +18,41 @@ use Illuminate\Support\Str;
 
 final class CreatorController extends Controller
 {
+    public function claims(Request $request): JsonResponse
+    {
+        $creator = CreatorProfile::where('user_id', $request->user()->id)->first();
+        if (! $creator) {
+            return ApiResponse::success([]);
+        }
+        $rows = DB::table('show_claims')
+            ->join('shows', 'shows.id', '=', 'show_claims.show_id')
+            ->where('show_claims.creator_profile_id', $creator->id)
+            ->select('show_claims.id', 'show_claims.show_id', 'show_claims.method', 'show_claims.state', 'show_claims.expires_at', 'show_claims.verified_at', 'show_claims.decision_reason', 'show_claims.created_at', 'show_claims.updated_at', 'shows.title as show_title', 'shows.author as show_author', 'shows.artwork_url as show_artwork_url')
+            ->orderByDesc('show_claims.created_at')
+            ->limit(50)
+            ->get();
+        $challenges = DB::table('claim_challenges')
+            ->whereIn('show_claim_id', $rows->where('method', 'description')->whereIn('state', ['pending', 'verifying', 'review'])->pluck('id'))
+            ->orderByDesc('created_at')
+            ->get()
+            ->unique('show_claim_id')
+            ->keyBy('show_claim_id');
+
+        return ApiResponse::success($rows->map(function (object $row) use ($challenges): array {
+            $challenge = $challenges->get($row->id);
+            $code = null;
+            if ($challenge) {
+                try {
+                    $code = decrypt($challenge->destination_encrypted);
+                } catch (\Throwable) {
+                    $code = null;
+                }
+            }
+
+            return [...(array) $row, 'challenge' => $code];
+        })->values());
+    }
+
     public function showClaim(string $claim, Request $request): JsonResponse
     {
         $creator = CreatorProfile::where('user_id', $request->user()->id)->first();

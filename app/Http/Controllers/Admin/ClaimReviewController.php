@@ -7,6 +7,7 @@ use App\Integrations\Rss\RssOwnershipInspector;
 use App\Mail\ClaimVerificationCode;
 use App\Mail\PelevoNotice;
 use App\Models\Show;
+use App\Services\InAppNotificationDelivery;
 use App\Services\MailPreference;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
@@ -119,6 +120,18 @@ final class ClaimReviewController extends Controller
                         : 'We could not approve your claim on “'.$showTitle.'”.',
                     detail: $data['reason'],
                 ));
+                $userId = DB::table('creator_profiles')->where('id', $record->creator_profile_id)->value('user_id');
+                if ($userId) {
+                    app(InAppNotificationDelivery::class)->deliver((string) $userId, [
+                        'type' => 'claim_decision',
+                        'key' => 'claim-decision:'.$claim.':'.$data['decision'],
+                        'title' => $approved ? 'Podcast claim approved' : 'Podcast claim not approved',
+                        'body' => $approved
+                            ? 'You are now the verified owner of “'.$showTitle.'”. Open Creator Studio to manage it.'
+                            : 'We could not approve your claim on “'.$showTitle.'”. '.$data['reason'],
+                        'data' => ['type' => 'claim_decision', 'claim_id' => $claim, 'state' => $state],
+                    ]);
+                }
             }
 
             return ApiResponse::success(['claim_id' => $claim, 'state' => $state, 'audit_reference' => $reviewId]);

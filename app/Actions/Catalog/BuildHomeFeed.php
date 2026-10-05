@@ -7,6 +7,7 @@ use App\Integrations\PodcastIndex\PodcastIndexException;
 use App\Support\ArtworkUrl;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -481,7 +482,7 @@ final class BuildHomeFeed
         $texts = [];
         foreach ($plays as $play) {
             $showId = (string) $play->show_id;
-            $playedAt = \Illuminate\Support\Carbon::parse((string) $play->updated_at)->timestamp;
+            $playedAt = Carbon::parse((string) $play->updated_at)->timestamp;
             $days = max(0, (int) floor((now()->timestamp - $playedAt) / 86400));
             $recency = (int) round(55 * max(0, 1 - ($days / 21)));
             $completed = ((int) $play->completed) === 1 ? 32 : 0;
@@ -812,7 +813,7 @@ final class BuildHomeFeed
             $stillValid = $current !== null
                 && $existing->consumed_at === null
                 && $existing->expires_at !== null
-                && now()->lt(\Illuminate\Support\Carbon::parse((string) $existing->expires_at));
+                && now()->lt(Carbon::parse((string) $existing->expires_at));
 
             if ($stillValid) {
                 return $current;
@@ -1180,7 +1181,14 @@ final class BuildHomeFeed
             ->leftJoin('follows', function ($join) use ($userId): void {
                 $join->on('follows.show_id', '=', 'reels.show_id')->where('follows.user_id', $userId);
             })
-            ->whereNotNull('follows.user_id')
+            ->where('creator_profiles.user_id', '!=', $userId)
+            ->whereNotExists(function ($hidden) use ($userId): void {
+                $hidden->selectRaw('1')
+                    ->from('reel_engagements')
+                    ->whereColumn('reel_engagements.reel_id', 'reels.id')
+                    ->where('reel_engagements.user_id', $userId)
+                    ->where('reel_engagements.not_interested', true);
+            })
             ->select(
                 'reels.id',
                 'reels.caption',
@@ -1190,8 +1198,10 @@ final class BuildHomeFeed
                 'shows.author',
                 'creator_profiles.display_name',
                 DB::raw('CASE WHEN follows.user_id IS NULL THEN 0 ELSE 1 END AS followed'),
+                DB::raw('(SELECT COUNT(*) FROM reel_view_credits WHERE reel_view_credits.reel_id = reels.id) AS viewer_count'),
             )
             ->orderByDesc('followed')
+            ->orderByDesc('viewer_count')
             ->orderByDesc('reels.published_at')
             ->limit(20)
             ->get();
@@ -1402,7 +1412,7 @@ final class BuildHomeFeed
         try {
             $time = $value instanceof CarbonInterface
                 ? $value
-                : \Illuminate\Support\Carbon::parse((string) $value);
+                : Carbon::parse((string) $value);
 
             return $time->diffForHumans();
         } catch (\Throwable) {

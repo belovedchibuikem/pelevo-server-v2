@@ -174,6 +174,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('creators/{creator}/reels', [CreatorPublicController::class, 'reels']);
         Route::post('creators/{creator}/follow', [CreatorFollowController::class, 'store']);
         Route::delete('creators/{creator}/follow', [CreatorFollowController::class, 'destroy']);
+        Route::get('claims', [CreatorController::class, 'claims']);
         Route::post('shows/{show}/claims', [CreatorController::class, 'claim']);
         Route::post('claims/{claim}/verify', [CreatorController::class, 'verify']);
         Route::get('claims/{claim}', [CreatorController::class, 'showClaim']);

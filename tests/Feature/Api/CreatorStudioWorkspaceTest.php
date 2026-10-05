@@ -30,6 +30,13 @@ final class CreatorStudioWorkspaceTest extends TestCase
         $show = Show::create(['rss_url' => 'https://example.com/status.xml', 'title' => 'Status']);
         $claim = $this->actingAs($owner, 'sanctum')->postJson("/api/v1/shows/{$show->id}/claims", ['method' => 'email'])->assertCreated()->json('data.claim_id');
         $this->actingAs($other, 'sanctum')->getJson("/api/v1/claims/{$claim}")->assertNotFound();
+        $this->actingAs($other, 'sanctum')->getJson('/api/v1/claims')->assertOk()->assertJsonCount(0, 'data');
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/claims')->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $claim)
+            ->assertJsonPath('data.0.state', 'pending')
+            ->assertJsonPath('data.0.show_title', 'Status')
+            ->assertJsonPath('data.0.challenge', null);
         $status = $this->actingAs($owner, 'sanctum')->getJson("/api/v1/claims/{$claim}")->assertOk()->assertJsonPath('data.destination_masked', 'o****@example.com');
         $this->assertStringNotContainsString('owner@example.com', $status->getContent());
         $this->actingAs($owner, 'sanctum')->postJson("/api/v1/claims/{$claim}/challenge")->assertAccepted()->assertJsonPath('data.masked_destination', 'o****@example.com');
@@ -80,6 +87,28 @@ final class CreatorStudioWorkspaceTest extends TestCase
             $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/transactions')->assertOk()->assertJsonPath('data.0.id', $transaction->id)->assertJsonPath('data.0.event_type', 'gift.sent')->assertJsonPath('data.0.amount', 90)->assertJsonPath('data.0.unit', 'PCN')->assertJsonPath('data.0.counterpart_name', 'Listener Ada')->assertJsonMissingPath('data.0.destination_encrypted');
             $this->actingAs($user, 'sanctum')->getJson("/api/v1/studio/transactions/{$transaction->id}")->assertOk()->assertJsonPath('data.id', $transaction->id)->assertJsonPath('data.message', 'Thank you')->assertJsonPath('data.gift_type_name', 'Applause');
         }
+        DB::table('playback_progress')->insert([
+            ['user_id' => $listener->id, 'episode_id' => $episode->id, 'position_seconds' => 60, 'completed' => true, 'created_at' => now(), 'updated_at' => now()],
+            ['user_id' => $owner->id, 'episode_id' => $episode->id, 'position_seconds' => 60, 'completed' => false, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/studio/audience?period=7d')->assertOk()
+            ->assertJsonPath('data.listeners', 1)
+            ->assertJsonPath('data.listeners_30d', 1)
+            ->assertJsonPath('data.completions', 1)
+            ->assertJsonPath('data.new_listeners', 1)
+            ->assertJsonPath('data.top_listeners.0.id', $listener->id)
+            ->assertJsonCount(7, 'data.growth')
+            ->assertJsonCount(24, 'data.listening_hours')
+            ->assertJsonPath('data.growth.6.followers', 1);
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/studio/monetization?period=this_year')->assertOk()
+            ->assertJsonPath('data.period.key', 'this_year')
+            ->assertJsonPath('data.period.gift_count', 1)
+            ->assertJsonPath('data.period.gift_coins', 100)
+            ->assertJsonCount(12, 'data.period.series');
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/studio/monetization?period=last_month')->assertOk()
+            ->assertJsonPath('data.period.gift_count', 0);
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/studio/transactions?period=last_month')->assertOk()->assertJsonCount(0, 'data');
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/studio/transactions?period=this_month&kind=earnings')->assertOk()->assertJsonPath('data.0.id', $transaction->id);
         $this->actingAs($owner, 'sanctum')->getJson('/api/v1/studio/payout-settings')->assertOk()->assertJsonPath('data.settings.currency', 'NGN')->assertJsonPath('data.settings.schedule', 'monthly')->assertJsonPath('data.settings.minimum_amount', 10000)->assertJsonPath('data.tax_profile.country_code', 'NG')->assertJsonMissingPath('data.tax_profile.details_encrypted');
         $this->actingAs($owner, 'sanctum')->getJson('/api/v1/payout-methods')->assertOk()->assertJsonPath('data.0.id', $payoutMethod)->assertJsonPath('data.0.label', 'Access Bank')->assertJsonPath('data.0.destination_last_four', '1234')->assertJsonMissing(['destination_encrypted']);
         $this->actingAs($owner, 'sanctum')->postJson('/api/v1/reels/drafts', ['caption' => 'Draft reel', 'episode_id' => $episode->id])->assertCreated()->assertJsonPath('data.caption', 'Draft reel')->assertJsonPath('data.episode_id', $episode->id)->assertJsonPath('data.show_id', $show->id)->assertJsonPath('data.state', 'draft');

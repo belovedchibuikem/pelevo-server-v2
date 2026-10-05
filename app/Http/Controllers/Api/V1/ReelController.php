@@ -163,6 +163,13 @@ final class ReelController extends Controller
         $query = DB::table('reels')->where('reels.state', 'published')->whereNotExists(function ($hidden) use ($request): void {
             $hidden->selectRaw('1')->from('reel_engagements')->whereColumn('reel_engagements.reel_id', 'reels.id')->where('reel_engagements.user_id', $request->user()->id)->where('reel_engagements.not_interested', true);
         });
+        if ($mode !== 'saved') {
+            $query->whereNotExists(function ($own) use ($request): void {
+                $own->selectRaw('1')->from('creator_profiles')->whereColumn('creator_profiles.id', 'reels.creator_profile_id')->where('creator_profiles.user_id', $request->user()->id);
+            })->whereNotExists(function ($studio) use ($request): void {
+                $studio->selectRaw('1')->from('studios')->join('studio_members', 'studio_members.studio_id', '=', 'studios.id')->whereColumn('studios.creator_profile_id', 'reels.creator_profile_id')->where('studio_members.user_id', $request->user()->id);
+            });
+        }
         if ($mode === 'following') {
             $query->where(function ($scope) use ($request): void {
                 $scope->whereExists(function ($followed) use ($request): void {

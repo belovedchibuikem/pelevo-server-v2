@@ -8,6 +8,7 @@ use App\Support\ApiResponse;
 use App\Support\ReelPlayback;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -126,17 +127,37 @@ final class StudioWorkspaceController extends Controller
 
     public function audience(Request $request): JsonResponse
     {
+        $request->validate([
+            'period' => ['nullable', 'in:7d,30d,1y'],
+            'show_id' => ['nullable', 'string', 'max:64'],
+        ]);
         $creators = $this->creatorIds($request);
         $shows = $this->showIds($request);
+        $showId = $request->string('show_id')->toString();
+        if ($showId !== '' && $shows->contains($showId)) {
+            $shows = collect([$showId]);
+        }
+        $owners = $this->ownerUserIds($creators);
 
-        return ApiResponse::success(['followers' => DB::table('creator_followers')->whereIn('creator_profile_id', $creators)->count(), 'show_followers' => DB::table('follows')->whereIn('show_id', $shows)->count(), 'listeners_30d' => DB::table('playback_progress')->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')->whereIn('episodes.show_id', $shows)->where('playback_progress.updated_at', '>=', now()->subDays(30))->distinct()->count('playback_progress.user_id')]);
+        $summary = [
+            'followers' => DB::table('creator_followers')->whereIn('creator_profile_id', $creators)->whereNotIn('user_id', $owners)->count(),
+            'show_followers' => DB::table('follows')->whereIn('show_id', $shows)->whereNotIn('user_id', $owners)->count(),
+            'listeners_30d' => DB::table('playback_progress')->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')->whereIn('episodes.show_id', $shows)->whereNotIn('playback_progress.user_id', $owners)->where('playback_progress.updated_at', '>=', now()->subDays(30))->distinct()->count('playback_progress.user_id'),
+        ];
+        if (! $request->filled('period')) {
+            return ApiResponse::success($summary);
+        }
+
+        return ApiResponse::success([...$summary, ...$this->audienceInsights($request->string('period')->toString(), $creators, $shows, $owners)]);
     }
 
     public function monetization(Request $request): JsonResponse
     {
+        $request->validate(['period' => ['nullable', 'in:this_month,last_month,this_year']]);
         $creators = $this->creatorIds($request);
 
         return ApiResponse::success([
+            'period' => $this->earningsPeriod($request->string('period')->toString() ?: 'this_month', $creators),
             'gifts_received' => DB::table('gifts')->whereIn('creator_profile_id', $creators)->count(),
             'payouts_count' => DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->count(),
             'accounts' => DB::table('financial_accounts')->where('owner_type', 'App\\Models\\CreatorProfile')->whereIn('owner_id', $creators)->select('id', 'owner_id', 'type', 'unit', 'balance')->get(),
@@ -173,6 +194,11 @@ final class StudioWorkspaceController extends Controller
         if ($kind !== '' && ! in_array($kind, ['earnings', 'payouts', 'gifts', 'reels'], true)) {
             return ApiResponse::error('UNPROCESSABLE', 'Invalid transaction kind.', 422);
         }
+        $period = $request->string('period')->toString();
+        if ($period !== '' && ! in_array($period, ['this_month', 'last_month', 'this_year'], true)) {
+            return ApiResponse::error('UNPROCESSABLE', 'Invalid transaction period.', 422);
+        }
+        $range = $period === '' ? null : $this->earningsRange($period);
         $accountIds = $this->accountIds($request);
         if ($accountIds->isEmpty()) {
             return ApiResponse::success([], ['cursor' => null, 'has_more' => false]);
@@ -182,7 +208,9 @@ final class StudioWorkspaceController extends Controller
             ->when($kind === 'gifts', fn ($q) => $q->where('event_type', 'gift.sent'))
             ->when($kind === 'payouts', fn ($q) => $q->where('event_type', 'like', 'creator_payout.%'))
             ->when($kind === 'reels', fn ($q) => $q->where(fn ($events) => $events->where('event_type', 'reel.revenue')->orWhere('event_type', 'like', 'reel.ad.%')))
-            ->when($kind === 'earnings', fn ($q) => $q->where(fn ($events) => $events->whereIn('event_type', ['gift.sent', 'reel.revenue'])->orWhere('event_type', 'like', 'reel.ad.%')))
+            ->when($kind !== 'reels', fn ($q) => $q->where('event_type', '!=', 'reel.revenue')->where('event_type', 'not like', 'reel.ad.%'))
+            ->when($kind === 'earnings', fn ($q) => $q->where('event_type', 'gift.sent'))
+            ->when($range !== null, fn ($q) => $q->whereBetween('created_at', [$range['from'], $range['to']]))
             ->select('id', 'reference', 'event_type', 'created_at')
             ->orderByDesc('created_at')
             ->orderByDesc('id')
@@ -220,6 +248,223 @@ final class StudioWorkspaceController extends Controller
     private function accountIds(Request $request): Collection
     {
         return DB::table('financial_accounts')->where('owner_type', 'App\\Models\\CreatorProfile')->whereIn('owner_id', $this->creatorIds($request))->pluck('id');
+    }
+
+    /**
+     * Users who run the studio; their own listens and follows are not audience.
+     */
+    private function ownerUserIds(Collection $creators): Collection
+    {
+        return DB::table('creator_profiles')->whereIn('id', $creators)->pluck('user_id')
+            ->merge(DB::table('studios')->join('studio_members', 'studio_members.studio_id', '=', 'studios.id')->whereIn('studios.creator_profile_id', $creators)->pluck('studio_members.user_id'))
+            ->filter()
+            ->unique()
+            ->values();
+    }
+
+    /**
+     * @return array{from: Carbon, to: Carbon, bucket: string}
+     */
+    private function earningsRange(string $period): array
+    {
+        return match ($period) {
+            'last_month' => ['from' => now()->subMonthNoOverflow()->startOfMonth(), 'to' => now()->subMonthNoOverflow()->endOfMonth(), 'bucket' => 'day'],
+            'this_year' => ['from' => now()->startOfYear(), 'to' => now()->endOfYear(), 'bucket' => 'month'],
+            default => ['from' => now()->startOfMonth(), 'to' => now()->endOfMonth(), 'bucket' => 'day'],
+        };
+    }
+
+    /**
+     * @return array<string, array{key: string, label: string}>
+     */
+    private function buckets(Carbon $from, Carbon $to, string $bucket): array
+    {
+        $buckets = [];
+        $cursor = $from->copy();
+        while ($cursor->lte($to)) {
+            $key = $bucket === 'month' ? $cursor->format('Y-m') : $cursor->format('Y-m-d');
+            $buckets[$key] = ['key' => $key, 'label' => $bucket === 'month' ? $cursor->format('M') : $cursor->format('j M')];
+            if ($bucket === 'month') {
+                $cursor->addMonthNoOverflow()->startOfMonth();
+            } else {
+                $cursor->addDay();
+            }
+        }
+
+        return $buckets;
+    }
+
+    private function bucketKey(mixed $timestamp, string $bucket): string
+    {
+        $time = Carbon::parse($timestamp);
+
+        return $bucket === 'month' ? $time->format('Y-m') : $time->format('Y-m-d');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function earningsPeriod(string $period, Collection $creators): array
+    {
+        $range = $this->earningsRange($period);
+        $buckets = $this->buckets($range['from'], $range['to'], $range['bucket']);
+        $series = array_map(fn (array $row): array => [...$row, 'gift_coins' => 0, 'ad_usd_micros' => 0], $buckets);
+        $between = [$range['from'], $range['to']];
+
+        $gifts = DB::table('gifts')->join('gift_types', 'gift_types.id', '=', 'gifts.gift_type_id')->whereIn('gifts.creator_profile_id', $creators)->whereBetween('gifts.created_at', $between)->get(['gifts.created_at', 'gift_types.coins']);
+        $ads = DB::table('creator_ad_revenue_allocations')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['created_at', 'status', 'gross_usd_micros', 'clawback_usd_micros']);
+        $payouts = DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['amount', 'unit']);
+
+        $statusTotals = [];
+        foreach ($gifts as $gift) {
+            $key = $this->bucketKey($gift->created_at, $range['bucket']);
+            if (isset($series[$key])) {
+                $series[$key]['gift_coins'] += (int) $gift->coins;
+            }
+        }
+        foreach ($ads as $ad) {
+            $net = max(0, (int) $ad->gross_usd_micros - (int) $ad->clawback_usd_micros);
+            $key = $this->bucketKey($ad->created_at, $range['bucket']);
+            if (isset($series[$key])) {
+                $series[$key]['ad_usd_micros'] += $net;
+            }
+            $statusTotals[(string) $ad->status] = ($statusTotals[(string) $ad->status] ?? 0) + $net;
+        }
+
+        return [
+            'key' => $period,
+            'from' => $range['from']->toIso8601String(),
+            'to' => $range['to']->toIso8601String(),
+            'bucket' => $range['bucket'],
+            'gift_count' => $gifts->count(),
+            'gift_coins' => (int) $gifts->sum('coins'),
+            'ad_allocations' => $ads->count(),
+            'ad_revenue_usd_micros' => array_sum($statusTotals),
+            'ad_status_totals' => (object) $statusTotals,
+            'payouts_count' => $payouts->count(),
+            'payouts_amount' => (int) $payouts->sum('amount'),
+            'payouts_unit' => $payouts->first()?->unit,
+            'series' => array_values($series),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function audienceInsights(string $period, Collection $creators, Collection $shows, Collection $owners): array
+    {
+        [$from, $bucket] = match ($period) {
+            '7d' => [now()->subDays(6)->startOfDay(), 'day'],
+            '1y' => [now()->subMonthsNoOverflow(11)->startOfMonth(), 'month'],
+            default => [now()->subDays(29)->startOfDay(), 'day'],
+        };
+        $buckets = $this->buckets($from, now(), $bucket);
+        $growth = array_map(fn (array $row): array => [...$row, 'listeners' => [], 'new_followers' => 0, 'followers' => 0], $buckets);
+
+        $plays = DB::table('playback_progress')
+            ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
+            ->join('users', 'users.id', '=', 'playback_progress.user_id')
+            ->leftJoin('user_profiles', 'user_profiles.user_id', '=', 'playback_progress.user_id')
+            ->leftJoin('devices', 'devices.id', '=', 'playback_progress.device_id')
+            ->whereIn('episodes.show_id', $shows)
+            ->whereNotIn('playback_progress.user_id', $owners)
+            ->where('playback_progress.updated_at', '>=', $from)
+            ->orderByDesc('playback_progress.updated_at')
+            ->limit(20000)
+            ->get(['playback_progress.user_id', 'playback_progress.completed', 'playback_progress.updated_at', 'users.name', 'users.handle', 'users.country_code', 'user_profiles.timezone', 'devices.platform']);
+
+        $listeners = $plays->groupBy('user_id');
+        $firstListens = $listeners->isEmpty() ? collect() : DB::table('playback_progress')
+            ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
+            ->whereIn('episodes.show_id', $shows)
+            ->whereIn('playback_progress.user_id', $listeners->keys())
+            ->groupBy('playback_progress.user_id')
+            ->select('playback_progress.user_id', DB::raw('min(playback_progress.created_at) as first_at'))
+            ->pluck('first_at', 'user_id');
+        $newListeners = $firstListens->filter(fn ($first): bool => $first !== null && Carbon::parse($first)->gte($from))->count();
+
+        $hours = array_fill(0, 24, 0);
+        $weekdays = array_fill(0, 7, 0);
+        foreach ($plays as $play) {
+            $key = $this->bucketKey($play->updated_at, $bucket);
+            if (isset($growth[$key])) {
+                $growth[$key]['listeners'][$play->user_id] = true;
+            }
+            try {
+                $local = Carbon::parse($play->updated_at)->setTimezone($play->timezone ?: 'UTC');
+            } catch (\Throwable) {
+                $local = Carbon::parse($play->updated_at);
+            }
+            $hours[(int) $local->format('G')]++;
+            $weekdays[(int) $local->format('N') - 1]++;
+        }
+
+        $followQuery = fn () => DB::table('follows')->whereIn('show_id', $shows)->whereNotIn('user_id', $owners);
+        $creatorFollowQuery = fn () => DB::table('creator_followers')->whereIn('creator_profile_id', $creators)->whereNotIn('user_id', $owners);
+        $runningFollowers = $followQuery()->where('created_at', '<', $from)->count() + $creatorFollowQuery()->where('created_at', '<', $from)->count();
+        $newFollows = $followQuery()->where('created_at', '>=', $from)->pluck('created_at')->merge($creatorFollowQuery()->where('created_at', '>=', $from)->pluck('created_at'));
+        foreach ($newFollows as $createdAt) {
+            $key = $this->bucketKey($createdAt, $bucket);
+            if (isset($growth[$key])) {
+                $growth[$key]['new_followers']++;
+            }
+        }
+        foreach ($growth as $key => $row) {
+            $runningFollowers += $row['new_followers'];
+            $growth[$key]['followers'] = $runningFollowers;
+            $growth[$key]['listeners'] = count($row['listeners']);
+        }
+
+        $listenerTotal = max(1, $listeners->count());
+        $platforms = $listeners
+            ->map(fn (Collection $rows): string => strtolower((string) ($rows->pluck('platform')->filter()->first() ?? 'unknown')))
+            ->countBy()
+            ->sortDesc()
+            ->map(fn (int $count, string $platform): array => ['platform' => $platform, 'listeners' => $count, 'share' => round($count / $listenerTotal, 4)])
+            ->values();
+        $locations = $listeners
+            ->map(fn (Collection $rows): string => strtoupper((string) ($rows->first()->country_code ?? '')))
+            ->countBy()
+            ->sortDesc()
+            ->take(6)
+            ->map(fn (int $count, string $code): array => ['country_code' => $code === '' ? null : $code, 'country' => $this->countryName($code), 'listeners' => $count, 'share' => round($count / $listenerTotal, 4)])
+            ->values();
+        $topListeners = $listeners
+            ->map(fn (Collection $rows, string $userId): array => ['id' => $userId, 'name' => (string) ($rows->first()->name ?? 'Listener'), 'handle' => $rows->first()->handle, 'episodes' => $rows->count(), 'completed' => $rows->where('completed', true)->count(), 'last_listened_at' => $rows->max('updated_at')])
+            ->sortByDesc(fn (array $row): array => [$row['episodes'], $row['completed']])
+            ->take(10)
+            ->values();
+
+        return [
+            'period' => $period,
+            'listeners' => $listeners->count(),
+            'plays' => $plays->count(),
+            'completions' => $plays->where('completed', true)->count(),
+            'new_listeners' => $newListeners,
+            'returning_listeners' => max(0, $listeners->count() - $newListeners),
+            'new_followers' => $newFollows->count(),
+            'growth' => array_values($growth),
+            'platforms' => $platforms,
+            'top_locations' => $locations,
+            'listening_hours' => $hours,
+            'listening_weekdays' => $weekdays,
+            'top_listeners' => $topListeners,
+        ];
+    }
+
+    private function countryName(string $code): string
+    {
+        if ($code === '') {
+            return 'Unknown';
+        }
+        if (class_exists(\Locale::class)) {
+            $name = \Locale::getDisplayRegion('-'.$code, 'en');
+            if (is_string($name) && $name !== '' && $name !== $code) {
+                return $name;
+            }
+        }
+
+        return $code;
     }
 
     private function presentTransactions(Collection $rows, Collection $accountIds): array
