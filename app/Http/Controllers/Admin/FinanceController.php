@@ -289,11 +289,13 @@ final class FinanceController extends Controller
         $queuedWithdrawals = DB::table('withdrawals')->where('state', 'queued')->latest()->limit(50)->get();
         $openExceptions = DB::table('finance_exceptions')->where('state', 'open')->latest()->limit(50)->get();
         $draftBatches = DB::table('creator_payout_batches')->where('state', 'draft')->count();
+        $pendingProofs = DB::table('payout_methods')->where('proof_status', 'pending')->count();
         $openDrift = (int) DB::table('reconciliation_items')->where('state', 'open')->count();
         $attention = [
             ['label' => 'Queued withdrawals', 'count' => $queuedWithdrawalCount, 'desk' => 'withdrawals', 'severity' => 'warning'],
             ['label' => 'Earn fraud review', 'count' => $earnReviewCount, 'desk' => 'earn', 'severity' => 'warning'],
             ['label' => 'Unmatched IAP receipts', 'count' => $unmatchedReceiptCount, 'desk' => 'iap', 'severity' => 'warning'],
+            ['label' => 'Account proofs awaiting review', 'count' => $pendingProofs, 'desk' => 'payouts', 'severity' => 'warning'],
             ['label' => 'Reconciliation drift', 'count' => $openDrift, 'desk' => 'ledger', 'severity' => 'warning'],
             ['label' => 'Draft payout batches', 'count' => $draftBatches, 'desk' => 'payouts', 'severity' => 'info'],
         ];
@@ -302,7 +304,7 @@ final class FinanceController extends Controller
             ['key' => 'iap', 'title' => 'IAP', 'blurb' => 'Unmatched receipts and verify failures', 'count' => $unmatchedReceiptCount],
             ['key' => 'earn', 'title' => 'Earn liability', 'blurb' => 'Outstanding coins, daily issuance, farms', 'count' => $earnReviewCount],
             ['key' => 'withdrawals', 'title' => 'Listener withdrawals', 'blurb' => 'Queue, paid, failed, gateway status', 'count' => DB::table('withdrawals')->whereIn('state', ['queued', 'processing'])->count()],
-            ['key' => 'payouts', 'title' => 'Creator payouts', 'blurb' => 'Monthly batch, hold, maker-checker', 'count' => DB::table('creator_payout_batches')->whereIn('state', ['draft', 'approved'])->count()],
+            ['key' => 'payouts', 'title' => 'Creator payouts', 'blurb' => 'Monthly batch, hold, maker-checker, account proofs', 'count' => DB::table('creator_payout_batches')->whereIn('state', ['draft', 'approved'])->count() + $pendingProofs],
             ['key' => 'reels-ads', 'title' => 'Reels ads', 'blurb' => 'AdMob statements, 30-day holds, USD reserve, and USD/NGN releases', 'count' => DB::table('creator_ad_revenue_allocations')->where('status', 'pending')->count()],
             ['key' => 'premium', 'title' => 'Premium', 'blurb' => 'MRR, churn, failed charges, refunds', 'count' => DB::table('premium_subscriptions')->where('state', 'active')->count()],
             ['key' => 'ledger', 'title' => 'Ledger explorer', 'blurb' => 'Immutable credits and reversing entries', 'count' => DB::table('ledger_transactions')->count()],
@@ -335,6 +337,21 @@ final class FinanceController extends Controller
             'payouts' => [
                 'batches' => DB::table('creator_payout_batches')->latest()->limit(50)->get(),
                 'revenue' => DB::table('creator_revenue_events')->latest('occurred_at')->limit(30)->get(),
+                'accountProofs' => DB::table('payout_methods')
+                    ->leftJoin('users', function ($join): void {
+                        $join->on('users.id', '=', 'payout_methods.owner_id')->where('payout_methods.owner_type', \App\Models\User::class);
+                    })
+                    ->where('payout_methods.proof_status', 'pending')
+                    ->orderByDesc('payout_methods.created_at')
+                    ->limit(50)
+                    ->get([
+                        'payout_methods.id',
+                        'payout_methods.label',
+                        'payout_methods.destination_last_four',
+                        'payout_methods.proof_status',
+                        'payout_methods.created_at',
+                        'users.name as owner_name',
+                    ]),
             ],
             'reelsAds' => [
                 'batches' => DB::table('admob_reconciliation_batches')->latest('statement_month')->limit(36)->get(),

@@ -6,6 +6,7 @@ use App\Actions\Finance\PostLedgerTransaction;
 use App\Http\Controllers\Controller;
 use App\Integrations\Payments\StoreReceiptVerifier;
 use App\Models\FinancialAccount;
+use App\Support\AgeMajority;
 use App\Support\ApiResponse;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -20,6 +21,9 @@ final class IapController extends Controller
     {
         if (! config('finance.public_enabled')) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Financial purchases are awaiting finance sign-off.', 503);
+        }
+        if ($denied = AgeMajority::missing($request->user())) {
+            return $denied;
         }
         $data = $request->validate(['store' => ['required', 'in:apple,google'], 'receipt' => ['required', 'string', 'max:20000']]);
         try {

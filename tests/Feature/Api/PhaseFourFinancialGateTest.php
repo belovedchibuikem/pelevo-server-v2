@@ -40,6 +40,8 @@ final class PhaseFourFinancialGateTest extends TestCase
         DB::table('coin_products')->insert(['id' => $product, 'store' => 'apple', 'product_id' => 'pelevo_coins_500', 'coins' => 500, 'unit' => 'PCN', 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
         $first = User::factory()->create();
         $second = User::factory()->create();
+        $first->forceFill(['age_majority_confirmed_at' => now()])->save();
+        $second->forceFill(['age_majority_confirmed_at' => now()])->save();
         $payload = ['store' => 'apple', 'receipt' => 'opaque-store-receipt'];
 
         $this->actingAs($first, 'sanctum')->postJson('/api/v1/iap/verify', $payload)->assertCreated();

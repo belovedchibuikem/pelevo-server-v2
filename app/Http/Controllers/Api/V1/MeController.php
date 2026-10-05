@@ -36,6 +36,22 @@ final class MeController extends Controller
                 'playlists' => DB::table('playlists')->where('user_id', $user->id)->count(),
             ],
             'unread_notifications' => DB::table('notifications')->where('user_id', $user->id)->whereNull('read_at')->whereNull('dismissed_at')->count(),
+            'age_majority_confirmed' => $user->age_majority_confirmed_at !== null,
+        ]);
+    }
+
+    public function confirmAgeMajority(Request $request): JsonResponse
+    {
+        $request->validate(['confirmed' => ['required', 'accepted']]);
+        $user = $request->user();
+        if ($user->age_majority_confirmed_at === null) {
+            $user->forceFill(['age_majority_confirmed_at' => now()])->save();
+            $user = $user->fresh();
+        }
+
+        return ApiResponse::success([
+            'age_majority_confirmed' => true,
+            'age_majority_confirmed_at' => $user->age_majority_confirmed_at?->toIso8601String(),
         ]);
     }
 

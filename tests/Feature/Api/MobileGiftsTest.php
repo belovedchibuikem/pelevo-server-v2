@@ -55,6 +55,7 @@ final class MobileGiftsTest extends TestCase
         Http::fake(['https://apple.test/verify' => Http::response(['valid' => true, 'original_transaction_id' => 'mobile-iap-1', 'product_id' => 'pelevo_coins_500', 'environment' => 'sandbox'])]);
         DB::table('coin_products')->insert(['id' => (string) Str::ulid(), 'store' => 'apple', 'product_id' => 'pelevo_coins_500', 'coins' => 500, 'unit' => 'PCN', 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
         $user = User::factory()->create();
+        $user->forceFill(['age_majority_confirmed_at' => now()])->save();
         $payload = ['store' => 'apple', 'receipt' => 'opaque-store-receipt'];
         $this->actingAs($user, 'sanctum')->postJson('/api/v1/iap/verify', $payload)->assertCreated()->assertJsonPath('data.coins', 500)->assertJsonPath('data.unit', 'PCN')->assertJsonPath('data.remaining_balance', 500)->assertJsonMissingPath('data.verification_payload')->assertJsonMissingPath('data.receipt_hash')->assertJsonMissingPath('data.original_transaction_id');
     }

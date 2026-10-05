@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\AdminAccountController;
+use App\Http\Controllers\Admin\AdminPayoutProofController;
 use App\Http\Controllers\Admin\AdminPasswordResetController;
 use App\Http\Controllers\Admin\AdminSearchController;
 use App\Http\Controllers\Admin\AdvancedOperationsController;
@@ -139,6 +140,8 @@ Route::prefix('api/admin/v1')->middleware(['auth.admin', 'admin.mfa'])->group(fu
     Route::post('finance/creator-payout-batches', [CreatorPayoutController::class, 'store'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh']);
     Route::get('finance/creator-payout-batches/{batch}', [CreatorPayoutController::class, 'show'])->middleware('admin.permission:finance.view');
     Route::post('finance/creator-payout-batches/{batch}/approval', [CreatorPayoutController::class, 'approve'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh']);
+    Route::get('finance/payout-methods/{payoutMethod}/proof', [AdminPayoutProofController::class, 'show'])->middleware('admin.permission:finance.view')->whereUlid('payoutMethod');
+    Route::post('finance/payout-methods/{payoutMethod}/decision', [AdminPayoutProofController::class, 'decide'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh'])->whereUlid('payoutMethod');
     Route::put('finance/creator-settings/{creator}', [FinanceController::class, 'creatorCompliance'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh']);
     Route::put('finance/premium/plans', [FinanceController::class, 'premiumPlan'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::post('finance/fees', [FinanceController::class, 'feeVersion'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);

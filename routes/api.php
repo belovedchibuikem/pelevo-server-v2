@@ -79,6 +79,7 @@ Route::prefix('v1')->group(function (): void {
     });
     Route::middleware('auth:sanctum')->group(function (): void {
         Route::get('me', [MeController::class, 'show']);
+        Route::post('me/age-majority', [MeController::class, 'confirmAgeMajority']);
         Route::patch('me', [ProfileController::class, 'update']);
         Route::post('me/avatar', [ProfileController::class, 'avatar'])->middleware('throttle:10,1');
         Route::patch('me/password', [PasswordController::class, 'update']);
@@ -264,6 +265,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('withdrawals', [WithdrawalController::class, 'store']);
         Route::get('payout-methods', [PayoutMethodController::class, 'index']);
         Route::post('payout-methods', [PayoutMethodController::class, 'store'])->middleware('throttle:5,1');
+        Route::post('payout-methods/{payoutMethod}/account-proof', [PayoutMethodController::class, 'uploadAccountProof'])->middleware('throttle:5,1')->whereUlid('payoutMethod');
         Route::get('library', [LibraryController::class, 'index']);
         Route::get('library/saved', [LibraryController::class, 'saved']);
         Route::get('library/liked', [LibraryController::class, 'liked']);

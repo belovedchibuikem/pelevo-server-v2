@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\CreatorProfile;
+use App\Support\AgeMajority;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -37,6 +38,9 @@ final class CreatorPayoutSettingsController extends Controller
         $existing = DB::table('creator_payout_settings')->where('creator_profile_id', $creator->id)->first();
         $methodId = $data['payout_method_id'] ?? $existing?->payout_method_id;
         if (array_key_exists('payout_method_id', $data)) {
+            if ($denied = AgeMajority::missing($request->user())) {
+                return $denied;
+            }
             $method = DB::table('payout_methods')->where('id', $data['payout_method_id'])->where('owner_type', get_class($request->user()))->where('owner_id', $request->user()->id)->whereNotNull('verified_at')->first();
             if (! $method) {
                 return ApiResponse::error('PAYOUT_METHOD_UNVERIFIED', 'A verified payout method owned by you is required.', 409);

@@ -6,6 +6,7 @@ use App\Actions\Finance\PostLedgerTransaction;
 use App\Http\Controllers\Controller;
 use App\Models\ConfigurationVersion;
 use App\Models\FinancialAccount;
+use App\Support\AgeMajority;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,9 @@ final class WithdrawalController extends Controller
     {
         if (! config('finance.public_enabled')) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Withdrawals are awaiting finance sign-off.', 503);
+        }
+        if ($denied = AgeMajority::missing($request->user())) {
+            return $denied;
         }
         $key = (string) $request->header('Idempotency-Key');
         if (! $key) {

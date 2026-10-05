@@ -18,7 +18,7 @@ type Props = {
   iap: { unmatched: Row[] };
   earn: Earn;
   withdrawals: { queued: Row[]; processing: Row[]; failed: Row[] };
-  payouts: { batches: Row[]; revenue: Row[] };
+  payouts: { batches: Row[]; revenue: Row[]; accountProofs: Row[] };
   reelsAds: ReelsAds;
   premium: Premium;
   ledger: { accounts: Row[]; transactions: Row[] };
@@ -180,7 +180,20 @@ function WithdrawalDesk({ withdrawals }: { withdrawals: Props['withdrawals'] }) 
 
 function PayoutDesk({ payouts }: { payouts: Props['payouts'] }) {
   return <>
-    <div className="mb-6">
+    <h3 className="font-semibold">Account proofs awaiting review</h3>
+    <p className="mt-1 mb-3 max-w-3xl text-sm text-slate-500">Open the private document, compare only the visible full name and account number, and confirm the creator is 18 or older. Approving or rejecting deletes the file immediately. The storage path is never shown.</p>
+    <List rows={payouts.accountProofs} empty="No account proofs are waiting for review.">{row => <Item key={String(row.id)}>
+      <div>
+        <b>{row.label ? String(row.label) : 'Bank account'}</b>
+        <small className="block text-slate-500">{row.owner_name ? String(row.owner_name) : 'Creator'} · ···· {String(row.destination_last_four ?? '')}</small>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <a className="rounded-lg border border-teal-700 px-3 py-1.5 text-xs font-semibold text-teal-800" href={`/api/admin/v1/finance/payout-methods/${row.id}/proof`} target="_blank" rel="noopener noreferrer">View proof</a>
+        <FinanceAction title="Approve account proof" description="Marks the bank payout method verified and deletes the uploaded file from private storage. Confirm the visible name matches the account holder and that they are 18 or older." trigger="Approve" method="POST" endpoint={`/api/admin/v1/finance/payout-methods/${row.id}/decision`} fields={[{ name: 'decision', label: 'Decision', type: 'hidden', defaultValue: 'approved' }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+        <FinanceAction title="Reject account proof" description="Leaves the payout method unverified and deletes the uploaded file. The creator must upload a new cropped proof before payouts can be approved." trigger="Reject" method="POST" endpoint={`/api/admin/v1/finance/payout-methods/${row.id}/decision`} fields={[{ name: 'decision', label: 'Decision', type: 'hidden', defaultValue: 'rejected' }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+      </div>
+    </Item>}</List>
+    <div className="mb-6 mt-8">
       <FinanceAction title="Prepare monthly creator payout batch" description="Selects verified creators at or above their currency-specific minimum. USD and NGN ad balances are never mixed. A different finance administrator must approve." trigger="Prepare payout batch" method="POST" endpoint="/api/admin/v1/finance/creator-payout-batches" idempotent fields={[{ name: 'period_start', label: 'Period start', type: 'date' }, { name: 'period_end', label: 'Period end', type: 'date' }, { name: 'unit', label: 'Ledger currency', type: 'select', options: ['USD', 'NGN', 'PCN'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
     </div>
     <h3 className="font-semibold">Payout batches</h3>

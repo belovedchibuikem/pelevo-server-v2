@@ -25,6 +25,7 @@ final class FinanceOperationsTest extends TestCase
         Http::preventStrayRequests();
         Http::fake(['https://paypal.test/resolve' => Http::response(['verified' => true, 'reference' => 'resolve-1', 'account_name' => 'Verified Person'])]);
         $user = User::factory()->create();
+        $user->forceFill(['age_majority_confirmed_at' => now()])->save();
         $payload = ['provider' => 'paypal', 'kind' => 'paypal', 'destination' => ['email' => 'earn@example.com']];
         $method = $this->actingAs($user, 'sanctum')->postJson('/api/v1/payout-methods', $payload)->assertCreated()->assertJsonMissing(['destination_encrypted'])->json('data.id');
         $ciphertext = DB::table('payout_methods')->where('id', $method)->value('destination_encrypted');

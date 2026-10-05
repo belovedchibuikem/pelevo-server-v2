@@ -189,10 +189,15 @@ paths:
   /me:
     get:
       security: [{ bearerAuth: [] }]
-      responses: { '200': { description: 'Current user with onboarded boolean, interests array, nullable profile (bio, avatar_url, locale, timezone), capabilities.creator_access, stats (following shows, creator followers, verified podcasts, owned playlists), and unread_notifications. Counts are nonnegative integers.' } }
+      responses: { '200': { description: 'Current user with onboarded boolean, interests array, nullable profile (bio, avatar_url, locale, timezone), capabilities.creator_access, stats (following shows, creator followers, verified podcasts, owned playlists), unread_notifications, and age_majority_confirmed. Counts are nonnegative integers.' } }
     patch:
       security: [{ bearerAuth: [] }]
       responses: { '200': { description: Profile updated }, '422': { $ref: '#/components/responses/Validation' } }
+  /me/age-majority:
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Records that the caller confirmed they are 18 or the age of majority. confirmed must be true. Repeating the call does not change the original timestamp.
+      responses: { '200': { description: age_majority_confirmed true }, '422': { $ref: '#/components/responses/Validation' } }
   /me/avatar:
     post:
       security: [{ bearerAuth: [] }]
@@ -559,8 +564,8 @@ paths:
   /iap/verify:
     post:
       security: [{ bearerAuth: [] }]
-      description: Verifies an Apple or Google receipt server-to-server and credits the gift wallet exactly once.
-      responses: { '201': { description: Receipt verified and balanced credit posted }, '409': { description: Receipt replayed by another user }, '422': { description: Receipt or product is unverified }, '503': { description: Awaiting finance sign-off } }
+      description: Verifies an Apple or Google receipt server-to-server and credits the gift wallet exactly once. Requires a stored age-of-majority confirmation.
+      responses: { '201': { description: Receipt verified and balanced credit posted }, '403': { description: AGE_CONFIRMATION_REQUIRED }, '409': { description: Receipt replayed by another user }, '422': { description: Receipt or product is unverified }, '503': { description: Awaiting finance sign-off } }
   /gifts/wallet:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Spend-only gift wallet unit PCN and integer balance. Reading does not create an account. } } }
   /gifts/wallet/activity:
@@ -588,11 +593,16 @@ paths:
   /earn/sessions/{session}/complete:
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Balanced Earn award posted exactly once }, '409': { description: Locked or held for review } } }
   /payout-methods:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Masked payout methods } } }
-    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Encrypted externally verified payout destination }, '422': { $ref: '#/components/responses/Validation' } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Masked payout methods with proof_status. Storage paths stay off the client.' } } }
+    post: { security: [{ bearerAuth: [] }], description: Requires a stored age-of-majority confirmation. Bank methods stay unverified until an administrator approves a private account proof., responses: { '201': { description: Encrypted payout destination }, '403': { description: AGE_CONFIRMATION_REQUIRED }, '422': { $ref: '#/components/responses/Validation' } } }
+  /payout-methods/{payoutMethod}/account-proof:
+    post:
+      security: [{ bearerAuth: [] }]
+      description: Stores a JPG, PNG, or PDF of at most 4 MB on the private proofs disk and marks the bank method pending. The response never includes the storage path. Replacing a proof deletes the previous file.
+      responses: { '200': { description: proof_status pending }, '403': { description: AGE_CONFIRMATION_REQUIRED }, '404': { description: Payout method not owned by the caller }, '422': { $ref: '#/components/responses/Validation' } }
   /withdrawals:
     get: { security: [{ bearerAuth: [] }], parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }, { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }], responses: { '200': { description: 'Owner-scoped withdrawal rows: id, decimal-string coins, state, ISO created_at. Meta contains user_id, cursor and has_more. Stable descending created_at/id pagination. Does not expose payout destinations, request hashes or idempotency keys.' }, '401': { description: Authentication required }, '422': { description: Invalid pagination input } } }
-    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Earn balance reserved. Public receipt is id, decimal-string coins, state and ISO created_at. Idempotency-Key is required. Destinations, request hashes and keys stay off the client.' }, '409': { description: Insufficient balance, unverified method or idempotency conflict }, '503': { description: Awaiting finance sign-off } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Earn balance reserved. Public receipt is id, decimal-string coins, state and ISO created_at. Idempotency-Key is required. Destinations, request hashes and keys stay off the client. Requires a stored age-of-majority confirmation.' }, '403': { description: AGE_CONFIRMATION_REQUIRED }, '409': { description: Insufficient balance, unverified method or idempotency conflict }, '503': { description: Awaiting finance sign-off } } }
   /premium/plans:
     get: { responses: { '200': { description: 'Active plans as id, slug, name, price_minor, currency, interval' } } }
   /premium/me:
