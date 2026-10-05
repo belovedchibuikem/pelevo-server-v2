@@ -139,16 +139,17 @@ final class StudioWorkspaceController extends Controller
         }
         $owners = $this->ownerUserIds($creators);
 
+        $showFollowers = DB::table('follows')->whereIn('show_id', $shows)->count();
         $summary = [
-            'followers' => DB::table('creator_followers')->whereIn('creator_profile_id', $creators)->whereNotIn('user_id', $owners)->count(),
-            'show_followers' => DB::table('follows')->whereIn('show_id', $shows)->whereNotIn('user_id', $owners)->count(),
+            'followers' => $showFollowers,
+            'show_followers' => $showFollowers,
             'listeners_30d' => DB::table('playback_progress')->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')->whereIn('episodes.show_id', $shows)->whereNotIn('playback_progress.user_id', $owners)->where('playback_progress.updated_at', '>=', now()->subDays(30))->distinct()->count('playback_progress.user_id'),
         ];
         if (! $request->filled('period')) {
             return ApiResponse::success($summary);
         }
 
-        return ApiResponse::success([...$summary, ...$this->audienceInsights($request->string('period')->toString(), $creators, $shows, $owners)]);
+        return ApiResponse::success([...$summary, ...$this->audienceInsights($request->string('period')->toString(), $shows, $owners)]);
     }
 
     public function monetization(Request $request): JsonResponse
@@ -351,7 +352,7 @@ final class StudioWorkspaceController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function audienceInsights(string $period, Collection $creators, Collection $shows, Collection $owners): array
+    private function audienceInsights(string $period, Collection $shows, Collection $owners): array
     {
         [$from, $bucket] = match ($period) {
             '7d' => [now()->subDays(6)->startOfDay(), 'day'],
@@ -399,10 +400,9 @@ final class StudioWorkspaceController extends Controller
             $weekdays[(int) $local->format('N') - 1]++;
         }
 
-        $followQuery = fn () => DB::table('follows')->whereIn('show_id', $shows)->whereNotIn('user_id', $owners);
-        $creatorFollowQuery = fn () => DB::table('creator_followers')->whereIn('creator_profile_id', $creators)->whereNotIn('user_id', $owners);
-        $runningFollowers = $followQuery()->where('created_at', '<', $from)->count() + $creatorFollowQuery()->where('created_at', '<', $from)->count();
-        $newFollows = $followQuery()->where('created_at', '>=', $from)->pluck('created_at')->merge($creatorFollowQuery()->where('created_at', '>=', $from)->pluck('created_at'));
+        $followQuery = fn () => DB::table('follows')->whereIn('show_id', $shows);
+        $runningFollowers = $followQuery()->where('created_at', '<', $from)->count();
+        $newFollows = $followQuery()->where('created_at', '>=', $from)->pluck('created_at');
         foreach ($newFollows as $createdAt) {
             $key = $this->bucketKey($createdAt, $bucket);
             if (isset($growth[$key])) {

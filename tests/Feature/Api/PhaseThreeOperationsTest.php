@@ -73,9 +73,10 @@ final class PhaseThreeOperationsTest extends TestCase
             ->assertJsonPath('data.0.saved', false)
             ->assertJsonMissingPath('data.0.qualified_views');
         $this->actingAs($viewer, 'sanctum')->getJson('/api/v1/reels/following')->assertOk()->assertJsonPath('data.0.id', $reel);
-        $this->actingAs($viewer, 'sanctum')->getJson('/api/v1/reels/trending')->assertOk()->assertJsonPath('data.0.creator_profile_id', $creator->id);
-        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/reels/for-you')->assertOk()->assertJsonCount(0, 'data');
-        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/reels/trending')->assertOk()->assertJsonCount(0, 'data');
+        $this->actingAs($viewer, 'sanctum')->getJson('/api/v1/reels/trending')->assertOk()->assertJsonPath('data.0.creator_profile_id', $creator->id)->assertJsonPath('data.0.views_count', 0);
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/reels/for-you')->assertOk()->assertJsonPath('data.0.id', $reel);
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/reels/following')->assertOk()->assertJsonCount(0, 'data');
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/reels/trending')->assertOk()->assertJsonPath('data.0.id', $reel);
         $hidden = (string) Str::ulid();
         DB::table('reels')->insert(['id' => $hidden, 'creator_profile_id' => $creator->id, 'state' => 'published', 'duration_ms' => 8000, 'published_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
         DB::table('reel_engagements')->insert(['reel_id' => $hidden, 'user_id' => $viewer->id, 'liked' => false, 'saved' => false, 'not_interested' => true, 'created_at' => now(), 'updated_at' => now()]);

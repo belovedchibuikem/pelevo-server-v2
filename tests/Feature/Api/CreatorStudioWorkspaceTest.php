@@ -43,6 +43,10 @@ final class CreatorStudioWorkspaceTest extends TestCase
         $this->assertDatabaseCount('claim_challenges', 2);
         $this->assertDatabaseMissing('claim_challenges', ['show_claim_id' => $claim, 'consumed_at' => null, 'attempts' => 1]);
         Mail::assertSent(ClaimVerificationCode::class, 2);
+        $this->actingAs($other, 'sanctum')->deleteJson("/api/v1/claims/{$claim}")->assertNotFound();
+        $this->actingAs($owner, 'sanctum')->deleteJson("/api/v1/claims/{$claim}")->assertOk()->assertJsonPath('data.deleted', true);
+        $this->actingAs($owner, 'sanctum')->getJson('/api/v1/claims')->assertOk()->assertJsonCount(0, 'data');
+        $this->actingAs($owner, 'sanctum')->deleteJson("/api/v1/claims/{$claim}")->assertNotFound();
     }
 
     public function test_verified_owner_and_studio_member_receive_scoped_creator_reads(): void
@@ -63,6 +67,7 @@ final class CreatorStudioWorkspaceTest extends TestCase
         DB::table('studio_members')->insert(['studio_id' => $studio, 'user_id' => $member->id, 'role' => 'analyst', 'created_at' => now(), 'updated_at' => now()]);
         $listener = User::factory()->create(['name' => 'Listener Ada', 'handle' => 'ada_listener']);
         DB::table('creator_followers')->insert(['creator_profile_id' => $creator->id, 'user_id' => $listener->id, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('follows')->insert(['user_id' => $listener->id, 'show_id' => $show->id, 'created_at' => now(), 'updated_at' => now()]);
         $giftType = GiftType::create(['slug' => 'studio-applause', 'name' => 'Applause', 'coins' => 100, 'version' => 1]);
         $funding = FinancialAccount::create(['type' => 'studio_test_funding', 'unit' => 'PCN', 'balance' => 0]);
         $creatorAccount = FinancialAccount::create(['owner_type' => CreatorProfile::class, 'owner_id' => $creator->id, 'type' => 'creator_balance', 'unit' => 'PCN', 'balance' => 0]);
@@ -75,12 +80,12 @@ final class CreatorStudioWorkspaceTest extends TestCase
 
         foreach ([$owner, $member] as $user) {
             $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio')->assertOk()->assertJsonPath('data.display_name', 'Owner');
-            $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/shows')->assertOk()->assertJsonPath('data.0.id', $show->id)->assertJsonPath('data.0.title', 'Studio Show')->assertJsonPath('data.0.episodes_count', 1)->assertJsonPath('data.0.follower_count', 0);
+            $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/shows')->assertOk()->assertJsonPath('data.0.id', $show->id)->assertJsonPath('data.0.title', 'Studio Show')->assertJsonPath('data.0.episodes_count', 1)->assertJsonPath('data.0.follower_count', 1);
             $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/episodes')->assertOk()->assertJsonPath('data.0.id', $episode->id)->assertJsonPath('data.0.title', 'Episode')->assertJsonPath('data.0.show_title', 'Studio Show')->assertJsonPath('data.0.duration_seconds', 1256)->assertJsonPath('data.0.availability', 'available');
             $this->actingAs($user, 'sanctum')->getJson("/api/v1/studio/episodes/{$episode->id}")->assertOk()->assertJsonPath('data.id', $episode->id)->assertJsonPath('data.show_title', 'Studio Show');
             $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/reels')->assertOk()->assertJsonPath('data.0.id', $reel)->assertJsonPath('data.0.caption', 'Studio reel')->assertJsonPath('data.0.episode_title', 'Episode')->assertJsonPath('data.0.state', 'published');
             $this->actingAs($user, 'sanctum')->getJson("/api/v1/studio/reels/{$reel}")->assertOk()->assertJsonPath('data.id', $reel)->assertJsonPath('data.episode_title', 'Episode');
-            $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/audience')->assertOk()->assertJsonPath('data.followers', 1)->assertJsonPath('data.show_followers', 0)->assertJsonPath('data.listeners_30d', 0);
+            $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/audience')->assertOk()->assertJsonPath('data.followers', 1)->assertJsonPath('data.show_followers', 1)->assertJsonPath('data.listeners_30d', 0);
             $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/audience/followers')->assertOk()->assertJsonPath('data.0.id', $listener->id)->assertJsonPath('data.0.name', 'Listener Ada')->assertJsonPath('data.0.handle', 'ada_listener');
             $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/audience/supporters')->assertOk()->assertJsonPath('data.0.id', $listener->id)->assertJsonPath('data.0.name', 'Listener Ada')->assertJsonPath('data.0.gifts_count', 1)->assertJsonPath('data.0.coins', 100)->assertJsonPath('meta.supporters_count', 1)->assertJsonPath('meta.coins_received', 100);
             $this->actingAs($user, 'sanctum')->getJson('/api/v1/studio/monetization')->assertOk()->assertJsonPath('data.gifts_received', 1)->assertJsonPath('data.payouts_count', 0)->assertJsonPath('data.accounts.0.balance', 90)->assertJsonPath('data.tax_profiles.0.country_code', 'NG')->assertJsonMissingPath('data.tax_profiles.0.details_encrypted');
@@ -132,6 +137,7 @@ final class CreatorStudioWorkspaceTest extends TestCase
         $this->actingAs($outsider, 'sanctum')->getJson("/api/v1/studio/episodes/{$episode->id}")->assertForbidden();
         $this->actingAs($outsider, 'sanctum')->getJson('/api/v1/studio/reels')->assertForbidden();
         $this->actingAs($outsider, 'sanctum')->getJson('/api/v1/studio/transactions')->assertForbidden();
+        $this->actingAs($owner, 'sanctum')->deleteJson("/api/v1/claims/{$claim}")->assertStatus(409);
         $this->actingAs($outsider, 'sanctum')->getJson('/api/v1/studio/audience/followers')->assertForbidden();
         $this->actingAs($outsider, 'sanctum')->getJson('/api/v1/studio/audience/supporters')->assertForbidden();
     }

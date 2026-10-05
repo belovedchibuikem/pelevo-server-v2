@@ -178,6 +178,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('shows/{show}/claims', [CreatorController::class, 'claim']);
         Route::post('claims/{claim}/verify', [CreatorController::class, 'verify']);
         Route::get('claims/{claim}', [CreatorController::class, 'showClaim']);
+        Route::delete('claims/{claim}', [CreatorController::class, 'destroyClaim']);
         Route::post('claims/{claim}/challenge', [CreatorController::class, 'resend'])->middleware('throttle:5,60');
         Route::post('claims/{claim}/description/confirm', [CreatorController::class, 'confirmDescription']);
         Route::get('studio', [CreatorController::class, 'studio']);

@@ -34,6 +34,7 @@ final class PublishedReelPresenter
         $likes = DB::table('reel_engagements')->whereIn('reel_id', $ids)->where('liked', true)->selectRaw('reel_id, count(*) as aggregate')->groupBy('reel_id')->pluck('aggregate', 'reel_id');
         $saves = DB::table('reel_engagements')->whereIn('reel_id', $ids)->where('saved', true)->selectRaw('reel_id, count(*) as aggregate')->groupBy('reel_id')->pluck('aggregate', 'reel_id');
         $comments = DB::table('comments')->where('commentable_type', 'reel')->whereIn('commentable_id', $ids)->whereNull('hidden_at')->selectRaw('commentable_id, count(*) as aggregate')->groupBy('commentable_id')->pluck('aggregate', 'commentable_id');
+        $views = DB::table('reel_views')->whereIn('reel_id', $ids)->selectRaw('reel_id, count(*) as aggregate')->groupBy('reel_id')->pluck('aggregate', 'reel_id');
         $mine = DB::table('reel_engagements')->where('user_id', $userId)->whereIn('reel_id', $ids)->get()->keyBy('reel_id');
         $following = DB::table('creator_followers')->where('user_id', $userId)->whereIn('creator_profile_id', $creatorIds)->pluck('creator_profile_id')->all();
         $episodes = $episodeIds === []
@@ -51,7 +52,7 @@ final class PublishedReelPresenter
                 ])
                 ->keyBy('id');
 
-        return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $mine, $following, $episodes, $linkedByReel, $request): ?array {
+        return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $views, $mine, $following, $episodes, $linkedByReel, $request): ?array {
             $creator = $creators->get($row->creator_profile_id);
             if (! is_string($creator?->display_name) || $creator->display_name === '') {
                 return null;
@@ -91,6 +92,7 @@ final class PublishedReelPresenter
                 'likes_count' => (int) ($likes[$row->id] ?? 0),
                 'comments_count' => (int) ($comments[$row->id] ?? 0),
                 'saves_count' => (int) ($saves[$row->id] ?? 0),
+                'views_count' => (int) ($views[$row->id] ?? 0),
                 'liked' => $this->flag($engagement?->liked),
                 'saved' => $this->flag($engagement?->saved),
                 'following' => in_array($row->creator_profile_id, $following, true),

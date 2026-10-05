@@ -61,6 +61,23 @@ final class CreatorController extends Controller
         return $row ? ApiResponse::success($row) : ApiResponse::error('NOT_FOUND', 'Claim not found.', 404);
     }
 
+    public function destroyClaim(string $claim, Request $request): JsonResponse
+    {
+        $creator = CreatorProfile::where('user_id', $request->user()->id)->first();
+        $row = $creator
+            ? DB::table('show_claims')->where('id', $claim)->where('creator_profile_id', $creator->id)->first()
+            : null;
+        if (! $row) {
+            return ApiResponse::error('NOT_FOUND', 'Claim not found.', 404);
+        }
+        if ($row->state === 'verified' || DB::table('verified_show_claims')->where('show_claim_id', $claim)->exists()) {
+            return ApiResponse::error('CONFLICT', 'An approved podcast claim cannot be deleted.', 409);
+        }
+        DB::table('show_claims')->where('id', $claim)->delete();
+
+        return ApiResponse::success(['deleted' => true]);
+    }
+
     public function resend(string $claim, Request $request, RssOwnershipInspector $inspector): JsonResponse
     {
         $creator = CreatorProfile::where('user_id', $request->user()->id)->first();

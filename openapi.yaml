@@ -748,6 +748,7 @@ paths:
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Expiring email or description ownership challenge created }, '422': { $ref: '#/components/responses/Validation' } } }
   /claims/{claim}:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Private claim status with masked challenge details }, '404': { description: Claim not owned by caller } } }
+    delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Pending, expired, or rejected claim removed }, '404': { description: Claim not owned by caller }, '409': { description: Approved claim cannot be deleted } } }
   /claims/{claim}/verify:
     post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Email claim verified }, '409': { description: Expired challenge or competing verified claim }, '422': { $ref: '#/components/responses/Validation' } } }
   /claims/{claim}/challenge:

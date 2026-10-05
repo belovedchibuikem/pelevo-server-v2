@@ -163,14 +163,12 @@ final class ReelController extends Controller
         $query = DB::table('reels')->where('reels.state', 'published')->whereNotExists(function ($hidden) use ($request): void {
             $hidden->selectRaw('1')->from('reel_engagements')->whereColumn('reel_engagements.reel_id', 'reels.id')->where('reel_engagements.user_id', $request->user()->id)->where('reel_engagements.not_interested', true);
         });
-        if ($mode !== 'saved') {
+        if ($mode === 'following') {
             $query->whereNotExists(function ($own) use ($request): void {
                 $own->selectRaw('1')->from('creator_profiles')->whereColumn('creator_profiles.id', 'reels.creator_profile_id')->where('creator_profiles.user_id', $request->user()->id);
             })->whereNotExists(function ($studio) use ($request): void {
                 $studio->selectRaw('1')->from('studios')->join('studio_members', 'studio_members.studio_id', '=', 'studios.id')->whereColumn('studios.creator_profile_id', 'reels.creator_profile_id')->where('studio_members.user_id', $request->user()->id);
             });
-        }
-        if ($mode === 'following') {
             $query->where(function ($scope) use ($request): void {
                 $scope->whereExists(function ($followed) use ($request): void {
                     $followed->selectRaw('1')
@@ -189,7 +187,7 @@ final class ReelController extends Controller
             $limit = min(max($request->integer('limit', 20), 1), 50);
             $offset = max(0, (int) $request->input('cursor', 0));
             try {
-                [$rows, $hasMore] = app(ReelFeedRanker::class)->page($query, $limit, $offset);
+                [$rows, $hasMore] = app(ReelFeedRanker::class)->page($query, $limit, $offset, $request->user()->id);
 
                 return ApiResponse::success(
                     $presenter->present($rows, $request->user()->id, $request),
@@ -200,8 +198,40 @@ final class ReelController extends Controller
             }
         }
         if ($mode === 'trending') {
-            $query->select('reels.*')->selectRaw('(select count(*) from reel_view_credits where reel_view_credits.reel_id = reels.id) as qualified_views')->orderByDesc('qualified_views');
-        } elseif ($mode === 'saved') {
+            $limit = min(max($request->integer('limit', 30), 1), 50);
+            $offset = max(0, (int) $request->input('cursor', 0));
+            $rows = $query
+                ->leftJoinSub(
+                    DB::table('reel_views')->select('reel_id', DB::raw('count(*) as c'))->groupBy('reel_id'),
+                    'reel_trending_views',
+                    'reel_trending_views.reel_id',
+                    '=',
+                    'reels.id',
+                )
+                ->leftJoinSub(
+                    DB::table('reel_engagements')->where('liked', true)->select('reel_id', DB::raw('count(*) as c'))->groupBy('reel_id'),
+                    'reel_trending_likes',
+                    'reel_trending_likes.reel_id',
+                    '=',
+                    'reels.id',
+                )
+                ->select('reels.*')
+                ->selectRaw('coalesce(reel_trending_views.c, 0) as views_total')
+                ->orderByRaw('coalesce(reel_trending_views.c, 0) desc')
+                ->orderByRaw('coalesce(reel_trending_likes.c, 0) desc')
+                ->orderByDesc('reels.published_at')
+                ->orderByDesc('reels.id')
+                ->offset($offset)
+                ->limit($limit + 1)
+                ->get();
+            $hasMore = $rows->count() > $limit;
+
+            return ApiResponse::success(
+                $presenter->present($rows->take($limit)->all(), $request->user()->id, $request),
+                ['cursor' => $hasMore ? (string) ($offset + $limit) : null, 'has_more' => $hasMore],
+            );
+        }
+        if ($mode === 'saved') {
             $query->join('reel_engagements', function ($join) use ($request): void {
                 $join->on('reel_engagements.reel_id', '=', 'reels.id')
                     ->where('reel_engagements.user_id', $request->user()->id)

@@ -19,19 +19,32 @@ final class ReelFeedRanker
 
     public const EXPLORE_MAX_AGE_DAYS = 7;
 
+    public const FOLLOWED_MULTIPLIER = 2;
+
+    public const FOLLOWED_BONUS = 10;
+
     /**
      * @return array{0: list<object>, 1: bool}
      */
-    public function page(Builder $query, int $limit, int $offset): array
+    public function page(Builder $query, int $limit, int $offset, ?string $userId = null): array
     {
         $pool = $this->pool($query);
+        [$seen, $followedCreators, $followedShows] = $this->viewerSignals($pool, $userId);
+        $unseen = fn (object $row): int => isset($seen[(string) $row->id]) ? 0 : 1;
+        $affinity = function (object $row) use ($followedCreators, $followedShows): int {
+            $score = (int) ($row->popularity_score ?? 0);
+            $followed = isset($followedCreators[(string) $row->creator_profile_id])
+                || (is_string($row->show_id ?? null) && isset($followedShows[$row->show_id]));
+
+            return $followed ? ($score * self::FOLLOWED_MULTIPLIER) + self::FOLLOWED_BONUS : $score;
+        };
         $popular = $pool
-            ->sortByDesc(fn (object $row): array => [(int) ($row->popularity_score ?? 0), (string) $row->id])
+            ->sortByDesc(fn (object $row): array => [$unseen($row), $affinity($row), (string) $row->id])
             ->values()
             ->all();
         $explore = $pool
             ->filter(fn (object $row): bool => $this->isExplore($row))
-            ->sortByDesc(fn (object $row): array => [(string) ($row->published_at ?? ''), (string) $row->id])
+            ->sortByDesc(fn (object $row): array => [$unseen($row), (string) ($row->published_at ?? ''), (string) $row->id])
             ->values()
             ->all();
         $ordered = self::interleave($popular, $explore);
@@ -86,6 +99,32 @@ final class ReelFeedRanker
         }
 
         return $out;
+    }
+
+    /**
+     * @return array{0: array<string, true>, 1: array<string, true>, 2: array<string, true>}
+     */
+    private function viewerSignals($pool, ?string $userId): array
+    {
+        if ($userId === null || $pool->isEmpty()) {
+            return [[], [], []];
+        }
+        try {
+            $ids = $pool->pluck('id')->map(fn ($id): string => (string) $id)->all();
+            $seen = DB::table('reel_views')->where('user_id', $userId)->whereIn('reel_id', $ids)->distinct()->pluck('reel_id');
+            $creators = DB::table('creator_followers')->where('user_id', $userId)->pluck('creator_profile_id');
+            $shows = DB::table('follows')->where('user_id', $userId)->pluck('show_id');
+
+            return [
+                $seen->mapWithKeys(fn ($id): array => [(string) $id => true])->all(),
+                $creators->mapWithKeys(fn ($id): array => [(string) $id => true])->all(),
+                $shows->mapWithKeys(fn ($id): array => [(string) $id => true])->all(),
+            ];
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return [[], [], []];
+        }
     }
 
     private function pool(Builder $query)
