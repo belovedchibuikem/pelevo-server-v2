@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Admin;
 
 use App\Actions\Finance\ReverseLedgerTransaction;
 use App\Http\Controllers\Controller;
+use App\Jobs\DispatchDiamondCashout;
 use App\Jobs\DispatchWithdrawal;
 use App\Jobs\RunReconciliation;
+use App\Services\Finance\CoinEconomy;
 use App\Mail\PelevoNotice;
 use App\Models\ConfigurationVersion;
 use App\Services\MailPreference;
@@ -15,6 +17,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -211,20 +214,21 @@ final class FinanceController extends Controller
 
     public function coinProduct(Request $request): JsonResponse
     {
-        $data = $request->validate(['store' => ['required', 'in:apple,google'], 'product_id' => ['required', 'string', 'max:191'], 'coins' => ['required', 'integer', 'min:1'], 'unit' => ['nullable', 'in:PCN'], 'active' => ['required', 'boolean'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
+        $data = $request->validate(['store' => ['required', 'in:apple,google'], 'product_id' => ['required', 'string', 'max:191'], 'coins' => ['required', 'integer', 'min:1'], 'unit' => ['nullable', 'in:PCN'], 'price_ngn' => ['nullable', 'regex:/^\d+(\.\d{1,2})?$/'], 'price_usd' => ['nullable', 'regex:/^\d+(\.\d{1,2})?$/'], 'active' => ['required', 'boolean'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
+        $prices = $this->coinPrices($data);
         $existing = DB::table('coin_products')->where('store', $data['store'])->where('product_id', $data['product_id'])->first();
         if ($existing) {
             if (DB::table('iap_receipts')->where('coin_product_id', $existing->id)->exists() && (int) $existing->coins !== (int) $data['coins']) {
                 return ApiResponse::error('CONFLICT', 'This store SKU already has receipts. Retire it and publish a new product id instead of changing the coin value.', 409);
             }
-            DB::table('coin_products')->where('id', $existing->id)->update(['coins' => $data['coins'], 'unit' => $data['unit'] ?? 'PCN', 'active' => $data['active'], 'updated_at' => now()]);
-            $this->audit($request, 'coin_product.updated', 'App\\Models\\CoinProduct', $existing->id, $data['reason'], ['coins' => $data['coins'], 'active' => $data['active']]);
+            DB::table('coin_products')->where('id', $existing->id)->update(['coins' => $data['coins'], 'unit' => $data['unit'] ?? 'PCN', 'price_ngn_kobo' => $prices['price_ngn_kobo'] ?? $existing->price_ngn_kobo, 'price_usd_cents' => $prices['price_usd_cents'] ?? $existing->price_usd_cents, 'active' => $data['active'], 'updated_at' => now()]);
+            $this->audit($request, 'coin_product.updated', 'App\\Models\\CoinProduct', $existing->id, $data['reason'], ['coins' => $data['coins'], 'active' => $data['active'], ...$prices]);
 
             return ApiResponse::success(DB::table('coin_products')->find($existing->id));
         }
         $id = (string) Str::ulid();
-        DB::table('coin_products')->insert(['id' => $id, 'store' => $data['store'], 'product_id' => $data['product_id'], 'coins' => $data['coins'], 'unit' => $data['unit'] ?? 'PCN', 'active' => $data['active'], 'created_at' => now(), 'updated_at' => now()]);
-        $this->audit($request, 'coin_product.published', 'App\\Models\\CoinProduct', $id, $data['reason'], ['store' => $data['store'], 'product_id' => $data['product_id'], 'coins' => $data['coins']]);
+        DB::table('coin_products')->insert(['id' => $id, 'store' => $data['store'], 'product_id' => $data['product_id'], 'coins' => $data['coins'], 'unit' => $data['unit'] ?? 'PCN', 'price_ngn_kobo' => $prices['price_ngn_kobo'] ?? null, 'price_usd_cents' => $prices['price_usd_cents'] ?? null, 'active' => $data['active'], 'created_at' => now(), 'updated_at' => now()]);
+        $this->audit($request, 'coin_product.published', 'App\\Models\\CoinProduct', $id, $data['reason'], ['store' => $data['store'], 'product_id' => $data['product_id'], 'coins' => $data['coins'], ...$prices]);
 
         return ApiResponse::success(DB::table('coin_products')->find($id), status: 201);
     }
@@ -239,6 +243,83 @@ final class FinanceController extends Controller
         $this->audit($request, $data['active'] ? 'coin_product.restored' : 'coin_product.retired', 'App\\Models\\CoinProduct', $product, $data['reason'], ['active' => $data['active']]);
 
         return ApiResponse::success(DB::table('coin_products')->find($product));
+    }
+
+    public function coinEconomy(Request $request): JsonResponse
+    {
+        $data = $this->validateRegime($request);
+        $effectiveAt = CarbonImmutable::parse($data['effective_at']);
+        if (DB::table('coin_economy_regimes')->where('code', $data['code'])->where('effective_at', $effectiveAt)->exists()) {
+            return ApiResponse::error('CONFLICT', 'A coin economy regime already exists for this code and effective time.', 409);
+        }
+        $id = (string) Str::ulid();
+        DB::table('coin_economy_regimes')->insert(['id' => $id, ...$this->regimeValues($data), 'effective_at' => $effectiveAt, 'reason' => $data['reason'], 'created_at' => now(), 'updated_at' => now()]);
+        $this->audit($request, 'coin_economy.published', 'App\\Models\\CoinEconomyRegime', $id, $data['reason'], ['code' => $data['code'], 'effective_at' => $effectiveAt->toIso8601String()]);
+
+        return ApiResponse::success(DB::table('coin_economy_regimes')->find($id), status: 201);
+    }
+
+    public function updateCoinEconomy(string $regime, Request $request): JsonResponse
+    {
+        $row = DB::table('coin_economy_regimes')->where('id', $regime)->first();
+        if (! $row) {
+            return ApiResponse::error('NOT_FOUND', 'Coin economy regime not found.', 404);
+        }
+        if (DB::table('diamond_cashouts')->where('economy_regime_id', $regime)->exists() || DB::table('gifts')->where('economy_regime_id', $regime)->exists()) {
+            return ApiResponse::error('CONFLICT', 'This regime is already on gifts or cashouts. Publish a new effective version instead of rewriting it.', 409);
+        }
+        $data = $this->validateRegime($request);
+        $effectiveAt = CarbonImmutable::parse($data['effective_at']);
+        $clash = DB::table('coin_economy_regimes')->where('code', $data['code'])->where('effective_at', $effectiveAt)->where('id', '!=', $regime)->exists();
+        if ($clash) {
+            return ApiResponse::error('CONFLICT', 'A coin economy regime already exists for this code and effective time.', 409);
+        }
+        DB::table('coin_economy_regimes')->where('id', $regime)->update([...$this->regimeValues($data), 'effective_at' => $effectiveAt, 'reason' => $data['reason'], 'updated_at' => now()]);
+        $this->audit($request, 'coin_economy.updated', 'App\\Models\\CoinEconomyRegime', $regime, $data['reason'], ['code' => $data['code']]);
+
+        return ApiResponse::success(DB::table('coin_economy_regimes')->find($regime));
+    }
+
+    public function activateCoinEconomy(string $regime, Request $request): JsonResponse
+    {
+        $data = $request->validate(['active' => ['required', 'boolean'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
+        $row = DB::table('coin_economy_regimes')->where('id', $regime)->first();
+        if (! $row) {
+            return ApiResponse::error('NOT_FOUND', 'Coin economy regime not found.', 404);
+        }
+        if (! $data['active'] && ! DB::table('coin_economy_regimes')->where('active', true)->where('id', '!=', $regime)->exists()) {
+            return ApiResponse::error('CONFLICT', 'Keep at least one store-fee regime active.', 409);
+        }
+        DB::table('coin_economy_regimes')->where('id', $regime)->update(['active' => $data['active'], 'updated_at' => now()]);
+        $this->audit($request, $data['active'] ? 'coin_economy.activated' : 'coin_economy.deactivated', 'App\\Models\\CoinEconomyRegime', $regime, $data['reason'], ['active' => $data['active']]);
+
+        return ApiResponse::success(DB::table('coin_economy_regimes')->find($regime));
+    }
+
+    public function diamondCashout(string $cashout, Request $request, ReverseLedgerTransaction $reverse): JsonResponse
+    {
+        $data = $request->validate(['state' => ['required', 'in:approved,processing,paid,failed,rejected,reversed'], 'reason' => ['required', 'string', 'min:10', 'max:2000'], 'provider_reference' => ['nullable', 'string', 'max:191']]);
+
+        return DB::transaction(function () use ($cashout, $request, $data, $reverse): JsonResponse {
+            $row = DB::table('diamond_cashouts')->where('id', $cashout)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'Diamond cashout not found.', 404);
+            }
+            $allowed = ['queued' => ['approved', 'rejected'], 'approved' => ['processing', 'rejected'], 'processing' => ['paid', 'failed'], 'paid' => ['reversed'], 'failed' => [], 'rejected' => [], 'reversed' => []];
+            if (! in_array($data['state'], $allowed[$row->state] ?? [], true)) {
+                return ApiResponse::error('CONFLICT', 'Invalid diamond cashout state transition.', 409);
+            }
+            if (in_array($data['state'], ['failed', 'rejected', 'reversed'], true)) {
+                $reverse->handle($row->ledger_transaction_id, 'diamond-cashout-release:'.$row->id, $data['reason']);
+            }
+            DB::table('diamond_cashouts')->where('id', $cashout)->update(['state' => $data['state'], 'provider_reference' => $data['provider_reference'] ?? $row->provider_reference, 'failure_reason' => in_array($data['state'], ['failed', 'rejected'], true) ? $data['reason'] : null, 'processed_at' => in_array($data['state'], ['paid', 'failed', 'rejected', 'reversed'], true) ? now() : null, 'updated_at' => now()]);
+            if ($data['state'] === 'approved') {
+                DispatchDiamondCashout::dispatch($cashout)->afterCommit();
+            }
+            $this->audit($request, 'diamond_cashout.'.$data['state'], 'App\\Models\\DiamondCashout', $cashout, $data['reason'], ['from' => $row->state, 'to' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
+
+            return ApiResponse::success(['cashout_id' => $cashout, 'state' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
+        }, 3);
     }
 
     public function giftType(Request $request): JsonResponse
@@ -317,7 +398,8 @@ final class FinanceController extends Controller
                 'fees' => DB::table('fee_versions')->latest('effective_at')->limit(40)->get(),
                 'fx' => DB::table('fx_rate_versions')->latest('effective_at')->limit(40)->get(),
                 'gifts' => DB::table('gift_types')->latest()->limit(50)->get(),
-                'packs' => DB::table('coin_products')->orderBy('store')->orderBy('coins')->limit(50)->get(),
+                'packs' => app(CoinEconomy::class)->adminPacks(),
+                'regimes' => app(CoinEconomy::class)->adminRegimes(),
                 'minWithdrawCoins' => (int) data_get(ConfigurationVersion::query()->where('effective_at', '<=', now())->latest('version')->first()?->payload, 'money.earn_min_withdraw_coins', config('finance.earn_min_withdraw_coins')),
                 'dailyEarnCap' => (int) config('finance.earn_daily_completion_cap'),
                 'reelQualifiedViewPcn' => (int) config('finance.reel_qualified_view_pcn'),
@@ -336,6 +418,7 @@ final class FinanceController extends Controller
             ],
             'payouts' => [
                 'batches' => DB::table('creator_payout_batches')->latest()->limit(50)->get(),
+                'diamondCashouts' => DB::table('diamond_cashouts')->whereIn('state', ['queued', 'approved', 'processing'])->latest()->limit(50)->get(),
                 'revenue' => DB::table('creator_revenue_events')->latest('occurred_at')->limit(30)->get(),
                 'accountProofs' => DB::table('payout_methods')
                     ->leftJoin('users', function ($join): void {
@@ -382,6 +465,82 @@ final class FinanceController extends Controller
             'reconciliation' => DB::table('reconciliation_runs')->latest('business_date')->limit(20)->get(),
             'settlements' => DB::table('provider_settlements')->latest('business_date')->limit(20)->get(),
             'freshAt' => now()->toIso8601String(),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, int|null>
+     */
+    private function coinPrices(array $data): array
+    {
+        return [
+            'price_ngn_kobo' => isset($data['price_ngn']) ? CoinEconomy::majorToMinor((string) $data['price_ngn']) : null,
+            'price_usd_cents' => isset($data['price_usd']) ? CoinEconomy::majorToMinor((string) $data['price_usd']) : null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function validateRegime(Request $request): array
+    {
+        $data = $request->validate([
+            'code' => ['required', 'alpha_dash', 'max:40'],
+            'name' => ['required', 'string', 'max:120'],
+            'store_fee_percent' => ['required', 'numeric', 'min:0', 'max:100'],
+            'creator_split_percent' => ['required', 'numeric', 'min:0', 'max:100'],
+            'diamond_ngn' => ['required', 'regex:/^\d+(\.\d{1,8})?$/'],
+            'diamond_usd' => ['required', 'regex:/^\d+(\.\d{1,8})?$/'],
+            'transfer_fee_ngn' => ['required', 'regex:/^\d+(\.\d{1,2})?$/'],
+            'transfer_fee_ngn_min' => ['required', 'regex:/^\d+(\.\d{1,2})?$/'],
+            'transfer_fee_ngn_max' => ['required', 'regex:/^\d+(\.\d{1,2})?$/'],
+            'transfer_fee_usd' => ['required', 'regex:/^\d+(\.\d{1,2})?$/'],
+            'min_cashout_diamonds' => ['required', 'integer', 'min:1'],
+            'effective_at' => ['required', 'date'],
+            'active' => ['required', 'boolean'],
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+        ]);
+        $creator = (int) round(((float) $data['creator_split_percent']) * 100);
+        $store = (int) round(((float) $data['store_fee_percent']) * 100);
+        if ($creator > 10_000 || $store > 10_000) {
+            throw ValidationException::withMessages(['store_fee_percent' => 'Fee percents must stay between 0 and 100.']);
+        }
+        $fee = CoinEconomy::majorToMinor((string) $data['transfer_fee_ngn']);
+        $min = CoinEconomy::majorToMinor((string) $data['transfer_fee_ngn_min']);
+        $max = CoinEconomy::majorToMinor((string) $data['transfer_fee_ngn_max']);
+        if ($min > $max || $fee < $min || $fee > $max) {
+            throw ValidationException::withMessages(['transfer_fee_ngn' => 'The naira transfer fee must sit inside its configured minimum and maximum.']);
+        }
+        if (CoinEconomy::scaleRate((string) $data['diamond_ngn']) <= 0 || CoinEconomy::scaleRate((string) $data['diamond_usd']) <= 0) {
+            throw ValidationException::withMessages(['diamond_ngn' => 'Diamond conversion rates must be greater than zero.']);
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private function regimeValues(array $data): array
+    {
+        $creator = (int) round(((float) $data['creator_split_percent']) * 100);
+
+        return [
+            'code' => $data['code'],
+            'name' => $data['name'],
+            'store_fee_basis_points' => (int) round(((float) $data['store_fee_percent']) * 100),
+            'creator_split_basis_points' => $creator,
+            'app_split_basis_points' => 10_000 - $creator,
+            'diamond_ngn_rate' => CoinEconomy::scaleRate((string) $data['diamond_ngn']),
+            'diamond_usd_rate' => CoinEconomy::scaleRate((string) $data['diamond_usd']),
+            'transfer_fee_ngn_kobo' => CoinEconomy::majorToMinor((string) $data['transfer_fee_ngn']),
+            'transfer_fee_ngn_min_kobo' => CoinEconomy::majorToMinor((string) $data['transfer_fee_ngn_min']),
+            'transfer_fee_ngn_max_kobo' => CoinEconomy::majorToMinor((string) $data['transfer_fee_ngn_max']),
+            'transfer_fee_usd_cents' => CoinEconomy::majorToMinor((string) $data['transfer_fee_usd']),
+            'min_cashout_diamonds' => (int) $data['min_cashout_diamonds'],
+            'active' => $data['active'],
         ];
     }
 

@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\V1\CommentController;
 use App\Http\Controllers\Api\V1\ConnectedAccountController;
 use App\Http\Controllers\Api\V1\ContentReportController;
 use App\Http\Controllers\Api\V1\CreatorController;
+use App\Http\Controllers\Api\V1\DiamondCashoutController;
 use App\Http\Controllers\Api\V1\CreatorFollowController;
 use App\Http\Controllers\Api\V1\CreatorPayoutSettingsController;
 use App\Http\Controllers\Api\V1\CreatorPublicController;
@@ -147,6 +148,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('gifts/wallet', [GiftController::class, 'wallet']);
         Route::get('gifts/wallet/activity', [GiftController::class, 'activity']);
         Route::get('gifts/packs', [GiftController::class, 'packs']);
+        Route::get('gifts/economy', [GiftController::class, 'economy']);
         Route::get('gifts/{gift}', [GiftController::class, 'show']);
         Route::post('iap/verify', [IapController::class, 'store'])->middleware('throttle:10,1');
         Route::post('gifts/send', [GiftController::class, 'send']);
@@ -171,6 +173,9 @@ Route::prefix('v1')->group(function (): void {
         Route::post('reports', [ContentReportController::class, 'store'])->middleware('not.sanctioned');
         Route::get('appeals', [AppealController::class, 'index']);
         Route::post('appeals', [AppealController::class, 'store'])->middleware('throttle:5,60');
+        Route::get('creators/diamonds', [DiamondCashoutController::class, 'show']);
+        Route::get('creators/diamond-cashouts', [DiamondCashoutController::class, 'index']);
+        Route::post('creators/diamond-cashouts', [DiamondCashoutController::class, 'store']);
         Route::get('creators/{creator}', [CreatorPublicController::class, 'show']);
         Route::get('creators/{creator}/reels', [CreatorPublicController::class, 'reels']);
         Route::post('creators/{creator}/follow', [CreatorFollowController::class, 'store']);
@@ -300,6 +305,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('downloads', [DownloadController::class, 'index']);
         Route::get('downloads/settings', [DownloadController::class, 'settings']);
         Route::patch('downloads/settings', [DownloadController::class, 'updateSettings']);
+        Route::get('downloads/new-episodes', [DownloadController::class, 'newEpisodes']);
         Route::delete('downloads/{download}', [DownloadController::class, 'destroy']);
         Route::get('stats/me', ListenerStatsController::class);
         Route::get('notifications', [NotificationController::class, 'index']);

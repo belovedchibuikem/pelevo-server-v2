@@ -9,6 +9,7 @@ use App\Models\Device;
 use App\Models\Episode;
 use App\Models\PlaybackProgress;
 use App\Support\ApiResponse;
+use App\Support\EarnRegion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -35,6 +36,7 @@ final class PlaybackController extends Controller
         $completed = $this->isCompleted($duration, $position, (bool) $data['completed']);
         $progress = PlaybackProgress::updateOrCreate(['user_id' => $request->user()->id, 'episode_id' => $episode->id], ['device_id' => $device?->id, 'position_seconds' => $position, 'completed' => $completed, 'version' => ($progress?->version ?? 0) + 1]);
         if ($position > 0 || $completed) {
+            $this->rememberListenerCountry($request);
             $consumePick->handle($request->user()->id, $episode->id);
         }
         $cache->user($request->user()->id);
@@ -51,6 +53,19 @@ final class PlaybackController extends Controller
             'completed' => (bool) $progress->completed,
             'version' => (int) $progress->version,
         ];
+    }
+
+    private function rememberListenerCountry(Request $request): void
+    {
+        $user = $request->user();
+        if ($user === null || filled($user->country_code)) {
+            return;
+        }
+        $code = app(EarnRegion::class)->observedCountry($request);
+        if ($code === null) {
+            return;
+        }
+        $user->forceFill(['country_code' => $code])->save();
     }
 
     private function isCompleted(int $durationSeconds, int $positionSeconds, bool $clientCompleted = false): bool

@@ -477,7 +477,7 @@ paths:
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Episode appended; version incremented' }, '409': { description: VERSION_CONFLICT } } }
     delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Episode removed from the owner queue; version incremented' }, '404': { description: Episode is not in the queue }, '409': { description: VERSION_CONFLICT } } }
   /episodes/{episode}/downloads:
-    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'episode_id, url, expires_at, authorization. Local file save is a client concern.' }, '403': { description: Active device required } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'episode_id, url, expires_at, authorization. Local file save is a client concern.' }, '403': { description: 'Active device required, or DOWNLOAD_LIMIT when a free account already has 10 episode downloads' } } }
   /playback/{episode}:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Owner progress: user_id, episode_id, position_seconds, completed, version' } } }
     put: { security: [{ bearerAuth: [] }], responses: { '200': { description: Saved progress }, '409': { description: VERSION_CONFLICT } } }
@@ -528,8 +528,10 @@ paths:
   /downloads/{download}:
     delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'deleted=true for an owner download authorization' }, '404': { description: Download outside caller account } } }
   /downloads/settings:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'wifi_only, auto_delete_completed, max_storage_mb, version. Queue auto-download is not a setting.' } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'wifi_only, auto_download_new, auto_delete_completed, max_storage_mb, version.' } } }
     patch: { security: [{ bearerAuth: [] }], responses: { '200': { description: Confirmed download settings }, '409': { description: VERSION_CONFLICT } } }
+  /downloads/new-episodes:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Recent followed episodes not yet authorized. Empty unless auto_download_new is on, and capped by the free download limit.' } } }
   /shows/{show}/follow:
     post: { security: [{ bearerAuth: [] }], responses: { '200': { description: Show followed } } }
     delete: { security: [{ bearerAuth: [] }], responses: { '200': { description: Show unfollowed } } }
@@ -571,13 +573,20 @@ paths:
   /gifts/wallet/activity:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Caller gift-wallet ledger entries with id, event_type, signed amount, unit and created_at. Empty when no wallet exists. } } }
   /gifts/packs:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Active Apple and Google coin products as id, store, product_id, coins and unit. No store price is implied. } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Active coin products with coins, retail price_ngn_kobo and price_usd_cents, and economics for the live store-fee regime when both prices are set. } } }
+  /gifts/economy:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Live store-fee regime, diamond rates, pack matrix, and the one-coin-to-one-diamond rule. Cashout does not apply a second platform percent. } } }
   /gifts/catalog:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Active versioned gift catalog as id, slug, name, coins and version } } }
   /gifts/{gift}:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Sender-owned gift receipt }, '404': { description: Gift missing or not owned by the caller } } }
   /gifts/send:
-    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Replay-safe balanced gift receipt with type name, creator display name, coins and remaining balance. Ledger ids stay off the client. }, '409': { description: Insufficient gift coins or idempotency conflict }, '503': { description: Awaiting finance sign-off } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Replay-safe gift. Spends coins and credits the creator the same number of diamonds. The receipt includes coins, diamonds, creator display name and remaining coin balance. Ledger ids stay off the client. }, '409': { description: Insufficient gift coins or idempotency conflict }, '503': { description: Awaiting finance sign-off or diamond rates are not configured } } }
+  /creators/diamonds:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Creator diamond balance, live conversion quotes in NGN and USD, transfer fee, and minimum cashout. The quote net is gross minus the transfer fee. }, '404': { description: Caller has no creator profile } } }
+  /creators/diamond-cashouts:
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Caller diamond cashouts as id, diamonds, currency, gross_minor, transfer_fee_minor, net_minor, state and created_at. } } }
+    post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Reserves diamonds and records the net payout. Idempotency-Key is required. NGN uses a verified bank method. USD uses verified PayPal. No extra platform percent is taken. }, '403': { description: AGE_CONFIRMATION_REQUIRED }, '404': { description: Caller has no creator profile }, '409': { description: Insufficient diamonds, unverified method, or idempotency conflict }, '422': { description: Below the minimum, unsupported destination, or net is not positive }, '503': { description: Awaiting finance sign-off } } }
   /earn/wallet:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Account-owned user_id, unit ECN, decimal-string balance, minimum_withdrawal, boolean withdrawals_enabled, coin_usd (0.004) and payout_schedule monthly. Balance is cached. Threshold follows the latest effective finance configuration. No account is created by reading.' }, '401': { description: Authentication required } } }
   /earn/access:
@@ -770,7 +779,7 @@ paths:
   /studio/shows:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated claimed shows accessible through creator or studio membership } } }
   /studio/episodes:
-    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated claimed-show episodes } } }
+    get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Cursor-paginated claimed-show episodes. Optional show_id limits the page to one owned show.' }, '422': { description: Show is not in the caller studio } } }
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Claimed-show episode draft without audio }, '403': { description: Verified claim required }, '422': { description: Show is not in the caller studio } } }
   /studio/reels:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Cursor-paginated creator reels } } }

@@ -217,10 +217,14 @@ final class PhaseFourFinancialGateTest extends TestCase
         $this->assertDatabaseCount('gifts', 1);
         $this->assertNotNull(DB::table('gifts')->value('fee_version_id'));
         $this->assertSame(0, $wallet->fresh()->balance);
-        $this->assertSame(90, (int) FinancialAccount::where('owner_id', $creator->id)->where('type', 'creator_balance')->value('balance'));
-        $this->assertSame(10, (int) FinancialAccount::whereNull('owner_id')->where('type', 'gift_platform_fee')->value('balance'));
+        $this->assertSame(100, (int) FinancialAccount::where('owner_id', $creator->id)->where('type', 'diamond_wallet')->where('unit', 'DMN')->value('balance'));
+        $this->assertSame(100, (int) FinancialAccount::whereNull('owner_id')->where('type', 'gift_coin_clearing')->value('balance'));
+        $this->assertNull(FinancialAccount::whereNull('owner_id')->where('type', 'gift_platform_fee')->value('balance'));
         $transaction = DB::table('gifts')->value('ledger_transaction_id');
-        $this->assertSame(0, DB::table('ledger_entries')->where('ledger_transaction_id', $transaction)->sum('amount'));
+        $this->assertSame(0, (int) DB::table('ledger_entries')->where('ledger_transaction_id', $transaction)->sum('amount'));
+        $this->assertSame('DMN', DB::table('creator_revenue_events')->value('unit'));
+        $this->assertSame(0, (int) DB::table('creator_revenue_events')->value('fee_amount'));
+        $this->assertSame(100, (int) DB::table('creator_revenue_events')->value('net_amount'));
     }
 
     public function test_database_rejects_ledger_entry_updates_and_deletes(): void

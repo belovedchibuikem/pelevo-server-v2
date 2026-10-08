@@ -18,6 +18,32 @@ final class EarnRegion
         return $this->country($request) === 'US';
     }
 
+    /**
+     * A country the connection already disclosed. No external lookup, and no
+     * default country when the header is missing.
+     */
+    public function observedCountry(Request $request): ?string
+    {
+        if (app()->runningUnitTests()) {
+            $code = strtoupper(trim((string) $request->header('X-Test-Country', '')));
+
+            return preg_match('/^[A-Z]{2}$/', $code) ? $code : null;
+        }
+
+        $cloudflare = strtoupper(trim((string) $request->header('CF-IPCountry', '')));
+        if (preg_match('/^[A-Z]{2}$/', $cloudflare) && ! in_array($cloudflare, ['XX', 'T1'], true)) {
+            return $cloudflare;
+        }
+
+        $ip = (string) $request->ip();
+        if ($ip === '' || $this->unroutable($ip)) {
+            return null;
+        }
+        $cached = Cache::get('earn_country:'.hash('sha256', $ip));
+
+        return is_string($cached) && preg_match('/^[A-Z]{2}$/', $cached) ? $cached : null;
+    }
+
     public function country(Request $request): ?string
     {
         if (app()->runningUnitTests()) {

@@ -27,7 +27,7 @@ final class MobileGiftsTest extends TestCase
 
         DB::table('coin_products')->insert(['id' => (string) Str::ulid(), 'store' => 'apple', 'product_id' => 'pelevo_coins_1200', 'coins' => 1200, 'unit' => 'PCN', 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
         GiftType::create(['slug' => 'mobile-applause', 'name' => 'Applause', 'coins' => 100, 'version' => 1]);
-        $this->actingAs($sender, 'sanctum')->getJson('/api/v1/gifts/packs')->assertOk()->assertJsonPath('data.0.product_id', 'pelevo_coins_1200')->assertJsonPath('data.0.coins', 1200)->assertJsonPath('data.0.unit', 'PCN')->assertJsonMissingPath('data.0.created_at');
+        $this->actingAs($sender, 'sanctum')->getJson('/api/v1/gifts/packs')->assertOk()->assertJsonFragment(['product_id' => 'pelevo_coins_1200', 'coins' => 1200, 'unit' => 'PCN'])->assertJsonMissingPath('data.0.created_at');
         $this->actingAs($sender, 'sanctum')->getJson('/api/v1/gifts/catalog')->assertOk()->assertJsonPath('data.0.name', 'Applause')->assertJsonPath('data.0.coins', 100)->assertJsonMissingPath('data.0.updated_at');
         $this->actingAs($sender, 'sanctum')->getJson('/api/v1/gifts/wallet/activity')->assertOk()->assertJsonCount(0, 'data');
 

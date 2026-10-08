@@ -8,6 +8,7 @@ use App\Models\CreatorProfile;
 use App\Models\FinancialAccount;
 use App\Models\GiftType;
 use App\Models\User;
+use App\Services\Finance\CoinEconomy;
 use App\Support\ApiResponse;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -45,9 +46,24 @@ final class GiftController extends Controller
         ])->values());
     }
 
-    public function packs(): JsonResponse
+    public function packs(CoinEconomy $economy): JsonResponse
     {
-        return ApiResponse::success(DB::table('coin_products')->where('active', true)->orderBy('coins')->get(['id', 'store', 'product_id', 'coins', 'unit']));
+        return ApiResponse::success($economy->presentPacks());
+    }
+
+    public function economy(CoinEconomy $economy): JsonResponse
+    {
+        $regime = $economy->active();
+
+        return ApiResponse::success([
+            'regime' => $regime ? $economy->presentRegime($regime, false) : null,
+            'packs' => $economy->presentPacks(),
+            'rules' => [
+                'coins_per_diamond' => 1,
+                'extra_platform_fee_on_cashout' => false,
+                'transfer_fee_deducted_from_creator' => true,
+            ],
+        ]);
     }
 
     public function show(Request $request, string $gift): JsonResponse
@@ -60,7 +76,7 @@ final class GiftController extends Controller
         return ApiResponse::success($this->presentGift($row, $this->walletBalance($request->user())));
     }
 
-    public function send(Request $request, PostLedgerTransaction $post): JsonResponse
+    public function send(Request $request, PostLedgerTransaction $post, CoinEconomy $economy): JsonResponse
     {
         if (! config('finance.public_enabled')) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Gifts are awaiting finance sign-off.', 503);
@@ -69,30 +85,63 @@ final class GiftController extends Controller
         if ($key === '') {
             return ApiResponse::error('VALIDATION', 'Idempotency-Key header is required.', 422, ['Idempotency-Key' => ['Required']]);
         }
+        $regime = $economy->active();
+        if (! $regime) {
+            return ApiResponse::error('SERVICE_DEGRADED', 'Diamond conversion is not configured.', 503);
+        }
         $data = $request->validate(['gift_type_id' => ['required', 'exists:gift_types,id'], 'creator_profile_id' => ['required', 'exists:creator_profiles,id'], 'message' => ['nullable', 'string', 'max:280']]);
         $giftType = GiftType::findOrFail($data['gift_type_id']);
         $creator = CreatorProfile::findOrFail($data['creator_profile_id']);
         $sender = FinancialAccount::firstOrCreate(['owner_type' => get_class($request->user()), 'owner_id' => $request->user()->id, 'type' => 'gift_wallet', 'unit' => 'PCN'], ['balance' => 0]);
-        $creatorAccount = FinancialAccount::firstOrCreate(['owner_type' => get_class($creator), 'owner_id' => $creator->id, 'type' => 'creator_balance', 'unit' => 'PCN'], ['balance' => 0]);
-        $platformAccount = FinancialAccount::firstOrCreate(['owner_type' => null, 'owner_id' => null, 'type' => 'gift_platform_fee', 'unit' => 'PCN'], ['balance' => 0]);
+        $clearing = FinancialAccount::firstOrCreate(['owner_type' => null, 'owner_id' => null, 'type' => 'gift_coin_clearing', 'unit' => 'PCN'], ['balance' => 0]);
+        $issuance = FinancialAccount::firstOrCreate(['owner_type' => null, 'owner_id' => null, 'type' => 'diamond_issuance', 'unit' => CoinEconomy::UNIT], ['balance' => 0]);
+        $diamonds = FinancialAccount::firstOrCreate(['owner_type' => get_class($creator), 'owner_id' => $creator->id, 'type' => 'diamond_wallet', 'unit' => CoinEconomy::UNIT], ['balance' => 0]);
         $feeVersion = DB::table('fee_versions')->where('type', 'gift_platform')->where('active', true)->where('effective_at', '<=', now())->latest('effective_at')->first();
-        if (! $feeVersion) {
-            return ApiResponse::error('SERVICE_DEGRADED', 'Gift fee configuration is unavailable.', 503);
-        }
-        $fee = intdiv($giftType->coins * (int) $feeVersion->basis_points, 10_000);
-        $creatorCredit = $giftType->coins - $fee;
         try {
-            $gift = DB::transaction(function () use ($post, $key, $giftType, $sender, $creatorAccount, $creatorCredit, $platformAccount, $fee, $feeVersion, $request, $creator, $data): object {
-                $transaction = $post->handle('gift.sent', $key, 'PCN', [['account_id' => $sender->id, 'amount' => -$giftType->coins], ['account_id' => $creatorAccount->id, 'amount' => $creatorCredit], ['account_id' => $platformAccount->id, 'amount' => $fee]], ['gift_type_id' => $giftType->id, 'fee_version_id' => $feeVersion->id, 'fee_basis_points' => $feeVersion->basis_points]);
-                $gift = DB::table('gifts')->where('ledger_transaction_id', $transaction->id)->first();
-                if (! $gift) {
-                    $id = (string) Str::ulid();
-                    DB::table('gifts')->insert(['id' => $id, 'sender_id' => $request->user()->id, 'creator_profile_id' => $creator->id, 'gift_type_id' => $giftType->id, 'ledger_transaction_id' => $transaction->id, 'fee_version_id' => $feeVersion->id, 'message' => $data['message'] ?? null, 'created_at' => now(), 'updated_at' => now()]);
-                    DB::table('creator_revenue_events')->insert(['id' => (string) Str::ulid(), 'creator_profile_id' => $creator->id, 'source_type' => 'gift', 'source_id' => $id, 'ledger_transaction_id' => $transaction->id, 'fee_version_id' => $feeVersion->id, 'unit' => 'PCN', 'gross_amount' => $giftType->coins, 'fee_amount' => $fee, 'net_amount' => $creatorCredit, 'occurred_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
-                    $gift = DB::table('gifts')->find($id);
+            $gift = DB::transaction(function () use ($post, $key, $giftType, $sender, $clearing, $issuance, $diamonds, $feeVersion, $regime, $request, $creator, $data): object {
+                $coinTransaction = $post->handle('gift.sent', $key, 'PCN', [
+                    ['account_id' => $sender->id, 'amount' => -$giftType->coins],
+                    ['account_id' => $clearing->id, 'amount' => $giftType->coins],
+                ], ['gift_type_id' => $giftType->id, 'creator_profile_id' => $creator->id, 'economy_regime_id' => $regime->id, 'coins_per_diamond' => 1]);
+                $gift = DB::table('gifts')->where('coin_ledger_transaction_id', $coinTransaction->id)->first();
+                if ($gift) {
+                    return $gift;
                 }
+                $diamondTransaction = $post->handle('gift.sent', $key.':diamonds', CoinEconomy::UNIT, [
+                    ['account_id' => $issuance->id, 'amount' => -$giftType->coins],
+                    ['account_id' => $diamonds->id, 'amount' => $giftType->coins],
+                ], ['gift_type_id' => $giftType->id, 'creator_profile_id' => $creator->id, 'economy_regime_id' => $regime->id, 'coins_per_diamond' => 1]);
+                $id = (string) Str::ulid();
+                DB::table('gifts')->insert([
+                    'id' => $id,
+                    'sender_id' => $request->user()->id,
+                    'creator_profile_id' => $creator->id,
+                    'gift_type_id' => $giftType->id,
+                    'ledger_transaction_id' => $diamondTransaction->id,
+                    'coin_ledger_transaction_id' => $coinTransaction->id,
+                    'fee_version_id' => $feeVersion?->id,
+                    'economy_regime_id' => $regime->id,
+                    'message' => $data['message'] ?? null,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+                DB::table('creator_revenue_events')->insert([
+                    'id' => (string) Str::ulid(),
+                    'creator_profile_id' => $creator->id,
+                    'source_type' => 'gift',
+                    'source_id' => $id,
+                    'ledger_transaction_id' => $diamondTransaction->id,
+                    'fee_version_id' => $feeVersion?->id,
+                    'unit' => CoinEconomy::UNIT,
+                    'gross_amount' => $giftType->coins,
+                    'fee_amount' => 0,
+                    'net_amount' => $giftType->coins,
+                    'occurred_at' => now(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
 
-                return $gift;
+                return DB::table('gifts')->find($id);
             }, 3);
         } catch (InvalidArgumentException $e) {
             if ($e->getMessage() === 'INSUFFICIENT_COINS') {
@@ -123,6 +172,7 @@ final class GiftController extends Controller
             'gift_type_id' => $gift->gift_type_id,
             'gift_type_name' => $type?->name,
             'coins' => (int) ($type?->coins ?? 0),
+            'diamonds' => (int) ($type?->coins ?? 0),
             'creator_profile_id' => $gift->creator_profile_id,
             'creator_display_name' => $creator?->display_name,
             'creator_handle' => $handle,

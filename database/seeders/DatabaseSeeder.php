@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\Admin;
 use App\Models\ConfigurationVersion;
 use App\Models\GiftType;
+use App\Services\Finance\CoinEconomy;
 use App\Support\AdminAccess;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -34,6 +35,8 @@ class DatabaseSeeder extends Seeder
         foreach ([['applause', 'Applause', 100], ['love', 'Love', 500], ['star', 'Star', 1000], ['champion', 'Champion', 5000]] as [$slug,$name,$coins]) {
             GiftType::firstOrCreate(['slug' => $slug], ['name' => $name, 'coins' => $coins, 'version' => 1]);
         }
+
+        CoinEconomy::seed();
 
         foreach (['apple', 'google'] as $store) {
             foreach ([500, 1200, 2500, 6500, 15000] as $coins) {

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\CreatorProfile;
+use App\Services\Finance\CoinEconomy;
 use App\Support\ApiResponse;
 use App\Support\ReelPlayback;
 use Illuminate\Http\JsonResponse;
@@ -25,7 +26,15 @@ final class StudioWorkspaceController extends Controller
 
     public function episodes(Request $request): JsonResponse
     {
-        $items = DB::table('episodes')->join('shows', 'shows.id', '=', 'episodes.show_id')->whereIn('episodes.show_id', $this->showIds($request))->select('episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.description', 'episodes.duration_seconds', 'episodes.published_at', 'episodes.availability', 'shows.title as show_title', 'shows.artwork_url as artwork_url')->when($request->string('availability')->isNotEmpty(), fn ($q) => $q->where('episodes.availability', $request->string('availability')->toString()))->orderByDesc('episodes.published_at')->orderByDesc('episodes.id')->cursorPaginate($this->limit($request));
+        $shows = $this->showIds($request);
+        $showId = $request->string('show_id')->toString();
+        if ($showId !== '') {
+            if (! $shows->contains($showId)) {
+                return ApiResponse::error('UNPROCESSABLE', 'Show is not in your claimed studio.', 422);
+            }
+            $shows = collect([$showId]);
+        }
+        $items = DB::table('episodes')->join('shows', 'shows.id', '=', 'episodes.show_id')->whereIn('episodes.show_id', $shows)->select('episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.description', 'episodes.duration_seconds', 'episodes.published_at', 'episodes.availability', 'shows.title as show_title', 'shows.artwork_url as artwork_url')->when($request->string('availability')->isNotEmpty(), fn ($q) => $q->where('episodes.availability', $request->string('availability')->toString()))->orderByDesc('episodes.published_at')->orderByDesc('episodes.id')->cursorPaginate($this->limit($request));
 
         return $this->page($items);
     }
@@ -165,6 +174,7 @@ final class StudioWorkspaceController extends Controller
             'ad_revenue_allocations' => DB::table('creator_ad_revenue_allocations')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'status', 'gross_usd_micros', 'confirmed_usd_micros', 'reserve_usd_micros', 'clawback_usd_micros', 'available_currency', 'available_amount_minor', 'held_until', 'released_at')->latest()->limit(100)->get(),
             'currency_conversions' => DB::table('currency_conversions')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'source_currency', 'source_amount_minor', 'destination_currency', 'destination_amount_minor', 'gross_rate', 'net_rate', 'spread_bps', 'rate_source', 'quoted_at', 'created_at')->latest()->limit(100)->get(),
             'payout_settings' => DB::table('creator_payout_settings')->whereIn('creator_profile_id', $creators)->select('creator_profile_id', 'currency', 'ad_payout_currency', 'ad_payout_currency_effective_at', 'compliance_state')->get(),
+            'diamonds' => app(CoinEconomy::class)->summary(app(CoinEconomy::class)->balanceForCreators($creators)),
             'tax_profiles' => DB::table('tax_profiles')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'country_code', 'state')->get(),
         ]);
     }
@@ -422,13 +432,19 @@ final class StudioWorkspaceController extends Controller
             ->sortDesc()
             ->map(fn (int $count, string $platform): array => ['platform' => $platform, 'listeners' => $count, 'share' => round($count / $listenerTotal, 4)])
             ->values();
-        $locations = $listeners
+        $locationCounts = $listeners
             ->map(fn (Collection $rows): string => strtoupper((string) ($rows->first()->country_code ?? '')))
-            ->countBy()
+            ->countBy();
+        $unshared = (int) $locationCounts->get('', 0);
+        $locations = $locationCounts
+            ->except([''])
             ->sortDesc()
             ->take(6)
-            ->map(fn (int $count, string $code): array => ['country_code' => $code === '' ? null : $code, 'country' => $this->countryName($code), 'listeners' => $count, 'share' => round($count / $listenerTotal, 4)])
+            ->map(fn (int $count, string $code): array => ['country_code' => $code, 'country' => $this->countryName($code), 'listeners' => $count, 'share' => round($count / $listenerTotal, 4)])
             ->values();
+        if ($unshared > 0) {
+            $locations->push(['country_code' => null, 'country' => 'Location not shared', 'listeners' => $unshared, 'share' => round($unshared / $listenerTotal, 4)]);
+        }
         $topListeners = $listeners
             ->map(fn (Collection $rows, string $userId): array => ['id' => $userId, 'name' => (string) ($rows->first()->name ?? 'Listener'), 'handle' => $rows->first()->handle, 'episodes' => $rows->count(), 'completed' => $rows->where('completed', true)->count(), 'last_listened_at' => $rows->max('updated_at')])
             ->sortByDesc(fn (array $row): array => [$row['episodes'], $row['completed']])
@@ -455,7 +471,7 @@ final class StudioWorkspaceController extends Controller
     private function countryName(string $code): string
     {
         if ($code === '') {
-            return 'Unknown';
+            return 'Location not shared';
         }
         if (class_exists(\Locale::class)) {
             $name = \Locale::getDisplayRegion('-'.$code, 'en');

@@ -54,6 +54,7 @@ final class PostLedgerTransaction
                     'reels_ad_reserve',
                     'reels_ad_available',
                     'creator_payout_payable',
+                    'diamond_wallet',
                 ], true)) {
                     throw new InvalidArgumentException('INSUFFICIENT_COINS');
                 }

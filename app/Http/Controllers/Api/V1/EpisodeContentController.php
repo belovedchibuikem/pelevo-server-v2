@@ -8,6 +8,7 @@ use App\Models\Device;
 use App\Models\Episode;
 use App\Services\EpisodeMediaStreamer;
 use App\Support\ApiResponse;
+use App\Support\PremiumAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -62,6 +63,14 @@ final class EpisodeContentController extends Controller
         $device = Device::where('user_id', $request->user()->id)->where('device_identifier', $request->header('X-Device-Id'))->whereNull('revoked_at')->first();
         if (! $device) {
             return ApiResponse::error('FORBIDDEN', 'A registered active device is required.', 403);
+        }
+        $userId = $request->user()->id;
+        $already = DB::table('downloads')->where('user_id', $userId)->where('episode_id', $episode->id)->exists();
+        if (! $already && ! PremiumAccess::active($userId)) {
+            $used = (int) DB::table('downloads')->where('user_id', $userId)->distinct()->count('episode_id');
+            if ($used >= PremiumAccess::FREE_DOWNLOAD_LIMIT) {
+                return ApiResponse::error('DOWNLOAD_LIMIT', 'Free accounts can download 10 episodes. Upgrade to Pro for unlimited downloads.', 403);
+            }
         }
         $expires = now()->addMinutes(15);
         $id = (string) Str::ulid();

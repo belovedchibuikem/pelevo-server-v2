@@ -6,7 +6,7 @@ import FinanceAction, { EmptyQueue } from '../../components/admin/FinanceAction'
 type Row = Record<string, string | number | null | undefined>;
 type Desk = { key: string; title: string; blurb: string; count: number };
 type Attention = { label: string; count: number; desk: string; severity: 'info' | 'warning' };
-type Products = { fees: Row[]; fx: Row[]; gifts: Row[]; packs: Row[]; minWithdrawCoins: number; dailyEarnCap: number; reelQualifiedViewPcn: number };
+type Products = { fees: Row[]; fx: Row[]; gifts: Row[]; packs: Row[]; regimes: Row[]; minWithdrawCoins: number; dailyEarnCap: number; reelQualifiedViewPcn: number };
 type Earn = { liability: number; issuedToday: number; review: Row[]; campaigns: Row[] };
 type Premium = { mrrMinor: number; active: number; churnedThisMonth: number; failedInvoices: number; refunds: number; plans: Row[]; subscriptions: Row[]; invoices: Row[] };
 type ReelsAds = { batches: Row[]; pendingUsdMicros: number; confirmedUsdMicros: number; reserveUsdMicros: number; available: Row[]; fxClearing: Row[]; reviewQueue: Row[]; recentAllocations: Row[]; recentConversions: Row[] };
@@ -18,7 +18,7 @@ type Props = {
   iap: { unmatched: Row[] };
   earn: Earn;
   withdrawals: { queued: Row[]; processing: Row[]; failed: Row[] };
-  payouts: { batches: Row[]; revenue: Row[]; accountProofs: Row[] };
+  payouts: { batches: Row[]; revenue: Row[]; accountProofs: Row[]; diamondCashouts: Row[] };
   reelsAds: ReelsAds;
   premium: Premium;
   ledger: { accounts: Row[]; transactions: Row[] };
@@ -79,6 +79,26 @@ export default function Finance(props: Props) {
 
 function FxDesk({ products, accounts }: { products: Products; accounts: Row[] }) {
   return <div className="grid gap-8 lg:grid-cols-2">
+    <div className="lg:col-span-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="font-semibold">Store fee and diamond rates</h3>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">Apple and Google deduct the store fee from the retail price. Creators receive one diamond per coin gifted. Cashout uses the live regime&apos;s diamond rate, which already includes the app share, then deducts the transfer fee from the creator.</p>
+        </div>
+        <FinanceAction title="Publish store-fee regime" description="Inserts a new effective-dated coin economy. Gifts and cashouts keep the regime recorded on those rows." trigger="Publish regime" method="POST" endpoint="/api/admin/v1/finance/coin-economy" fields={regimeFields()} />
+      </div>
+      <List rows={products.regimes ?? []} empty="No store-fee regimes are stored.">{row => <Item key={String(row.id)}>
+        <div>
+          <b>{String(row.name)}</b>
+          <small className="block text-slate-500">{String(row.code)} · store {String(row.store_fee_percent)}% · creator {String(row.creator_split_percent)}% of net · 1 diamond = ₦{String(row.diamond_ngn)} / ${String(row.diamond_usd)} · transfer ₦{((Number(row.transfer_fee_ngn_kobo) || 0) / 100).toFixed(2)}{row.live ? ' · live' : ''}</small>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <strong>{row.active === 0 || row.active === false ? 'Inactive' : 'Active'}</strong>
+          <FinanceAction title={row.active === 0 || row.active === false ? 'Activate regime' : 'Deactivate regime'} description="The live rate is the latest active regime whose effective time has passed." trigger={row.active === 0 || row.active === false ? 'Activate' : 'Deactivate'} method="PUT" endpoint={`/api/admin/v1/finance/coin-economy/${row.id}/activation`} fields={[{ name: 'active', label: 'Active', type: 'select', options: row.active === 0 || row.active === false ? ['1'] : ['0'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <FinanceAction title="Update unused regime" description="Rewrites this version only when no gift or cashout has snapshotted it. Otherwise publish a new effective time." trigger="Update" method="PUT" endpoint={`/api/admin/v1/finance/coin-economy/${row.id}`} fields={regimeFields(row)} />
+        </div>
+      </Item>}</List>
+    </div>
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">Platform fee versions</h3>
@@ -99,10 +119,10 @@ function FxDesk({ products, accounts }: { products: Products; accounts: Row[] })
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">Coin packs</h3>
-        <FinanceAction title="Publish coin pack" description="Maps an App Store or Play SKU to PCN. Coin amounts cannot change after a receipt exists — retire the SKU and add a new product id." trigger="Publish coin pack" method="POST" endpoint="/api/admin/v1/finance/coin-products" fields={[{ name: 'store', label: 'Store', type: 'select', options: ['apple', 'google'] }, { name: 'product_id', label: 'Store product id' }, { name: 'coins', label: 'Coins', type: 'number', min: 1 }, { name: 'unit', label: 'Unit', type: 'select', options: ['PCN'] }, { name: 'active', label: 'Active', type: 'select', options: ['1', '0'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+        <FinanceAction title="Publish coin pack" description="Maps an App Store or Play SKU to coins. Retail prices are in naira and dollars. Store fee, net, and the 70/30 split are calculated from the live regime. Coin amounts cannot change after a receipt exists." trigger="Publish coin pack" method="POST" endpoint="/api/admin/v1/finance/coin-products" fields={[{ name: 'store', label: 'Store', type: 'select', options: ['apple', 'google'] }, { name: 'product_id', label: 'Store product id' }, { name: 'coins', label: 'Coins', type: 'number', min: 1 }, { name: 'price_ngn', label: 'Retail price (NGN)' }, { name: 'price_usd', label: 'Retail price (USD)' }, { name: 'unit', label: 'Unit', type: 'select', options: ['PCN'] }, { name: 'active', label: 'Active', type: 'select', options: ['1', '0'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
       </div>
       <List rows={products.packs} empty="No store coin products configured.">{row => <Item key={String(row.id)}>
-        <div><b>{String(row.product_id)}</b><small className="block text-slate-500">{String(row.store)} · {row.active === 0 || row.active === false ? 'retired' : 'active'}</small></div>
+        <div><b>{String(row.product_id)}</b><small className="block text-slate-500">{String(row.store)} · {row.active === 0 || row.active === false ? 'retired' : 'active'}{row.economics_label ? ` · ${String(row.economics_label)}` : ''}</small></div>
         <div className="flex items-center gap-2">
           <strong>{Number(row.coins).toLocaleString()} {row.unit}</strong>
           <FinanceAction title={row.active === 0 || row.active === false ? 'Restore coin pack' : 'Retire coin pack'} description="Retiring hides the SKU from new purchases. Existing receipts stay credited at the original coin amount." trigger={row.active === 0 || row.active === false ? 'Restore' : 'Retire'} method="PUT" endpoint={`/api/admin/v1/finance/coin-products/${row.id}`} fields={[{ name: 'active', label: 'Active', type: 'select', options: row.active === 0 || row.active === false ? ['1'] : ['0'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
@@ -196,7 +216,27 @@ function PayoutDesk({ payouts }: { payouts: Props['payouts'] }) {
     <div className="mb-6 mt-8">
       <FinanceAction title="Prepare monthly creator payout batch" description="Selects verified creators at or above their currency-specific minimum. USD and NGN ad balances are never mixed. A different finance administrator must approve." trigger="Prepare payout batch" method="POST" endpoint="/api/admin/v1/finance/creator-payout-batches" idempotent fields={[{ name: 'period_start', label: 'Period start', type: 'date' }, { name: 'period_end', label: 'Period end', type: 'date' }, { name: 'unit', label: 'Ledger currency', type: 'select', options: ['USD', 'NGN', 'PCN'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
     </div>
-    <h3 className="font-semibold">Payout batches</h3>
+    <h3 className="mt-8 font-semibold">Diamond cashouts</h3>
+    <p className="mt-1 mb-3 max-w-3xl text-sm text-slate-500">The net amount is what the creator receives. The transfer fee is already removed, and the app share stays in the diamond rate, so do not take another platform percent.</p>
+    <List rows={payouts.diamondCashouts ?? []} empty="No diamond cashouts are waiting.">{row => <Item key={String(row.id)}>
+      <div><b>{Number(row.diamonds).toLocaleString()} diamonds</b><small className="block text-slate-500">{minorMoney(Number(row.net_minor), String(row.currency))} net · fee {minorMoney(Number(row.transfer_fee_minor), String(row.currency))}</small></div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge value={String(row.state)} />
+        {row.state === 'queued' && <>
+          <FinanceAction title="Approve diamond cashout" description="Dispatches the net amount when a payout URL is configured. Otherwise leave it approved and mark it paid after the bank transfer." trigger="Approve" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['approved'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <FinanceAction title="Reject diamond cashout" description="Returns the reserved diamonds to the creator." trigger="Reject" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['rejected'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+        </>}
+        {row.state === 'approved' && <>
+          <FinanceAction title="Mark diamond cashout processing" description="Use this when the transfer was sent outside an automatic payout URL." trigger="Mark processing" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['processing'] }, { name: 'provider_reference', label: 'Provider reference', required: false }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <FinanceAction title="Reject diamond cashout" description="Returns the reserved diamonds to the creator." trigger="Reject" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['rejected'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+        </>}
+        {row.state === 'processing' && <>
+          <FinanceAction title="Mark diamond cashout paid" description="Records that the net amount reached the creator. The transfer fee stays with the gateway." trigger="Mark paid" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['paid'] }, { name: 'provider_reference', label: 'Provider reference', required: false }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <FinanceAction title="Mark diamond cashout failed" description="Returns the reserved diamonds to the creator." trigger="Mark failed" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['failed'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+        </>}
+      </div>
+    </Item>}</List>
+    <h3 className="mt-8 font-semibold">Payout batches</h3>
     <List rows={payouts.batches} empty="No creator payout batches have been prepared.">{row => <Item key={String(row.id)}>
       <div><b>{Number(row.payout_count).toLocaleString()} payouts</b><small className="block text-slate-500">{Number(row.total_amount).toLocaleString()} {row.unit} · {String(row.period_start)} – {String(row.period_end)}</small></div>
       <div className="flex items-center gap-2">
@@ -365,6 +405,29 @@ function LedgerDesk({ ledger, exceptions, reconciliation, settlements }: { ledge
     </div>
     <Link className="text-sm font-semibold text-teal-700" href="/admin/finance-records?view=ledger">Full ledger explorer →</Link>
   </div>;
+}
+
+function regimeFields(row?: Row) {
+  return [
+    { name: 'code', label: 'Code', defaultValue: String(row?.code ?? 'standard') },
+    { name: 'name', label: 'Name', defaultValue: String(row?.name ?? 'Standard store fee') },
+    { name: 'store_fee_percent', label: 'Store fee percent', type: 'number' as const, min: 0, max: 100, step: 0.01, defaultValue: Number(row?.store_fee_percent ?? 30) },
+    { name: 'creator_split_percent', label: 'Creator split of net percent', type: 'number' as const, min: 0, max: 100, step: 0.01, defaultValue: Number(row?.creator_split_percent ?? 70) },
+    { name: 'diamond_ngn', label: 'Naira per diamond', defaultValue: String(row?.diamond_ngn ?? '0.83') },
+    { name: 'diamond_usd', label: 'Dollars per diamond', defaultValue: String(row?.diamond_usd ?? '0.00052') },
+    { name: 'transfer_fee_ngn', label: 'Transfer fee (NGN)', defaultValue: ((Number(row?.transfer_fee_ngn_kobo ?? 5000)) / 100).toFixed(2) },
+    { name: 'transfer_fee_ngn_min', label: 'Minimum transfer fee (NGN)', defaultValue: ((Number(row?.transfer_fee_ngn_min_kobo ?? 1000)) / 100).toFixed(2) },
+    { name: 'transfer_fee_ngn_max', label: 'Maximum transfer fee (NGN)', defaultValue: ((Number(row?.transfer_fee_ngn_max_kobo ?? 5000)) / 100).toFixed(2) },
+    { name: 'transfer_fee_usd', label: 'Transfer fee (USD)', defaultValue: ((Number(row?.transfer_fee_usd_cents ?? 0)) / 100).toFixed(2) },
+    { name: 'min_cashout_diamonds', label: 'Minimum diamonds', type: 'number' as const, min: 1, defaultValue: Number(row?.min_cashout_diamonds ?? 100) },
+    { name: 'effective_at', label: 'Effective from', type: 'datetime-local' as const },
+    { name: 'active', label: 'Active', type: 'select' as const, options: ['1', '0'], defaultValue: row?.active === 0 || row?.active === false ? '0' : '1' },
+    { name: 'reason', label: 'Reason', type: 'textarea' as const },
+  ];
+}
+
+function minorMoney(amount: number, currency: string) {
+  return `${currency} ${(amount / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function Queue({ title, rows, empty, action }: { title: string; rows: Row[]; empty: string; action: (row: Row) => ReactNode }) {

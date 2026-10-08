@@ -77,9 +77,23 @@ final class WebhookController extends Controller
         $states = ['transfer.success' => 'paid', 'transfer.failed' => 'failed', 'transfer.reversed' => 'reversed'];
         if ($reference && isset($states[$payload['type'] ?? ''])) {
             $withdrawalMail = null;
-            DB::transaction(function () use ($reference, $states, $payload, $reverse, &$withdrawalMail): void {
+            $diamondMail = null;
+            DB::transaction(function () use ($reference, $states, $payload, $reverse, &$withdrawalMail, &$diamondMail): void {
                 $withdrawal = DB::table('withdrawals')->where('provider_reference', $reference)->lockForUpdate()->first();
                 if (! $withdrawal) {
+                    $cashout = DB::table('diamond_cashouts')->where('provider_reference', $reference)->lockForUpdate()->first();
+                    if (! $cashout) {
+                        return;
+                    }
+                    $state = $states[$payload['type']];
+                    if (in_array($state, ['failed', 'reversed'], true)) {
+                        $reverse->handle($cashout->ledger_transaction_id, 'diamond-cashout-release:'.$cashout->id, 'Provider webhook reported '.$state.'.');
+                    }
+                    DB::table('diamond_cashouts')->where('id', $cashout->id)->update(['state' => $state, 'failure_reason' => $state === 'failed' ? (data_get($payload, 'data.reason') ?? 'Provider failure.') : null, 'processed_at' => now(), 'updated_at' => now()]);
+                    if (in_array($state, ['paid', 'failed'], true)) {
+                        $diamondMail = [$cashout->user_id, $state, (int) $cashout->diamonds, (int) $cashout->net_minor, $cashout->currency, $state === 'failed' ? (string) (data_get($payload, 'data.reason') ?? 'Provider failure.') : null];
+                    }
+
                     return;
                 }
                 $state = $states[$payload['type']];
@@ -101,6 +115,19 @@ final class WebhookController extends Controller
                     intro: $paid
                         ? 'We sent your withdrawal of '.$coins.' coins.'
                         : 'Your withdrawal of '.$coins.' coins could not be completed.',
+                    detail: $paid ? null : $reason,
+                ));
+            }
+            if (is_array($diamondMail)) {
+                [$userId, $state, $diamonds, $netMinor, $currency, $reason] = $diamondMail;
+                $paid = $state === 'paid';
+                app(MailPreference::class)->queueToUser((string) $userId, new PelevoNotice(
+                    subjectLine: $paid ? 'Your Pelevo diamond cashout was paid' : 'Your Pelevo diamond cashout did not go through',
+                    eyebrow: 'Diamonds',
+                    heading: $paid ? 'Diamond cashout paid' : 'Diamond cashout failed',
+                    intro: $paid
+                        ? 'We sent '.$currency.' '.number_format($netMinor / 100, 2, '.', '').' for '.$diamonds.' diamonds.'
+                        : 'Your cashout of '.$diamonds.' diamonds could not be completed. The diamonds have been returned.',
                     detail: $paid ? null : $reason,
                 ));
             }

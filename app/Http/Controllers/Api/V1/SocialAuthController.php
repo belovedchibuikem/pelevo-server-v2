@@ -17,9 +17,16 @@ final class SocialAuthController extends Controller
 {
     public function __invoke(Request $request, SocialIdentityVerifier $verifier, IssueMobileSession $sessions): JsonResponse
     {
-        $data = $request->validate(['provider' => ['required', 'in:apple,google'], 'token' => ['required', 'string', 'max:10000'], 'device_name' => ['required', 'string', 'max:100']]);
+        $data = $request->validate(['provider' => ['required', 'in:apple,google'], 'token' => ['required', 'string', 'max:10000'], 'nonce' => ['nullable', 'string', 'max:128'], 'device_name' => ['required', 'string', 'max:100']]);
         $identity = $verifier->verify($data['provider'], $data['token']);
         if (! $identity) {
+            if ($data['provider'] === 'google' && config('services.google.client_ids') === []) {
+                return ApiResponse::error('SOCIAL_PROVIDER_UNCONFIGURED', 'Google Sign-In is not configured on the server.', 503);
+            }
+            if ($data['provider'] === 'apple' && ! config('services.apple.application_id') && ! config('services.apple.service_id')) {
+                return ApiResponse::error('SOCIAL_PROVIDER_UNCONFIGURED', 'Sign in with Apple is not configured on the server.', 503);
+            }
+
             return ApiResponse::error('SOCIAL_TOKEN_INVALID', 'The provider token could not be verified.', 401);
         }
         $knownIdentity = DB::table('connected_accounts')->where('provider', $data['provider'])->where('provider_subject', $identity->subject)->exists();

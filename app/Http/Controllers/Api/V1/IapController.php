@@ -6,6 +6,7 @@ use App\Actions\Finance\PostLedgerTransaction;
 use App\Http\Controllers\Controller;
 use App\Integrations\Payments\StoreReceiptVerifier;
 use App\Models\FinancialAccount;
+use App\Services\Finance\CoinEconomy;
 use App\Support\AgeMajority;
 use App\Support\ApiResponse;
 use Carbon\Carbon;
@@ -43,11 +44,12 @@ final class IapController extends Controller
             if (! $product) {
                 return ApiResponse::error('IAP_UNVERIFIED', 'The verified store product is not available.', 422);
             }
+            $regime = app(CoinEconomy::class)->active();
             $wallet = FinancialAccount::firstOrCreate(['owner_type' => get_class($request->user()), 'owner_id' => $request->user()->id, 'type' => 'gift_wallet', 'unit' => $product->unit], ['balance' => 0]);
             $liability = FinancialAccount::firstOrCreate(['owner_type' => null, 'owner_id' => null, 'type' => 'iap_liability', 'unit' => $product->unit], ['balance' => 0]);
-            $transaction = $post->handle('iap.verified', "iap:{$data['store']}:{$verified['original_transaction_id']}", $product->unit, [['account_id' => $liability->id, 'amount' => -$product->coins], ['account_id' => $wallet->id, 'amount' => $product->coins]], ['store' => $data['store'], 'product_id' => $product->product_id]);
+            $transaction = $post->handle('iap.verified', "iap:{$data['store']}:{$verified['original_transaction_id']}", $product->unit, [['account_id' => $liability->id, 'amount' => -$product->coins], ['account_id' => $wallet->id, 'amount' => $product->coins]], ['store' => $data['store'], 'product_id' => $product->product_id, 'economy_regime_id' => $regime->id ?? null]);
             $id = (string) Str::ulid();
-            DB::table('iap_receipts')->insert(['id' => $id, 'user_id' => $request->user()->id, 'coin_product_id' => $product->id, 'ledger_transaction_id' => $transaction->id, 'store' => $data['store'], 'original_transaction_id' => $verified['original_transaction_id'], 'receipt_hash' => hash('sha256', $data['receipt']), 'state' => 'verified', 'verification_payload' => json_encode(['environment' => $verified['environment'] ?? null], JSON_THROW_ON_ERROR), 'verified_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+            DB::table('iap_receipts')->insert(['id' => $id, 'user_id' => $request->user()->id, 'coin_product_id' => $product->id, 'ledger_transaction_id' => $transaction->id, 'economy_regime_id' => $regime->id ?? null, 'store' => $data['store'], 'original_transaction_id' => $verified['original_transaction_id'], 'receipt_hash' => hash('sha256', $data['receipt']), 'state' => 'verified', 'verification_payload' => json_encode(['environment' => $verified['environment'] ?? null], JSON_THROW_ON_ERROR), 'verified_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
 
             return ApiResponse::success($this->presentReceipt(DB::table('iap_receipts')->find($id), $this->walletBalance($request->user())), status: 201);
         }, 3);
