@@ -204,4 +204,33 @@ final class LibraryAndQueueTest extends TestCase
         $collection = $this->actingAs($user, 'sanctum')->postJson('/api/v1/collections', ['name' => 'Sunday Reset'])->assertCreated()->json('data');
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/collections/'.$collection['id'])->assertOk()->assertJsonPath('data.name', 'Sunday Reset')->assertJsonPath('data.items', []);
     }
+
+    public function test_recent_page_keeps_a_cursor_when_more_history_exists(): void
+    {
+        $user = User::factory()->create();
+        $show = Show::create(['rss_url' => 'https://example.com/history.xml', 'title' => 'History']);
+        foreach (['older', 'newer'] as $index => $guid) {
+            $episode = Episode::create([
+                'show_id' => $show->id,
+                'guid' => $guid,
+                'title' => $guid,
+                'audio_url' => 'https://example.com/'.$guid.'.mp3',
+            ]);
+            DB::table('playback_progress')->insert([
+                'user_id' => $user->id,
+                'episode_id' => $episode->id,
+                'position_seconds' => 30,
+                'completed' => false,
+                'version' => 1,
+                'created_at' => now()->subMinutes(2 - $index),
+                'updated_at' => now()->subMinutes(2 - $index),
+            ]);
+        }
+
+        $this->actingAs($user, 'sanctum')->getJson('/api/v1/library/recent?limit=1')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.title', 'newer')
+            ->assertJsonPath('meta.has_more', true);
+    }
 }

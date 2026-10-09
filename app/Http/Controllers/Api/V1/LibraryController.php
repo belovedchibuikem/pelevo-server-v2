@@ -47,6 +47,7 @@ final class LibraryController extends Controller
                     'shows.title as show_title',
                     'shows.artwork_url',
                     'episodes.duration_seconds',
+                    'episode_saves.created_at',
                     'episode_saves.created_at as saved_at',
                 )
                 ->orderByDesc('episode_saves.created_at')
@@ -74,6 +75,7 @@ final class LibraryController extends Controller
                     'shows.artwork_url',
                     'episodes.duration_seconds',
                     'episode_reactions.reaction',
+                    'episode_reactions.updated_at',
                     'episode_reactions.updated_at as reacted_at',
                 )
                 ->orderByDesc('episode_reactions.updated_at')
@@ -98,6 +100,7 @@ final class LibraryController extends Controller
                     'shows.author',
                     'shows.artwork_url',
                     'follows.notifications_enabled',
+                    'follows.created_at',
                     'follows.created_at as followed_at',
                 )
                 ->orderByDesc('follows.created_at')
@@ -130,6 +133,7 @@ final class LibraryController extends Controller
                     'episodes.duration_seconds',
                     'playback_progress.position_seconds',
                     'playback_progress.completed',
+                    'playback_progress.updated_at',
                     'playback_progress.updated_at as played_at',
                 )
                 ->orderByDesc('playback_progress.updated_at')
