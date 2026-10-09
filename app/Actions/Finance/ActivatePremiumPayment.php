@@ -25,7 +25,9 @@ final class ActivatePremiumPayment
                 return $existing;
             }
             $periodStart = now();
-            $periodEnd = isset($payment['period_end']) ? now()->parse($payment['period_end']) : now()->addMonth();
+            $plan = DB::table('premium_plans')->where('id', $checkout->premium_plan_id)->first();
+            $trialMonths = (int) ($plan->trial_months ?? 0);
+            $periodEnd = isset($payment['period_end']) ? now()->parse($payment['period_end']) : ($trialMonths > 0 ? now()->addMonths($trialMonths) : now()->addMonth());
             $subscriptionReference = (string) ($payment['subscription_id'] ?? $reference);
             $subscriptionValues = ['user_id' => $checkout->user_id, 'premium_plan_id' => $checkout->premium_plan_id, 'state' => 'active', 'current_period_start' => $periodStart, 'current_period_end' => $periodEnd, 'updated_at' => now()];
             $subscription = DB::table('premium_subscriptions')->where('provider', $provider)->where('provider_subscription_id', $subscriptionReference)->first();

@@ -66,7 +66,7 @@ final class PhaseFivePremiumGateTest extends TestCase
         $user = User::factory()->create();
         $plan = $this->plan();
         $plans = $this->actingAs($user, 'sanctum')->getJson('/api/v1/premium/plans')->assertOk();
-        $this->assertSame(['id', 'slug', 'name', 'price_minor', 'currency', 'interval'], array_keys($plans->json('data.0')));
+        $this->assertSame(['id', 'slug', 'name', 'price_minor', 'currency', 'interval', 'trial_months'], array_keys($plans->json('data.0')));
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/premium/me')->assertOk()->assertJsonPath('data.entitlement', null);
         DB::table('premium_entitlements')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'premium_plan_id' => $plan, 'provider_reference' => 'test-entitlement', 'starts_at' => now()->subDay(), 'ends_at' => now()->addMonth(), 'state' => 'active', 'created_at' => now(), 'updated_at' => now()]);
         $me = $this->actingAs($user, 'sanctum')->getJson('/api/v1/premium/me')->assertOk()->assertJsonPath('data.entitlement.state', 'active');

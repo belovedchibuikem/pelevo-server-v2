@@ -347,9 +347,12 @@ final class FinanceController extends Controller
 
     public function premiumPlan(Request $request): JsonResponse
     {
-        $data = $request->validate(['id' => ['nullable', 'exists:premium_plans,id'], 'slug' => ['required', 'alpha_dash', 'max:80'], 'name' => ['required', 'string', 'max:191'], 'price_minor' => ['required', 'integer', 'min:1'], 'currency' => ['required', 'string', 'size:3'], 'interval' => ['required', 'in:month,year'], 'active' => ['required', 'boolean'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
+        $data = $request->validate(['id' => ['nullable', 'exists:premium_plans,id'], 'slug' => ['required', 'alpha_dash', 'max:80'], 'name' => ['required', 'string', 'max:191'], 'price_minor' => ['required', 'integer', 'min:1'], 'currency' => ['required', 'string', 'size:3'], 'interval' => ['required', 'in:month,year'], 'trial_months' => ['sometimes', 'integer', 'min:0', 'max:12'], 'active' => ['required', 'boolean'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
         $id = $data['id'] ?? (string) Str::ulid();
         $values = ['slug' => $data['slug'], 'name' => $data['name'], 'price_minor' => $data['price_minor'], 'currency' => strtoupper($data['currency']), 'interval' => $data['interval'], 'active' => $data['active'], 'updated_at' => now()];
+        if (array_key_exists('trial_months', $data)) {
+            $values['trial_months'] = $data['trial_months'];
+        }
         if (isset($data['id'])) {
             DB::table('premium_plans')->where('id', $id)->update($values);
         } else {

@@ -140,13 +140,29 @@ final class MarketingLegal
 
     public static function termsCmsBody(): string
     {
-        $chunks = ['Last updated: 30th September 2026'];
+        $chunks = [
+            'Last updated: 30th September 2026',
+            ...self::termsIntro(),
+        ];
         foreach (self::terms() as $section) {
             $chunks[] = '## '.$section['heading'];
             $chunks[] = self::privacySectionPlain($section['body']);
         }
 
         return implode("\n\n", $chunks);
+    }
+
+    /**
+     * Opening paragraphs on the public Terms page, before the numbered sections.
+     *
+     * @return list<string>
+     */
+    private static function termsIntro(): array
+    {
+        return [
+            'These Terms and Conditions ("Terms") govern your access to and use of the Pelevo mobile application and any related services (together, the "Service"), provided by Pod Emeralds Limited ("Pelevo," "we," "us," or "our"), a company incorporated under the laws of the Federal Republic of Nigeria, registered address Plot 109, Girls Mall Estate, Coal City Garden, Enugu State, Nigeria.',
+            'By creating an account, downloading the app, or otherwise using the Service, you agree to be bound by these Terms and by our [Privacy Policy](/privacy) (available in the app and at pelevo.com), which is incorporated by reference. If you do not agree, do not use the Service.',
+        ];
     }
 
     /**
@@ -186,6 +202,9 @@ final class MarketingLegal
         return (string) preg_replace_callback(
             '/\[([^\]]+)\]\(([^)]+)\)/',
             static function (array $match): string {
+                if ($match[2] === '/privacy' || $match[2] === '/terms') {
+                    return $match[0];
+                }
                 if (str_starts_with($match[2], 'http')) {
                     return $match[1].' ('.$match[2].')';
                 }
@@ -331,6 +350,40 @@ final class MarketingLegal
             ['heading' => '18. Contact', 'body' => [
                 'For general questions about these Terms: info@podemeralds.com. For account or app support: support@podemeralds.com. To raise a dispute under Section 16.2, or for other legal matters: legal@podemeralds.com. For privacy-related matters, see our [Privacy Policy](/privacy).',
             ]],
+        ];
+    }
+
+    /**
+     * Same Terms and Privacy copy as the public website, in the mobile CMS shape.
+     *
+     * Used when no published CMS row exists. A published CMS page still wins.
+     *
+     * @return array<string, mixed>
+     */
+    public static function apiPayload(string $slug): array
+    {
+        $terms = $slug === 'terms';
+        $sections = $terms ? self::terms() : self::privacy();
+
+        return [
+            'id' => 'public-'.$slug,
+            'slug' => $slug,
+            'title' => $terms ? 'Terms and Conditions of Use' : 'Privacy Policy',
+            'body' => '',
+            'version' => 1,
+            'published_at' => '2026-09-30T00:00:00Z',
+            'updated_at' => '2026-09-30T00:00:00Z',
+            'body_format' => 'plain_text',
+            'intro' => $terms
+                ? "Last updated: 30th September 2026\n\n".implode("\n\n", self::termsIntro())
+                : 'Last updated: 30th September 2026',
+            'sections' => array_map(
+                static fn (array $section): array => [
+                    'title' => $section['heading'],
+                    'body' => self::privacySectionPlain($section['body']),
+                ],
+                $sections,
+            ),
         ];
     }
 }

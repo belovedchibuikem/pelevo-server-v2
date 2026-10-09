@@ -27,7 +27,24 @@ final class MobileSupportTest extends TestCase
 
     public function test_published_legal_content_is_public_without_invented_fallbacks(): void
     {
-        DB::table('cms_pages')->insert(['id' => (string) Str::ulid(), 'slug' => 'terms', 'title' => 'Published terms', 'body' => 'The approved CMS text.', 'version' => 1, 'state' => 'published', 'published_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+        $published = [
+            'title' => 'Published terms',
+            'body' => 'The approved CMS text.',
+            'version' => 1,
+            'state' => 'published',
+            'published_at' => now(),
+            'updated_at' => now(),
+        ];
+        if (DB::table('cms_pages')->where('slug', 'terms')->exists()) {
+            DB::table('cms_pages')->where('slug', 'terms')->update($published);
+        } else {
+            DB::table('cms_pages')->insert([
+                'id' => (string) Str::ulid(),
+                'slug' => 'terms',
+                'created_at' => now(),
+                ...$published,
+            ]);
+        }
 
         $this->getJson('/api/v1/cms/terms')->assertOk()->assertJsonPath('data.intro', 'The approved CMS text.');
     }
@@ -65,7 +82,10 @@ final class MobileSupportTest extends TestCase
 
         $this->getJson('/api/v1/cms/help')->assertNotFound()->assertJsonPath('error.code', 'NOT_FOUND');
         $this->getJson('/api/v1/cms/about')->assertNotFound()->assertJsonPath('error.code', 'NOT_FOUND');
-        $this->getJson('/api/v1/cms/privacy')->assertNotFound()->assertJsonPath('error.code', 'NOT_FOUND');
+        $this->getJson('/api/v1/cms/privacy')->assertOk()
+            ->assertJsonPath('data.slug', 'privacy')
+            ->assertJsonPath('data.title', 'Privacy Policy')
+            ->assertJsonPath('data.sections.0.title', '1. Who We Are');
     }
 
     public function test_unlisted_cms_slugs_are_not_accessible(): void

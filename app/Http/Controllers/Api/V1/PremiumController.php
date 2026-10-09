@@ -59,16 +59,23 @@ final class PremiumController extends Controller
         if (! $plan) {
             return ApiResponse::error('VALIDATION', 'The selected Premium plan is unavailable.', 422);
         }
-        $hash = hash('sha256', json_encode([$request->user()->id, $plan->id, $data['provider'], $plan->price_minor, $plan->currency], JSON_THROW_ON_ERROR));
+        $trialMonths = (int) ($plan->trial_months ?? 0);
+        $chargeMinor = $trialMonths > 0 ? 0 : (int) $plan->price_minor;
+        $hash = hash('sha256', json_encode([$request->user()->id, $plan->id, $data['provider'], $chargeMinor, $plan->currency], JSON_THROW_ON_ERROR));
         $existing = DB::table('premium_checkouts')->where('idempotency_key', $key)->first();
         if ($existing) {
             return hash_equals($existing->request_hash, $hash) ? ApiResponse::success($this->presentedCheckout($existing)) : ApiResponse::error('CONFLICT', 'Idempotency key was reused with different checkout values.', 409);
+        }
+        $id = (string) Str::ulid();
+        if ($trialMonths > 0) {
+            DB::table('premium_checkouts')->insert(['id' => $id, 'user_id' => $request->user()->id, 'premium_plan_id' => $plan->id, 'provider' => $data['provider'], 'provider_reference' => 'premium-'.$id, 'idempotency_key' => $key, 'request_hash' => $hash, 'amount_minor' => 0, 'currency' => $plan->currency, 'state' => 'pending', 'checkout_url' => null, 'expires_at' => now()->addMonths($trialMonths), 'created_at' => now(), 'updated_at' => now()]);
+
+            return ApiResponse::success($this->presentedCheckout(DB::table('premium_checkouts')->find($id)), status: 201);
         }
         $endpoint = config("services.{$data['provider']}.checkout_url");
         if (! $endpoint) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Checkout provider credentials are not configured.', 503);
         }
-        $id = (string) Str::ulid();
         $providerReference = 'premium-'.$id;
         try {
             $response = Http::withToken((string) config("services.{$data['provider']}.checkout_token"))->connectTimeout(3)->timeout(15)->post($endpoint, ['reference' => $providerReference, 'amount' => $plan->price_minor, 'currency' => $plan->currency, 'email' => $request->user()->email, 'callback_url' => config('app.url').'/premium/return'])->throw()->json();
@@ -113,6 +120,7 @@ final class PremiumController extends Controller
             'price_minor' => (int) $row->price_minor,
             'currency' => $row->currency,
             'interval' => $row->interval,
+            'trial_months' => (int) ($row->trial_months ?? 0),
         ];
     }
 

@@ -613,7 +613,7 @@ paths:
     get: { security: [{ bearerAuth: [] }], parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }, { name: cursor, in: query, schema: { type: string, maxLength: 2048 } }], responses: { '200': { description: 'Owner-scoped withdrawal rows: id, decimal-string coins, state, ISO created_at. Meta contains user_id, cursor and has_more. Stable descending created_at/id pagination. Does not expose payout destinations, request hashes or idempotency keys.' }, '401': { description: Authentication required }, '422': { description: Invalid pagination input } } }
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: 'Earn balance reserved. Public receipt is id, decimal-string coins, state and ISO created_at. Idempotency-Key is required. Destinations, request hashes and keys stay off the client. Requires a stored age-of-majority confirmation.' }, '403': { description: AGE_CONFIRMATION_REQUIRED }, '409': { description: Insufficient balance, unverified method or idempotency conflict }, '503': { description: Awaiting finance sign-off } } }
   /premium/plans:
-    get: { responses: { '200': { description: 'Active plans as id, slug, name, price_minor, currency, interval' } } }
+    get: { responses: { '200': { description: 'Active plans as id, slug, name, price_minor, currency, interval, trial_months. trial_months is 3 on the Plus introductory offer and 0 otherwise.' } } }
   /premium/me:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'entitlement {state, starts_at, ends_at, plan_id} and subscription {id, state, provider, current_period_start, current_period_end, plan_id, cancel_at}. Provider references stay off the client.' } } }
   /premium/invoices:
@@ -626,6 +626,12 @@ paths:
     post: { security: [{ bearerAuth: [] }], responses: { '201': { description: Provider checkout initialized for plan change with the same public checkout fields } } }
   /premium/restore:
     post: { security: [{ bearerAuth: [] }], responses: { '200': { description: 'Verified restore returns invoice id, totals, currency, state, receipt_url and paid_at' }, '422': { description: Payment unverified } } }
+  /premium/offers/{offer}/sessions:
+    post: { security: [{ bearerAuth: [] }], description: 'Records one app session for plus-3-month-trial. The same session_id does not increment twice. eligible is true only for a free listener on every 8th session when the banner was last shown at least 8 days ago.', responses: { '200': { description: 'slug, plan_id, trial_months, premium, eligible, session_count, last_shown_at, cooldown_days, session_interval' }, '404': { description: Offer unavailable } } }
+  /premium/offers/{offer}/shown:
+    post: { security: [{ bearerAuth: [] }], description: 'Stores the last time the trial banner was shown for this user.', responses: { '200': { description: 'slug and last_shown_at' }, '404': { description: Offer not found } } }
+  /premium/store-purchase:
+    post: { security: [{ bearerAuth: [] }], description: 'Verifies an Apple or Google receipt and grants the selected plan. A 3-month trial plan starts a trialing subscription and an active entitlement through the trial end. Receipts, product ids and transaction ids in the verifier payload are not echoed.', responses: { '201': { description: 'entitlement and subscription using the same public fields as /premium/me' }, '409': { description: Receipt already claimed, account already Premium, or trial already used }, '422': { description: Receipt unverified }, '503': { description: Store verification unavailable } } }
   /devices:
     get: { security: [{ bearerAuth: [] }], responses: { '200': { description: Private device activity and trust inventory } } }
   /devices/pairing-code:

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\MarketingLegal;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +34,10 @@ final class SupportController extends Controller
             ->whereNotNull('published_at')->where('published_at', '<=', now())
             ->select('id', 'slug', 'title', 'body', 'version', 'published_at', 'updated_at')->first();
         if (! $page) {
+            if (in_array($slug, ['terms', 'privacy'], true)) {
+                return ApiResponse::success(MarketingLegal::apiPayload($slug));
+            }
+
             return ApiResponse::error('NOT_FOUND', 'This page has not been published yet.', 404);
         }
         $parts = preg_split('/^##[\t ]+(.+)\r?$/m', $page->body, -1, PREG_SPLIT_DELIM_CAPTURE);

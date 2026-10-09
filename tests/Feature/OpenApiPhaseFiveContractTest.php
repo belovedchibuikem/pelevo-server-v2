@@ -9,7 +9,7 @@ final class OpenApiPhaseFiveContractTest extends TestCase
 {
     public function test_phase_five_mobile_routes_match_openapi_methods(): void
     {
-        $expected = ['premium/plans' => ['GET'], 'premium/me' => ['GET'], 'premium/invoices' => ['GET'], 'premium/exclusive' => ['GET'], 'premium/checkout' => ['POST'], 'premium/change-plan' => ['POST'], 'premium/restore' => ['POST'], 'studio/payout-settings' => ['GET', 'PUT']];
+        $expected = ['premium/plans' => ['GET'], 'premium/me' => ['GET'], 'premium/invoices' => ['GET'], 'premium/exclusive' => ['GET'], 'premium/checkout' => ['POST'], 'premium/change-plan' => ['POST'], 'premium/restore' => ['POST'], 'premium/offers/{offer}/sessions' => ['POST'], 'premium/offers/{offer}/shown' => ['POST'], 'premium/store-purchase' => ['POST'], 'studio/payout-settings' => ['GET', 'PUT']];
         $spec = file_get_contents(base_path('openapi.yaml'));
         foreach ($expected as $path => $methods) {
             $this->assertStringContainsString('/'.$path.':', $spec);

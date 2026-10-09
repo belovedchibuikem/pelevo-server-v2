@@ -35,6 +35,7 @@ use App\Http\Controllers\Api\V1\PlatformController;
 use App\Http\Controllers\Api\V1\PlaybackController;
 use App\Http\Controllers\Api\V1\PlayerSessionController;
 use App\Http\Controllers\Api\V1\PremiumController;
+use App\Http\Controllers\Api\V1\PremiumOfferController;
 use App\Http\Controllers\Api\V1\PrivacyRequestController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\PublicLiveController;
@@ -266,6 +267,9 @@ Route::prefix('v1')->group(function (): void {
         Route::post('premium/checkout', [PremiumController::class, 'checkout']);
         Route::post('premium/change-plan', [PremiumController::class, 'changePlan']);
         Route::post('premium/restore', [PremiumController::class, 'restore']);
+        Route::post('premium/offers/{offer}/sessions', [PremiumOfferController::class, 'session'])->middleware('throttle:30,1');
+        Route::post('premium/offers/{offer}/shown', [PremiumOfferController::class, 'shown'])->middleware('throttle:30,1');
+        Route::post('premium/store-purchase', [PremiumOfferController::class, 'storePurchase'])->middleware('throttle:10,1');
         Route::get('withdrawals', [WithdrawalController::class, 'index']);
         Route::post('withdrawals', [WithdrawalController::class, 'store']);
         Route::get('payout-methods', [PayoutMethodController::class, 'index']);
