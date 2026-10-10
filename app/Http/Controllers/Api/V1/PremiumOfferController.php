@@ -148,7 +148,12 @@ final class PremiumOfferController extends Controller
                     throw new RuntimeException('ALREADY_PREMIUM');
                 }
                 $trialMonths = (int) ($plan->trial_months ?? 0);
-                if ($trialMonths > 0 && DB::table('premium_entitlements')->where('user_id', $userId)->where('premium_plan_id', $plan->id)->exists()) {
+                if ($trialMonths > 0 && DB::table('premium_entitlements')
+                    ->where('user_id', $userId)
+                    ->whereIn('premium_plan_id', function ($query): void {
+                        $query->select('id')->from('premium_plans')->where('trial_months', '>', 0);
+                    })
+                    ->exists()) {
                     throw new RuntimeException('TRIAL_USED');
                 }
                 $start = now();
@@ -207,8 +212,10 @@ final class PremiumOfferController extends Controller
     private function trialPlan(): ?object
     {
         return DB::table('premium_plans')
-            ->where('slug', PremiumTrialOffer::SLUG)
             ->where('active', true)
+            ->where('trial_months', '>=', PremiumTrialOffer::TRIAL_MONTHS)
+            ->orderByRaw("case when `interval` = 'year' then 0 else 1 end")
+            ->orderBy('price_minor')
             ->first();
     }
 

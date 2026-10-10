@@ -21,20 +21,25 @@ final class PremiumTrialOfferTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_trial_plan_is_published_and_checkout_does_not_charge_or_grant_access(): void
+    public function test_monthly_and_annual_plans_publish_the_trial_and_checkout_does_not_charge(): void
     {
         config()->set('premium.public_enabled', true);
         Http::preventStrayRequests();
         $user = User::factory()->create();
-        $planId = $this->trialPlanId();
-        $plans = $this->actingAs($user, 'sanctum')->getJson('/api/v1/premium/plans')->assertOk()->json('data');
-        $trial = collect($plans)->firstWhere('slug', PremiumTrialOffer::SLUG);
-        $this->assertSame(3, $trial['trial_months']);
-        $this->assertSame($planId, $trial['id']);
+        $plans = collect($this->actingAs($user, 'sanctum')->getJson('/api/v1/premium/plans')->assertOk()->json('data'));
+        $monthly = $plans->firstWhere('slug', 'plus-monthly');
+        $yearly = $plans->firstWhere('slug', 'plus-yearly');
+        $this->assertSame(160000, $monthly['price_minor']);
+        $this->assertSame('month', $monthly['interval']);
+        $this->assertSame(3, $monthly['trial_months']);
+        $this->assertSame(1760000, $yearly['price_minor']);
+        $this->assertSame('year', $yearly['interval']);
+        $this->assertSame(3, $yearly['trial_months']);
+        $this->assertFalse($plans->contains(fn (array $plan): bool => $plan['slug'] === PremiumTrialOffer::SLUG));
 
         $checkout = $this->actingAs($user, 'sanctum')
             ->withHeader('Idempotency-Key', 'trial-checkout')
-            ->postJson('/api/v1/premium/checkout', ['plan_id' => $planId, 'provider' => 'paystack'])
+            ->postJson('/api/v1/premium/checkout', ['plan_id' => $yearly['id'], 'provider' => 'paystack'])
             ->assertCreated()
             ->assertJsonPath('data.amount_minor', 0)
             ->assertJsonPath('data.state', 'pending');
@@ -46,7 +51,7 @@ final class PremiumTrialOfferTest extends TestCase
     public function test_banner_is_capped_to_every_eighth_session_and_eight_days(): void
     {
         $user = User::factory()->create();
-        $this->trialPlanId();
+        $this->planId('plus-yearly');
         for ($session = 1; $session <= 7; $session++) {
             $this->actingAs($user, 'sanctum')
                 ->postJson($this->sessions(), ['session_id' => 'session-'.$session])
@@ -90,7 +95,7 @@ final class PremiumTrialOfferTest extends TestCase
     public function test_active_premium_never_sees_the_offer(): void
     {
         $user = User::factory()->create();
-        $planId = $this->trialPlanId();
+        $planId = $this->planId('plus-yearly');
         DB::table('premium_entitlements')->insert([
             'id' => (string) Str::ulid(),
             'user_id' => $user->id,
@@ -125,7 +130,7 @@ final class PremiumTrialOfferTest extends TestCase
             'quantity' => 1,
         ])]);
         $user = User::factory()->create();
-        $planId = $this->trialPlanId();
+        $planId = $this->planId('plus-yearly');
         $payload = ['store' => 'google', 'receipt' => 'receipt-token', 'plan_id' => $planId];
         $started = $this->actingAs($user, 'sanctum')
             ->postJson('/api/v1/premium/store-purchase', $payload)
@@ -150,9 +155,9 @@ final class PremiumTrialOfferTest extends TestCase
             ->assertJsonPath('error.code', 'CONFLICT');
     }
 
-    private function trialPlanId(): string
+    private function planId(string $slug): string
     {
-        return (string) DB::table('premium_plans')->where('slug', PremiumTrialOffer::SLUG)->value('id');
+        return (string) DB::table('premium_plans')->where('slug', $slug)->value('id');
     }
 
     private function sessions(): string

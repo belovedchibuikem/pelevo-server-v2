@@ -9,6 +9,7 @@ use App\Jobs\MaterializeHomeFeed;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -18,18 +19,52 @@ final class HomeController extends Controller
     public function feed(Request $request, BuildHomeFeed $builder): JsonResponse
     {
         $userId = $request->user()->id;
-        $snapshot = DB::table('home_feed_snapshots')->where('user_id', $userId)->where('expires_at', '>', now())->first();
-        $snapshotRails = $snapshot ? json_decode($snapshot->rails, true, flags: JSON_THROW_ON_ERROR) : null;
-        $validSnapshot = is_array($snapshotRails) && isset($snapshotRails[0]['id'], $snapshotRails[0]['type']);
-        $moduleVersion = hash('sha256', (string) DB::table('home_modules')->max('updated_at'));
-        $rotationSlot = now()->format('Y-m-d').'-'.intdiv((int) now()->format('G'), 6);
-        $bust = (int) Cache::get("home:feed:bust:{$userId}", 0);
-        $rails = $validSnapshot ? $snapshotRails : Cache::flexible("home:feed:{$userId}:v3:{$moduleVersion}:{$rotationSlot}:{$bust}", [30, 120], fn (): array => $builder->handle($userId));
-        if (! $validSnapshot) {
+        $snapshot = DB::table('home_feed_snapshots')->where('user_id', $userId)->first();
+        $snapshotRails = $this->snapshotRails($snapshot);
+        $generatedAt = $snapshot?->generated_at ? Carbon::parse($snapshot->generated_at) : null;
+        $expiresAt = $snapshot?->expires_at ? Carbon::parse($snapshot->expires_at) : null;
+        $fresh = $snapshotRails !== null && $expiresAt !== null && $expiresAt->isFuture();
+        $recent = $snapshotRails !== null && $generatedAt !== null && $generatedAt->greaterThan(now()->subHours(6));
+
+        if ($fresh) {
+            $rails = $snapshotRails;
+            $freshness = 'materialized';
+        } elseif ($recent) {
+            // Return the last feed immediately. Rebuilding it inside this
+            // request was slow enough that the app kept its old local copy.
+            $rails = $snapshotRails;
+            $freshness = 'stale';
+            MaterializeHomeFeed::dispatch($userId)->afterResponse();
+        } else {
+            $moduleVersion = hash('sha256', (string) DB::table('home_modules')->max('updated_at'));
+            $rotationSlot = now()->format('Y-m-d').'-'.intdiv((int) now()->format('G'), 6);
+            $bust = (int) Cache::get("home:feed:bust:{$userId}", 0);
+            $rails = Cache::flexible("home:feed:{$userId}:v3:{$moduleVersion}:{$rotationSlot}:{$bust}", [30, 120], fn (): array => $builder->handle($userId));
+            $freshness = 'computed';
             MaterializeHomeFeed::dispatch($userId)->afterResponse();
         }
 
-        return ApiResponse::success(['schema_version' => 2, 'rails' => $rails], ['freshness' => $validSnapshot ? 'materialized' : 'computed', 'snapshot_version' => $validSnapshot ? $snapshot?->version : null]);
+        return ApiResponse::success(['schema_version' => 2, 'rails' => $rails], ['freshness' => $freshness, 'snapshot_version' => $snapshot?->version]);
+    }
+
+    /**
+     * @return list<array<string, mixed>>|null
+     */
+    private function snapshotRails(?object $snapshot): ?array
+    {
+        if ($snapshot === null || ! is_string($snapshot->rails) || $snapshot->rails === '') {
+            return null;
+        }
+        try {
+            $decoded = json_decode($snapshot->rails, true, flags: JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+        if (! is_array($decoded) || ! isset($decoded[0]['id'], $decoded[0]['type'])) {
+            return null;
+        }
+
+        return $decoded;
     }
 
     public function rail(Request $request, BuildHomeFeed $builder, string $rail): JsonResponse
