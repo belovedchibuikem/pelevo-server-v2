@@ -270,6 +270,8 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 'duration_seconds' => $duration,
                 'published_at' => $published,
                 'availability' => 'available',
+                'creator_name' => CatalogText::utf8((string) ($show->author ?? ''), 191) ?: null,
+                'tags' => $this->podcastIndexTags($item),
             ]
         );
 
@@ -297,6 +299,7 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                 'audio_url' => $audioUrl,
                 'duration_seconds' => $this->durationSeconds($item),
                 'published_at' => ($date = strtotime((string) $item->pubDate)) ? date(DATE_ATOM, $date) : null,
+                'tags' => $this->itunesKeywords($item),
             ];
             if (count($buffer) >= $chunkSize) {
                 array_push($newEpisodes, ...$this->flushEpisodeChunk($show, $buffer));
@@ -325,6 +328,8 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
                         'duration_seconds' => $row['duration_seconds'],
                         'published_at' => $row['published_at'],
                         'availability' => 'available',
+                        'creator_name' => CatalogText::utf8((string) ($show->author ?? ''), 191) ?: null,
+                        'tags' => $row['tags'] ?? null,
                     ]
                 );
             } catch (Throwable $exception) {
@@ -741,6 +746,40 @@ final class HydrateRssFeed implements ShouldBeUnique, ShouldQueue
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function podcastIndexTags(array $item): ?string
+    {
+        $categories = $item['categories'] ?? null;
+        if (! is_array($categories) || $categories === []) {
+            return null;
+        }
+        $labels = [];
+        foreach ($categories as $key => $value) {
+            $label = is_string($value) && trim($value) !== '' ? $value : (is_string($key) ? $key : '');
+            $label = trim($label);
+            if ($label !== '') {
+                $labels[] = $label;
+            }
+        }
+        $tags = CatalogText::utf8(implode(', ', $labels), 500);
+
+        return $tags !== '' ? $tags : null;
+    }
+
+    private function itunesKeywords(\SimpleXMLElement $item): ?string
+    {
+        $itunes = $item->children('http://www.itunes.com/dtds/podcast-1.0.dtd');
+        $keywords = trim((string) ($itunes->keywords ?? ''));
+        if ($keywords === '') {
+            return null;
+        }
+        $tags = CatalogText::utf8($keywords, 500);
+
+        return $tags !== '' ? $tags : null;
     }
 
     private function durationSeconds(\SimpleXMLElement $item): ?int

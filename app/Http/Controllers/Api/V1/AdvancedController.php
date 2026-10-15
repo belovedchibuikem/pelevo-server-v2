@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Integrations\Ai\LanguageModel;
 use App\Jobs\ProcessAiJob;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
@@ -85,20 +86,41 @@ final class AdvancedController extends Controller
         if (! config('features.ai', false)) {
             return ApiResponse::error('FORBIDDEN', 'AI tools are disabled.', 403);
         }
-        $data = $request->validate(['type' => ['required', 'in:summary,chapters,transcript'], 'input' => ['required', 'array']]);
+        $data = $request->validate([
+            'type' => ['required', 'in:summary,chapters,transcript,highlights'],
+            'input' => ['required', 'array'],
+        ]);
+        if (! app(LanguageModel::class)->configured()) {
+            return ApiResponse::error('SERVICE_DEGRADED', 'AI summaries need an API key. Set AI_PROVIDER_TOKEN and restart the API.', 503);
+        }
         $daily = DB::table('ai_jobs')->where('user_id', $request->user()->id)->where('created_at', '>=', now()->startOfDay())->count();
         if ($daily >= config('ai.daily_job_cap', 10)) {
             return ApiResponse::error('QUOTA_EXCEEDED', 'Daily AI quota reached.', 429);
         }
         $prompt = DB::table('prompt_versions')->where('type', $data['type'])->where('state', 'active')->latest('version')->first();
-        if (! $prompt) {
-            return ApiResponse::error('SERVICE_DEGRADED', 'No active prompt version is configured.', 503);
-        }
         $id = (string) Str::ulid();
-        DB::table('ai_jobs')->insert(['id' => $id, 'user_id' => $request->user()->id, 'type' => $data['type'], 'state' => 'queued', 'input' => json_encode([...$data['input'], '_prompt_version' => $prompt->version], JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
-        ProcessAiJob::dispatch($id);
+        DB::table('ai_jobs')->insert([
+            'id' => $id,
+            'user_id' => $request->user()->id,
+            'type' => $data['type'],
+            'state' => 'queued',
+            'input' => json_encode([...$data['input'], '_prompt_version' => $prompt->version ?? 0], JSON_THROW_ON_ERROR),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        if (config('ai.process_inline')) {
+            set_time_limit(90);
+            try {
+                ProcessAiJob::dispatchSync($id);
+            } catch (\Throwable) {
+                // The job row already records the failure. The client reads that state.
+            }
+        } else {
+            ProcessAiJob::dispatch($id);
+        }
+        $state = DB::table('ai_jobs')->where('id', $id)->value('state') ?? 'queued';
 
-        return ApiResponse::success(['id' => $id, 'type' => $data['type'], 'state' => 'queued'], status: 202);
+        return ApiResponse::success(['id' => $id, 'type' => $data['type'], 'state' => $state], status: 202);
     }
 
     public function aiShow(string $job, Request $request): JsonResponse
@@ -109,12 +131,36 @@ final class AdvancedController extends Controller
         }
         $decoded = is_string($row->output) ? json_decode($row->output, true) : $row->output;
         $text = is_array($decoded) && is_string($decoded['text'] ?? null) ? $decoded['text'] : null;
+        $takeaways = is_array($decoded) ? $this->stringList($decoded['takeaways'] ?? []) : [];
+        $topics = is_array($decoded) ? $this->stringList($decoded['topics'] ?? []) : [];
+        $output = $text === null && $takeaways === [] && $topics === []
+            ? null
+            : ['text' => $text, 'takeaways' => $takeaways, 'topics' => $topics];
 
         return ApiResponse::success([
             'id' => $row->id,
             'type' => $row->type,
             'state' => $row->state,
-            'output' => $text === null ? null : ['text' => $text],
+            'output' => $output,
         ]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function stringList(mixed $value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+        $items = [];
+        foreach ($value as $item) {
+            if (! is_string($item) || trim($item) === '') {
+                continue;
+            }
+            $items[] = trim($item);
+        }
+
+        return $items;
     }
 }

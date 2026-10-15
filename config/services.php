@@ -58,7 +58,12 @@ return [
         'token' => env('EARN_INTEGRITY_TOKEN'),
         'allow_jwt_passthrough' => (bool) env('EARN_INTEGRITY_ALLOW_JWT_PASSTHROUGH', false),
     ],
-    'ai' => ['url' => env('AI_PROVIDER_URL'), 'token' => env('AI_PROVIDER_TOKEN'), 'provider' => env('AI_PROVIDER', 'configured'), 'model' => env('AI_MODEL')],
+    'ai' => [
+        'url' => env('AI_PROVIDER_URL'),
+        'token' => env('AI_PROVIDER_TOKEN'),
+        'provider' => env('AI_PROVIDER', 'openai'),
+        'model' => env('AI_MODEL', 'gpt-4.1-mini'),
+    ],
     'mux' => ['token_id' => env('MUX_TOKEN_ID'), 'token_secret' => env('MUX_TOKEN_SECRET'), 'signing_key' => env('MUX_SIGNING_KEY')],
     'fcm' => [
         'server_key' => env('FCM_SERVER_KEY'),

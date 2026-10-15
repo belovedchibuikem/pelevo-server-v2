@@ -10,7 +10,7 @@ final class Episode extends Model
 {
     use HasUlids;
 
-    protected $fillable = ['show_id', 'guid', 'external_id', 'title', 'description', 'audio_url', 'duration_seconds', 'published_at', 'availability'];
+    protected $fillable = ['show_id', 'guid', 'external_id', 'title', 'description', 'audio_url', 'duration_seconds', 'published_at', 'availability', 'creator_name', 'tags'];
 
     protected function casts(): array
     {

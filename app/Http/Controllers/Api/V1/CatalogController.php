@@ -30,16 +30,31 @@ final class CatalogController extends Controller
             'language' => ['nullable', 'string', 'max:35'],
             'category' => ['nullable', 'string', 'max:60'],
             'preview' => ['nullable', 'boolean'],
+            'type' => ['nullable', 'string', 'in:show,episode,playlist,person'],
         ]);
         $normalizedQuery = trim($data['q']);
         $limit = $data['limit'] ?? 20;
         $preview = $request->boolean('preview');
+        $type = isset($data['type']) ? (string) $data['type'] : null;
         $category = isset($data['category']) ? trim((string) $data['category']) : null;
         $category = $category === '' ? null : $category;
         $queryHash = hash('sha256', Str::lower($normalizedQuery.'|'.($category ?? '')));
         if (! $preview) {
             $history = DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->first();
             $history ? DB::table('search_history')->where('id', $history->id)->update(['query' => $normalizedQuery, 'searched_at' => now(), 'updated_at' => now()]) : DB::table('search_history')->insert(['id' => (string) Str::ulid(), 'user_id' => $request->user()->id, 'query_hash' => $queryHash, 'query' => $normalizedQuery, 'searched_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+        }
+        if ($type === 'episode') {
+            $episodes = $this->cachedMatchingEpisodes($normalizedQuery, $limit);
+            if (! $preview) {
+                DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->update(['result_count' => count($episodes), 'updated_at' => now()]);
+            }
+
+            return ApiResponse::success([
+                'query' => $normalizedQuery,
+                'shows' => [],
+                'episodes' => $episodes,
+                'playlists' => [],
+            ], ['cursor' => null, 'has_more' => false, 'freshness' => 'cached']);
         }
         $shows = $this->matchingShows($normalizedQuery, $limit);
         $freshness = 'local';
@@ -125,9 +140,11 @@ final class CatalogController extends Controller
         // After a Podcast Index hit, do not LIKE-scan the whole episode table —
         // that work outlives the app receive timeout, so the client never paints
         // the 20 shows we already persisted.
-        $episodes = $freshness === 'fresh'
-            ? $this->matchingEpisodes($normalizedQuery, $limit, $showIds)
-            : $this->matchingEpisodes($normalizedQuery, $limit);
+        $episodes = ($preview || $type === 'show')
+            ? []
+            : ($freshness === 'fresh'
+                ? $this->matchingEpisodes($normalizedQuery, $limit, $showIds)
+                : $this->cachedMatchingEpisodes($normalizedQuery, $limit));
 
         return ApiResponse::success([
             'query' => $normalizedQuery,
@@ -157,19 +174,23 @@ final class CatalogController extends Controller
             'cursor' => ['sometimes', 'string', 'max:2048'],
             'q' => ['sometimes', 'string', 'min:1', 'max:100'],
         ]);
-        $this->ensureRssHydrationQueued($show);
+        $search = isset($data['q']) ? trim((string) $data['q']) : '';
+        if ($search === '') {
+            $this->ensureRssHydrationQueued($show);
+        }
         $show->loadMissing('feedState');
 
         $query = $show->episodes()->where('availability', 'available');
-        $search = isset($data['q']) ? trim((string) $data['q']) : '';
         if ($search !== '') {
             $like = '%'.$search.'%';
-            $fulltext = $this->fullTextClause(['title', 'description'], $search);
+            $fulltext = $this->fullTextClause($this->episodeSearchColumns(), $search);
             $query->where(function ($builder) use ($like, $fulltext): void {
                 if ($fulltext !== null) {
                     $builder->whereRaw($fulltext['match'], $fulltext['bindings']);
+
+                    return;
                 }
-                $this->applyLikeFallback($builder, ['title', 'description'], $like);
+                $this->applyLikeFallback($builder, ['title', 'creator_name', 'tags'], $like);
             });
         }
 
@@ -315,6 +336,24 @@ final class CatalogController extends Controller
     }
 
     /**
+     * @return list<string>
+     */
+    private function episodeSearchColumns(): array
+    {
+        return ['title', 'description', 'tags', 'creator_name'];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function cachedMatchingEpisodes(string $query, int $limit): array
+    {
+        $key = 'search:episodes:v2:'.hash('sha256', Str::lower($query).'|'.$limit);
+
+        return Cache::remember($key, now()->addMinutes(2), fn (): array => $this->matchingEpisodes($query, $limit));
+    }
+
+    /**
      * @param  \Illuminate\Support\Collection<int, string>|null  $showIds
      */
     private function matchingEpisodes(string $query, int $limit, $showIds = null): array
@@ -325,7 +364,8 @@ final class CatalogController extends Controller
         }
 
         $like = '%'.$query.'%';
-        $fulltext = $this->fullTextClause(['title', 'description'], $query);
+        $columns = $this->episodeSearchColumns();
+        $fulltext = $this->fullTextClause($columns, $query);
 
         return Episode::query()
             ->where('availability', 'available')
@@ -333,11 +373,13 @@ final class CatalogController extends Controller
             ->where(function ($builder) use ($like, $fulltext): void {
                 if ($fulltext !== null) {
                     $builder->whereRaw($fulltext['match'], $fulltext['bindings']);
+
+                    return;
                 }
-                $this->applyLikeFallback($builder, ['title', 'description'], $like);
+                $this->applyLikeFallback($builder, ['title', 'creator_name', 'tags'], $like);
             })
             ->whereHas('show', fn ($builder) => $builder->where('status', 'active'))
-            ->with('show:id,title,artwork_url,status')
+            ->with('show:id,title,artwork_url,author,status')
             ->when(
                 $fulltext !== null,
                 fn ($builder) => $builder->orderByRaw($fulltext['rank'], $fulltext['bindings'])
@@ -351,6 +393,7 @@ final class CatalogController extends Controller
                 'title' => $this->nonEmptyText($episode->title, 'Untitled episode'),
                 'show_id' => $episode->show_id,
                 'show_title' => $this->nullableText($episode->show?->title),
+                'creator_name' => $this->nullableText($episode->creator_name ?: $episode->show?->author),
                 'artwork_url' => ArtworkUrl::sanitize($episode->show?->artwork_url),
                 'published_at' => optional($episode->published_at)?->toIso8601String(),
                 'duration_seconds' => is_numeric($episode->duration_seconds)

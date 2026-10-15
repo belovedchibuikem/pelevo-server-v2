@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AdvancedController;
+use App\Http\Controllers\Api\V1\AiDiscoveryController;
 use App\Http\Controllers\Api\V1\AppealController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BrowseController;
@@ -216,6 +217,8 @@ Route::prefix('v1')->group(function (): void {
         Route::put('sync/conflicts/{conflict}', [AdvancedController::class, 'resolveConflict']);
         Route::post('ai/jobs', [AdvancedController::class, 'aiJob']);
         Route::get('ai/jobs/{job}', [AdvancedController::class, 'aiShow']);
+        Route::post('ai/ask', [AiDiscoveryController::class, 'ask'])->middleware('throttle:30,1');
+        Route::get('ai/lineup', [AiDiscoveryController::class, 'lineup']);
         Route::get('devices', [PlatformController::class, 'devices']);
         Route::post('devices/pairing-code', [PlatformController::class, 'pairingCode'])->middleware('throttle:5,1');
         Route::post('devices/pair', [PlatformController::class, 'pair'])->middleware('throttle:10,1');

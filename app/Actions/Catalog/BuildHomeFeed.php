@@ -195,7 +195,7 @@ final class BuildHomeFeed
             'moods' => $this->moods(),
             'continue_listening' => $this->continueListening($userId),
             'quick_listen' => $this->quickListen($userId, $filters['min_duration'] ?? null, $filters['max_duration'] ?? null),
-            'trending' => $this->trendingShows(),
+            'trending' => $this->trendingShows(40),
             'new_from_following' => $this->following($userId),
             'african_voices' => $this->africanVoiceShows($userId, $filters['country'] ?? null),
             'try_something_new' => $this->unexploredCategories($userId),
@@ -306,42 +306,56 @@ final class BuildHomeFeed
             ->values();
     }
 
-    private function trendingShows(): Collection
+    private function trendingShows(int $limit = 12): Collection
     {
-        $shows = DB::table('shows')
-            ->leftJoin('episodes', function ($join): void {
-                $join->on('episodes.show_id', '=', 'shows.id')
-                    ->where('episodes.availability', 'available');
-            })
-            ->leftJoin('playback_progress', 'playback_progress.episode_id', '=', 'episodes.id')
-            ->where('shows.status', 'active')
-            ->select(
-                'shows.id',
-                DB::raw("'show' AS type"),
-                'shows.title',
-                'shows.author as subtitle',
-                'shows.artwork_url',
-                'shows.author',
-                'shows.country_code',
-                DB::raw('COUNT(DISTINCT playback_progress.user_id) AS play_count'),
-            )
-            ->groupBy('shows.id', 'shows.title', 'shows.author', 'shows.artwork_url', 'shows.country_code')
-            ->orderByDesc('play_count')
-            ->orderByDesc('shows.updated_at')
-            ->limit(12)
-            ->get()
-            ->values()
-            ->map(function (object $show, int $index): object {
-                $show->rank = $index + 1;
+        $payload = Cache::flexible('home:trending-shows:v4:'.$limit, [120, 600], function () use ($limit): array {
+            $since = now()->subDays(14);
+            $plays = DB::table('playback_progress')
+                ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
+                ->where('episodes.availability', 'available')
+                ->where('playback_progress.updated_at', '>=', $since)
+                ->groupBy('episodes.show_id')
+                ->select('episodes.show_id', DB::raw('COUNT(DISTINCT playback_progress.user_id) as play_count'));
 
-                return $show;
-            });
+            $shows = DB::table('shows')
+                ->leftJoinSub($plays, 'plays', 'plays.show_id', '=', 'shows.id')
+                ->where('shows.status', 'active')
+                ->select(
+                    'shows.id',
+                    DB::raw("'show' AS type"),
+                    'shows.title',
+                    'shows.author as subtitle',
+                    'shows.artwork_url',
+                    'shows.author',
+                    'shows.country_code',
+                    DB::raw('COALESCE(plays.play_count, 0) AS play_count'),
+                )
+                ->orderByDesc('play_count')
+                ->orderByDesc('shows.updated_at')
+                ->orderBy('shows.id')
+                ->limit($limit)
+                ->get();
 
-        if ($shows->isNotEmpty()) {
-            return $shows;
-        }
+            if ($shows->isEmpty()) {
+                $shows = $this->discoverShows('africa podcast nigeria', $limit);
+            }
 
-        return $this->discoverShows('africa podcast nigeria', 12);
+            return $shows->values()->map(function (object $show, int $index): array {
+                return [
+                    'id' => (string) $show->id,
+                    'type' => 'show',
+                    'title' => $show->title,
+                    'subtitle' => $show->subtitle ?? $show->author ?? null,
+                    'artwork_url' => $show->artwork_url ?? null,
+                    'author' => $show->author ?? null,
+                    'country_code' => $show->country_code ?? null,
+                    'play_count' => (int) ($show->play_count ?? 0),
+                    'rank' => $index + 1,
+                ];
+            })->all();
+        });
+
+        return collect($payload)->map(fn (array $row): object => (object) $row);
     }
 
     private function trendingEpisodesFallback(): Collection
