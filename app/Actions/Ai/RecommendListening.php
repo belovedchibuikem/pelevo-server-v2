@@ -25,7 +25,7 @@ final class RecommendListening
     {
         $message = trim($message);
         $mode = $this->model->configured() ? 'model' : 'catalog';
-        $key = 'ai:ask:v2:'.$userId.':'.$mode.':'.hash('sha256', Str::lower($message));
+        $key = 'ai:ask:v3:'.$userId.':'.$mode.':'.hash('sha256', Str::lower($message));
 
         return Cache::remember($key, now()->addMinutes(2), function () use ($userId, $message): array {
             $terms = $this->terms($message);
@@ -127,27 +127,35 @@ final class RecommendListening
             ? $this->historyCandidates($context)
             : $this->searchCandidates($terms);
 
-        if ($candidates->isEmpty() && $terms !== []) {
-            $candidates = $this->historyCandidates($context);
-        }
-
         $focus = $terms[0] ?? null;
+        $phrase = implode(' ', $terms);
 
         return $candidates
-            ->map(function (object $row) use ($context, $focus, $terms): object {
+            ->map(function (object $row) use ($context, $focus, $terms, $phrase): object {
                 $showId = (string) $row->id;
-                $haystack = Str::lower(trim(($row->title ?? '').' '.($row->author ?? '').' '.($row->description ?? '').' '.($row->tags ?? '')));
+                $title = Str::lower(trim((string) ($row->title ?? '')));
+                $author = Str::lower(trim((string) ($row->author ?? '')));
+                $haystack = trim($title.' '.$author.' '.Str::lower((string) ($row->description ?? '')).' '.Str::lower((string) ($row->tags ?? '')));
                 $hits = 0;
                 foreach ($terms as $term) {
                     if ($term !== '' && str_contains($haystack, $term)) {
                         $hits++;
                     }
                 }
+                $titleHits = 0;
+                foreach ($terms as $term) {
+                    if ($term !== '' && str_contains($title, $term)) {
+                        $titleHits++;
+                    }
+                }
                 $row->score = ($hits * 20)
+                    + ($titleHits * 40)
+                    + $this->titlePhraseScore($title, $terms)
+                    + $this->titlePhraseScore($author, $terms)
                     + (isset($context['followed_ids'][$showId]) ? 24 : 0)
                     + (isset($context['recent_ids'][$showId]) ? 16 : 0)
                     + ((int) ($row->play_count ?? 0) > 0 ? 6 : 0);
-                $row->reason = $this->reason($row, $context, $focus, $hits);
+                $row->reason = $this->reason($row, $context, $focus, $hits, $phrase);
 
                 return $row;
             })
@@ -172,35 +180,86 @@ final class RecommendListening
      */
     private function searchCandidates(array $terms): \Illuminate\Support\Collection
     {
-        $boolean = $this->booleanQuery($terms);
-        $driver = DB::connection()->getDriverName();
+        $operator = DB::connection()->getDriverName() === 'pgsql' ? 'ilike' : 'like';
+        $phrase = implode(' ', $terms);
 
-        return DB::table('shows')
-            ->where('shows.status', 'active')
-            ->where(function ($query) use ($terms, $boolean, $driver): void {
-                if ($boolean !== null && $driver === 'mysql') {
-                    $focused = $this->booleanQuery(array_slice($terms, 0, 3)) ?? $boolean;
-                    $query->whereRaw('MATCH(shows.title, shows.description, shows.author) AGAINST (? IN BOOLEAN MODE)', [$focused]);
-
-                    return;
-                }
-                foreach ($terms as $term) {
-                    $like = '%'.$term.'%';
-                    $query->orWhere('shows.title', 'like', $like)
-                        ->orWhere('shows.author', 'like', $like);
-                }
+        $named = $this->activeShows()
+            ->where(function ($query) use ($terms, $phrase, $operator): void {
+                $this->matchColumns($query, ['shows.title', 'shows.author'], $terms, $phrase, $operator);
             })
             ->orderByDesc('shows.updated_at')
-            ->limit(40)
-            ->get([
-                'shows.id',
-                'shows.title',
-                'shows.author',
-                'shows.artwork_url',
-                DB::raw('LEFT(shows.description, 180) as description'),
-                DB::raw('NULL as tags'),
-                DB::raw('0 as play_count'),
-            ]);
+            ->limit(20)
+            ->get($this->showColumns());
+
+        $topical = $this->activeShows()
+            ->where(function ($query) use ($terms, $operator): void {
+                $this->matchColumns($query, ['shows.description'], $terms, '', $operator);
+            })
+            ->orderByDesc('shows.updated_at')
+            ->limit(20)
+            ->get($this->showColumns());
+
+        $fromEpisodes = DB::table('shows')
+            ->join('episodes', 'episodes.show_id', '=', 'shows.id')
+            ->where('shows.status', 'active')
+            ->where(function ($query) use ($terms, $phrase, $operator): void {
+                $this->matchColumns($query, ['episodes.title'], $terms, $phrase, $operator);
+            })
+            ->orderByDesc('episodes.published_at')
+            ->limit(20)
+            ->get($this->showColumns());
+
+        return $named->concat($topical)->concat($fromEpisodes)->unique('id')->values();
+    }
+
+    private function activeShows(): \Illuminate\Database\Query\Builder
+    {
+        return DB::table('shows')->where('shows.status', 'active');
+    }
+
+    /**
+     * @return list<string|\Illuminate\Contracts\Database\Query\Expression>
+     */
+    private function showColumns(): array
+    {
+        return [
+            'shows.id',
+            'shows.title',
+            'shows.author',
+            'shows.artwork_url',
+            DB::raw('LEFT(shows.description, 180) as description'),
+            DB::raw('NULL as tags'),
+            DB::raw('0 as play_count'),
+        ];
+    }
+
+    /**
+     * @param  list<string>  $columns
+     * @param  list<string>  $terms
+     */
+    private function matchColumns(object $query, array $columns, array $terms, string $phrase, string $operator): void
+    {
+        $patterns = [];
+        if ($phrase !== '') {
+            $patterns[] = $phrase;
+        }
+        foreach ($terms as $term) {
+            if ($term !== '' && ! in_array($term, $patterns, true)) {
+                $patterns[] = $term;
+            }
+        }
+        $started = false;
+        foreach ($patterns as $pattern) {
+            $like = '%'.addcslashes($pattern, '%_\\').'%';
+            foreach ($columns as $column) {
+                if (! $started) {
+                    $query->where($column, $operator, $like);
+                    $started = true;
+                } else {
+                    $query->orWhere($column, $operator, $like);
+                }
+            }
+        }
     }
 
     /**
@@ -272,9 +331,20 @@ final class RecommendListening
     /**
      * @param  array{recent_ids: array<string, true>, recent_title: string|null, followed_ids: array<string, true>}  $context
      */
-    private function reason(object $row, array $context, ?string $focus, int $hits): string
+    private function reason(object $row, array $context, ?string $focus, int $hits, string $phrase = ''): string
     {
         $showId = (string) $row->id;
+        $title = Str::lower(trim((string) ($row->title ?? '')));
+        $phraseTerms = $phrase === '' ? [] : explode(' ', $phrase);
+        $titleTermHits = 0;
+        foreach ($phraseTerms as $term) {
+            if ($term !== '' && str_contains($title, $term)) {
+                $titleTermHits++;
+            }
+        }
+        if ($titleTermHits > 0 && ($titleTermHits === count($phraseTerms) || $titleTermHits >= 2)) {
+            return 'This is '.$row->title.' from the Pelevo catalog.';
+        }
         if ($context['recent_title'] !== null && isset($context['recent_ids'][$showId]) && $showId !== array_key_first($context['recent_ids'])) {
             return 'Worth listening to because it sits next to '.$context['recent_title'].' in your history.';
         }
@@ -282,7 +352,7 @@ final class RecommendListening
             return 'Worth listening to because you already follow this show.';
         }
         if ($focus !== null && $hits > 0) {
-            return 'Worth listening to because it matches “'.$focus.'” without you having to search the show by name.';
+            return 'Worth listening to because it matches “'.$focus.'” in the Pelevo catalog.';
         }
         if ($context['recent_title'] !== null) {
             return 'Worth listening to because it is close to '.$context['recent_title'].' from your recent listening.';
@@ -301,6 +371,8 @@ final class RecommendListening
             'want', 'something', 'like', 'about', 'show', 'shows', 'podcast', 'podcasts', 'listen',
             'listening', 'hear', 'please', 'what', 'that', 'this', 'from', 'around', 'similar',
             'recommend', 'recommendation', 'episode', 'episodes', 'next', 'can', 'you', 'your',
+            'play', 'find', 'get', 'give', 'looking', 'need', 'just', 'really', 'tonight', 'today',
+            'some', 'any', 'best', 'good', 'by', 'let',
         ];
         $parts = preg_split('/[^\p{L}\p{N}]+/u', Str::lower($message), -1, PREG_SPLIT_NO_EMPTY);
         if ($parts === false) {
@@ -320,12 +392,21 @@ final class RecommendListening
     /**
      * @param  list<string>  $terms
      */
-    private function booleanQuery(array $terms): ?string
+    private function titlePhraseScore(string $haystack, array $terms): int
     {
-        if ($terms === []) {
-            return null;
+        if ($haystack === '' || count($terms) < 2) {
+            return 0;
+        }
+        $count = count($terms);
+        for ($length = $count; $length >= 2; $length--) {
+            for ($start = 0; $start <= $count - $length; $start++) {
+                $window = implode(' ', array_slice($terms, $start, $length));
+                if (str_contains($haystack, $window)) {
+                    return 80 * $length;
+                }
+            }
         }
 
-        return implode(' ', array_map(fn (string $term): string => '+'.$term.'*', $terms));
+        return 0;
     }
 }
