@@ -25,7 +25,7 @@ final class RecommendListening
     {
         $message = trim($message);
         $mode = $this->model->configured() ? 'model' : 'catalog';
-        $key = 'ai:ask:v3:'.$userId.':'.$mode.':'.hash('sha256', Str::lower($message));
+        $key = 'ai:ask:v4:'.$userId.':'.$mode.':'.hash('sha256', Str::lower($message));
 
         return Cache::remember($key, now()->addMinutes(2), function () use ($userId, $message): array {
             $terms = $this->terms($message);
@@ -182,13 +182,25 @@ final class RecommendListening
     {
         $operator = DB::connection()->getDriverName() === 'pgsql' ? 'ilike' : 'like';
         $phrase = implode(' ', $terms);
+        $orderedPhrase = $this->orderedPhrase($terms);
+
+        $exact = $orderedPhrase === null
+            ? collect()
+            : $this->activeShows()
+                ->where(function ($query) use ($orderedPhrase, $operator): void {
+                    $query->where('shows.title', $operator, $orderedPhrase)
+                        ->orWhere('shows.author', $operator, $orderedPhrase);
+                })
+                ->orderBy('shows.title')
+                ->limit(10)
+                ->get($this->showColumns());
 
         $named = $this->activeShows()
             ->where(function ($query) use ($terms, $phrase, $operator): void {
                 $this->matchColumns($query, ['shows.title', 'shows.author'], $terms, $phrase, $operator);
             })
             ->orderByDesc('shows.updated_at')
-            ->limit(20)
+            ->limit(12)
             ->get($this->showColumns());
 
         $topical = $this->activeShows()
@@ -196,7 +208,7 @@ final class RecommendListening
                 $this->matchColumns($query, ['shows.description'], $terms, '', $operator);
             })
             ->orderByDesc('shows.updated_at')
-            ->limit(20)
+            ->limit(8)
             ->get($this->showColumns());
 
         $fromEpisodes = DB::table('shows')
@@ -206,10 +218,28 @@ final class RecommendListening
                 $this->matchColumns($query, ['episodes.title'], $terms, $phrase, $operator);
             })
             ->orderByDesc('episodes.published_at')
-            ->limit(20)
+            ->limit(12)
             ->get($this->showColumns());
 
-        return $named->concat($topical)->concat($fromEpisodes)->unique('id')->values();
+        return $exact->concat($named)->concat($topical)->concat($fromEpisodes)->unique('id')->values();
+    }
+
+    /**
+     * Words in the order the listener said them, with anything allowed between them.
+     * "wardrobe memo" matches the title "Wardrobe Memo" even when newer "wardrobe" shows exist.
+     *
+     * @param  list<string>  $terms
+     */
+    private function orderedPhrase(array $terms): ?string
+    {
+        if (count($terms) < 2) {
+            return null;
+        }
+
+        return '%'.implode('%', array_map(
+            fn (string $term): string => addcslashes($term, '%_\\'),
+            $terms,
+        )).'%';
     }
 
     private function activeShows(): \Illuminate\Database\Query\Builder
@@ -352,7 +382,7 @@ final class RecommendListening
             return 'Worth listening to because you already follow this show.';
         }
         if ($focus !== null && $hits > 0) {
-            return 'Worth listening to because it matches “'.$focus.'” in the Pelevo catalog.';
+            return 'Worth listening to because it matches "'.$focus.'" in the Pelevo catalog.';
         }
         if ($context['recent_title'] !== null) {
             return 'Worth listening to because it is close to '.$context['recent_title'].' from your recent listening.';

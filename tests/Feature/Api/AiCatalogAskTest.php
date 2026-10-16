@@ -96,4 +96,35 @@ final class AiCatalogAskTest extends TestCase
             ->assertJsonPath('data.items.0.id', $show->id)
             ->assertJsonPath('data.items.0.title', 'Wardrobe Memo');
     }
+
+    public function test_ask_keeps_a_named_show_when_many_newer_partial_titles_exist(): void
+    {
+        Cache::flush();
+        config()->set('services.ai.token', '');
+        $listener = User::factory()->create();
+        $named = Show::create([
+            'rss_url' => 'https://example.com/wardrobe-memo.xml',
+            'title' => 'Wardrobe Memo',
+            'author' => 'Ikenna',
+            'description' => 'Style conversations.',
+            'status' => 'active',
+        ]);
+        DB::table('shows')->where('id', $named->id)->update(['updated_at' => now()->subYear()]);
+        foreach (range(1, 25) as $index) {
+            Show::create([
+                'rss_url' => "https://example.com/wardrobe-{$index}.xml",
+                'title' => "Through the Wardrobe {$index}",
+                'author' => 'Other Host',
+                'status' => 'active',
+            ]);
+        }
+
+        $this->actingAs($listener, 'sanctum')
+            ->postJson('/api/v1/ai/ask', [
+                'message' => 'I want to listen to Wardrobe memo show',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.items.0.id', $named->id)
+            ->assertJsonPath('data.items.0.title', 'Wardrobe Memo');
+    }
 }
