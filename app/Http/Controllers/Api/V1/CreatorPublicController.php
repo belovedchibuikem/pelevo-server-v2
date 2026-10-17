@@ -36,7 +36,7 @@ final class CreatorPublicController extends Controller
 
         return ApiResponse::success([
             'id' => $creator->id,
-            'display_name' => $creator->display_name,
+            'display_name' => is_string($user?->name) && $user->name !== '' ? $user->name : $creator->display_name,
             'handle' => is_string($user?->handle) ? $user->handle : '',
             'bio' => is_string($profile?->bio) ? $profile->bio : null,
             'avatar_url' => $avatar,

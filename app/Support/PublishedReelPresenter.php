@@ -27,7 +27,7 @@ final class PublishedReelPresenter
             ->leftJoin('users', 'users.id', '=', 'creator_profiles.user_id')
             ->leftJoin('user_profiles', 'user_profiles.user_id', '=', 'users.id')
             ->whereIn('creator_profiles.id', $creatorIds)
-            ->select('creator_profiles.id', 'creator_profiles.display_name', 'users.handle', 'user_profiles.avatar_url')
+            ->select('creator_profiles.id', 'creator_profiles.display_name', 'users.name as user_name', 'users.handle', 'user_profiles.avatar_url')
             ->get()
             ->keyBy('id');
         $thumbnails = DB::table('reel_media')->whereIn('reel_id', $ids)->orderByDesc('created_at')->get(['reel_id', 'thumbnail_path', 'transcoded_path'])->unique('reel_id')->keyBy('reel_id');
@@ -54,7 +54,10 @@ final class PublishedReelPresenter
 
         return $items->map(function (object $row) use ($creators, $thumbnails, $likes, $saves, $comments, $views, $mine, $following, $episodes, $linkedByReel, $request): ?array {
             $creator = $creators->get($row->creator_profile_id);
-            if (! is_string($creator?->display_name) || $creator->display_name === '') {
+            $creatorName = is_string($creator?->user_name) && $creator->user_name !== ''
+                ? $creator->user_name
+                : (is_string($creator?->display_name) ? $creator->display_name : '');
+            if ($creatorName === '') {
                 return null;
             }
             $engagement = $mine->get($row->id);
@@ -80,7 +83,7 @@ final class PublishedReelPresenter
                 'duration_ms' => $row->duration_ms === null ? null : (int) $row->duration_ms,
                 'published_at' => $this->publishedAt($row->published_at ?? null),
                 'creator_profile_id' => (string) $row->creator_profile_id,
-                'creator_name' => $creator->display_name,
+                'creator_name' => $creatorName,
                 'creator_handle' => is_string($creator->handle) ? $creator->handle : '',
                 'creator_avatar_url' => $this->publicUrl(is_string($creator->avatar_url) ? $creator->avatar_url : null, $request),
                 'show_id' => $row->show_id ?: ($episode?->show_id),

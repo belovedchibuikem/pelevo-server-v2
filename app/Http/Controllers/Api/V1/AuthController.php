@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Actions\Identity\IssueMobileSession;
+use App\Actions\Identity\OneTimeCodeService;
 use App\Http\Controllers\Controller;
+use App\Mail\OneTimeCode;
 use App\Mail\PelevoNotice;
 use App\Models\Device;
 use App\Models\RefreshToken;
@@ -19,16 +21,53 @@ use Illuminate\Validation\Rules\Password;
 
 final class AuthController extends Controller
 {
-    public function register(Request $request, IssueMobileSession $sessions): JsonResponse
+    public function register(Request $request, OneTimeCodeService $codes): JsonResponse
     {
         $data = $request->validate(['name' => ['required', 'string', 'max:100'], 'handle' => ['sometimes', 'nullable', 'alpha_dash:ascii', 'min:3', 'max:30', 'unique:users,handle'], 'email' => ['required', 'email', 'max:254', 'unique:users'], 'password' => ['required', 'confirmed', Password::defaults()], 'device_name' => ['required', 'string', 'max:100']]);
 
-        $result = DB::transaction(function () use ($data, $request, $sessions): array {
-            $user = User::create(['name' => $data['name'], 'handle' => $data['handle'] ?? null, 'email' => Str::lower($data['email']), 'password' => $data['password']]);
-
-            return [$user, $sessions->handle($user, $request, $data['device_name'])];
+        $user = DB::transaction(function () use ($data): User {
+            return User::create([
+                'name' => $data['name'],
+                'handle' => $data['handle'] ?? null,
+                'email' => Str::lower($data['email']),
+                'password' => $data['password'],
+                'email_verified_at' => null,
+            ]);
         });
-        [$user, $session] = $result;
+        $this->sendVerificationCode($codes, $user->email);
+
+        return ApiResponse::success([
+            'verification_required' => true,
+            'email' => $user->email,
+        ], status: 201);
+    }
+
+    public function login(Request $request, IssueMobileSession $sessions, OneTimeCodeService $codes): JsonResponse
+    {
+        $data = $request->validate(['email' => ['required', 'email'], 'password' => ['required', 'string'], 'device_name' => ['required', 'string', 'max:100']]);
+        $user = User::where('email', Str::lower($data['email']))->first();
+        if (! $user || $user->status !== 'active' || ! Hash::check($data['password'], $user->password)) {
+            return ApiResponse::error('UNAUTHENTICATED', 'The supplied credentials are invalid.', 401);
+        }
+        if ($user->email_verified_at === null) {
+            $this->sendVerificationCode($codes, $user->email);
+
+            return ApiResponse::error('EMAIL_UNVERIFIED', 'Verify your email to activate this account. We sent a new code.', 403);
+        }
+
+        return ApiResponse::success($sessions->handle($user, $request, $data['device_name']));
+    }
+
+    public static function sendVerificationCode(OneTimeCodeService $codes, string $email): void
+    {
+        app(MailPreference::class)->queueTransactional(
+            $email,
+            new OneTimeCode($codes->issue($email, 'email_verification'), 'email_verification'),
+        );
+    }
+
+    public static function sendWelcome(User $user): void
+    {
         app(MailPreference::class)->queueTransactional($user->email, new PelevoNotice(
             subjectLine: 'Welcome to Pelevo',
             eyebrow: 'Welcome',
@@ -37,19 +76,6 @@ final class AuthController extends Controller
             actionLabel: 'Open Pelevo',
             actionUrl: config('app.url'),
         ));
-
-        return ApiResponse::success($session, status: 201);
-    }
-
-    public function login(Request $request, IssueMobileSession $sessions): JsonResponse
-    {
-        $data = $request->validate(['email' => ['required', 'email'], 'password' => ['required', 'string'], 'device_name' => ['required', 'string', 'max:100']]);
-        $user = User::where('email', Str::lower($data['email']))->first();
-        if (! $user || $user->status !== 'active' || ! Hash::check($data['password'], $user->password)) {
-            return ApiResponse::error('UNAUTHENTICATED', 'The supplied credentials are invalid.', 401);
-        }
-
-        return ApiResponse::success($sessions->handle($user, $request, $data['device_name']));
     }
 
     public function refresh(Request $request, IssueMobileSession $sessions): JsonResponse

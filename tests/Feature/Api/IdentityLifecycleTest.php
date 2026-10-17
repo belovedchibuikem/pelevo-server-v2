@@ -15,11 +15,13 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
+use Tests\Support\RegistersAccounts;
 use Tests\TestCase;
 
 final class IdentityLifecycleTest extends TestCase
 {
     use RefreshDatabase;
+    use RegistersAccounts;
 
     public function test_otp_login_is_attempt_limited_single_use_and_delivered_by_mail(): void
     {
@@ -53,6 +55,29 @@ final class IdentityLifecycleTest extends TestCase
         $this->assertDatabaseHas('user_interests', ['user_id' => $user->id, 'interest' => 'technology']);
     }
 
+    public function test_profile_name_updates_the_public_creator_name(): void
+    {
+        $user = User::factory()->create(['name' => 'Old Name', 'handle' => 'old_handle']);
+        $creatorId = (string) Str::ulid();
+        DB::table('creator_profiles')->insert([
+            'id' => $creatorId,
+            'user_id' => $user->id,
+            'display_name' => 'Old Name',
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Sanctum::actingAs($user, ['mobile']);
+
+        $this->patchJson('/api/v1/me', ['name' => 'New Name', 'handle' => 'new_handle'])->assertOk();
+
+        $this->assertDatabaseHas('creator_profiles', ['id' => $creatorId, 'display_name' => 'New Name']);
+        $this->getJson('/api/v1/creators/'.$creatorId)
+            ->assertOk()
+            ->assertJsonPath('data.display_name', 'New Name')
+            ->assertJsonPath('data.handle', 'new_handle');
+    }
+
     public function test_disabled_account_cannot_sign_in_with_a_valid_email_code(): void
     {
         $user = User::factory()->create(['status' => 'disabled']);
@@ -66,7 +91,7 @@ final class IdentityLifecycleTest extends TestCase
 
     public function test_disabled_account_cannot_rotate_an_existing_refresh_token(): void
     {
-        $registration = $this->postJson('/api/v1/auth/register', ['name' => 'Ada', 'email' => 'disabled@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Phone']);
+        $registration = $this->registerAndVerify(['name' => 'Ada', 'email' => 'disabled@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Phone']);
         User::where('email', 'disabled@example.com')->update(['status' => 'disabled']);
 
         $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $registration->json('data.refresh_token'), 'device_id' => $registration->json('data.device_id')])->assertUnauthorized();
@@ -76,7 +101,7 @@ final class IdentityLifecycleTest extends TestCase
 
     public function test_logout_revokes_tokens_for_the_external_device_identifier(): void
     {
-        $registration = $this->withHeader('X-Device-Id', 'physical-phone')->postJson('/api/v1/auth/register', ['name' => 'Ada', 'email' => 'logout@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Phone']);
+        $registration = $this->registerAndVerify(['name' => 'Ada', 'email' => 'logout@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Phone'], ['X-Device-Id' => 'physical-phone']);
         $deviceId = $registration->json('data.device_id');
 
         $this->withToken($registration->json('data.access_token'))->withHeader('X-Device-Id', 'physical-phone')->postJson('/api/v1/auth/logout')->assertOk();

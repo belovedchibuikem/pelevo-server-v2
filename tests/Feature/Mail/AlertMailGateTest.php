@@ -127,6 +127,14 @@ final class AlertMailGateTest extends TestCase
             'password_confirmation' => 'Correct-Horse-9!',
             'device_name' => 'Phone',
         ])->assertCreated();
+        Mail::assertSent(\App\Mail\OneTimeCode::class, fn (\App\Mail\OneTimeCode $mail): bool => $mail->hasTo('ada-mail@example.com') && $mail->purpose === 'email_verification');
+        $code = Mail::sent(\App\Mail\OneTimeCode::class)->first()?->code;
+        $this->postJson('/api/v1/auth/otp/verify', [
+            'email' => 'ada-mail@example.com',
+            'code' => $code,
+            'purpose' => 'email_verification',
+            'device_name' => 'Phone',
+        ])->assertOk();
         Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada-mail@example.com') && $mail->heading === 'Your African podcast home');
 
         $this->from('/contact')->post('/contact', [

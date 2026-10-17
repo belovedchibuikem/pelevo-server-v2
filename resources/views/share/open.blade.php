@@ -56,7 +56,7 @@
 <div class="card">
     <h1>Open in Pelevo</h1>
     <p>Continue to {{ $title }} in the Pelevo app.</p>
-    <a class="button" id="open-app" href="{{ $appSchemeUrl }}">Open episode in app</a>
+    <a class="button" id="open-app" href="{{ $appSchemeUrl }}">Open in Pelevo</a>
     <a class="button" href="{{ $intentUrl }}" style="background:#2d6cdf">Open with App Link</a>
     <a class="secondary" href="/">Go to Pelevo home</a>
 </div>

@@ -41,6 +41,9 @@ final class SocialAuthController extends Controller
                     return User::whereKey($account->user_id)->where('status', 'active')->firstOrFail();
                 }
                 $user = User::firstOrCreate(['email' => $identity->email], ['name' => $identity->name ?: Str::before($identity->email, '@'), 'password' => Str::random(64), 'email_verified_at' => now()]);
+                if ($user->email_verified_at === null && $identity->emailVerified) {
+                    $user->forceFill(['email_verified_at' => now()])->save();
+                }
                 DB::table('connected_accounts')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'provider' => $data['provider'], 'provider_subject' => $identity->subject, 'email' => $identity->email, 'created_at' => now(), 'updated_at' => now()]);
 
                 return $user;

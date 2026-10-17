@@ -18,32 +18,48 @@ class OneTimeCode extends Mailable
 
     public function envelope(): Envelope
     {
-        return new Envelope(
-            subject: $this->purpose === 'password_reset'
-                ? 'Reset your Pelevo password'
-                : 'Your Pelevo sign-in code',
-        );
+        return new Envelope(subject: match ($this->purpose) {
+            'password_reset' => 'Reset your Pelevo password',
+            'email_verification' => 'Verify your Pelevo email',
+            default => 'Your Pelevo sign-in code',
+        });
     }
 
     public function content(): Content
     {
-        $login = $this->purpose !== 'password_reset';
+        [$preheader, $eyebrow, $heading, $intro, $hint] = match ($this->purpose) {
+            'password_reset' => [
+                'Use this code in Pelevo to choose a new password.',
+                'Password reset',
+                'Reset your password',
+                'Enter this code in the Pelevo app to choose a new password.',
+                'Open Pelevo, choose forgot password, and type the code when asked.',
+            ],
+            'email_verification' => [
+                'Your Pelevo verification code expires in 10 minutes.',
+                'Verify email',
+                'Confirm your email',
+                'Enter this code in the Pelevo app to activate your account.',
+                'Open Pelevo and type the code on the verification screen. Your account stays inactive until this is confirmed.',
+            ],
+            default => [
+                'Your Pelevo sign-in code expires in 10 minutes.',
+                'Sign in',
+                'Your sign-in code',
+                'Enter this code in the Pelevo app to finish signing in.',
+                'Open Pelevo and type the code on the verification screen.',
+            ],
+        };
 
         return new Content(
             html: 'mail.otp',
             text: 'mail.otp-text',
             with: [
-                'preheader' => $login
-                    ? 'Your Pelevo sign-in code expires in 10 minutes.'
-                    : 'Use this code in Pelevo to choose a new password.',
-                'eyebrow' => $login ? 'Sign in' : 'Password reset',
-                'heading' => $login ? 'Your sign-in code' : 'Reset your password',
-                'intro' => $login
-                    ? 'Enter this code in the Pelevo app to finish signing in.'
-                    : 'Enter this code in the Pelevo app to choose a new password.',
-                'hint' => $login
-                    ? 'Open Pelevo and type the code on the verification screen.'
-                    : 'Open Pelevo, choose forgot password, and type the code when asked.',
+                'preheader' => $preheader,
+                'eyebrow' => $eyebrow,
+                'heading' => $heading,
+                'intro' => $intro,
+                'hint' => $hint,
             ],
         );
     }

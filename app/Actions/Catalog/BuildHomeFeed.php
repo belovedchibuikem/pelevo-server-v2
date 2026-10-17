@@ -308,14 +308,19 @@ final class BuildHomeFeed
 
     private function trendingShows(int $limit = 12): Collection
     {
-        $payload = Cache::flexible('home:trending-shows:v4:'.$limit, [120, 600], function () use ($limit): array {
+        $payload = Cache::remember('home:trending-shows:v5:'.$limit, now()->addMinutes(10), function () use ($limit): array {
             $since = now()->subDays(14);
-            $plays = DB::table('playback_progress')
-                ->join('episodes', 'episodes.id', '=', 'playback_progress.episode_id')
+            $recentPlays = DB::table('playback_progress')
+                ->where('updated_at', '>=', $since)
+                ->orderByDesc('updated_at')
+                ->limit(2000)
+                ->select('episode_id', 'user_id');
+            $plays = DB::query()
+                ->fromSub($recentPlays, 'recent_plays')
+                ->join('episodes', 'episodes.id', '=', 'recent_plays.episode_id')
                 ->where('episodes.availability', 'available')
-                ->where('playback_progress.updated_at', '>=', $since)
                 ->groupBy('episodes.show_id')
-                ->select('episodes.show_id', DB::raw('COUNT(DISTINCT playback_progress.user_id) as play_count'));
+                ->select('episodes.show_id', DB::raw('COUNT(DISTINCT recent_plays.user_id) as play_count'));
 
             $shows = DB::table('shows')
                 ->leftJoinSub($plays, 'plays', 'plays.show_id', '=', 'shows.id')
@@ -361,13 +366,8 @@ final class BuildHomeFeed
     private function trendingEpisodesFallback(): Collection
     {
         return $this->episodes()
-            ->leftJoin('playback_progress', 'playback_progress.episode_id', '=', 'episodes.id')
-            ->leftJoin('episode_saves', 'episode_saves.episode_id', '=', 'episodes.id')
-            ->addSelect(DB::raw('COUNT(DISTINCT playback_progress.user_id) AS listener_count'), DB::raw('COUNT(DISTINCT episode_saves.user_id) AS save_count'))
-            ->groupBy('episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.description', 'episodes.audio_url', 'episodes.duration_seconds', 'episodes.published_at', 'shows.title', 'shows.artwork_url', 'shows.author', 'shows.country_code')
-            ->orderByDesc('listener_count')
-            ->orderByDesc('save_count')
             ->orderByDesc('episodes.published_at')
+            ->orderByDesc('episodes.id')
             ->limit(30)
             ->get();
     }
@@ -476,6 +476,7 @@ final class BuildHomeFeed
             ->join('shows', 'shows.id', '=', 'episodes.show_id')
             ->where('playback_progress.user_id', $userId)
             ->orderByDesc('playback_progress.updated_at')
+            ->limit(80)
             ->get([
                 'episodes.id as episode_id',
                 'episodes.show_id',
@@ -1192,9 +1193,6 @@ final class BuildHomeFeed
     private function shortsForYou(string $userId): Collection
     {
         $rows = $this->reelsQuery()
-            ->leftJoin('follows', function ($join) use ($userId): void {
-                $join->on('follows.show_id', '=', 'reels.show_id')->where('follows.user_id', $userId);
-            })
             ->where('creator_profiles.user_id', '!=', $userId)
             ->whereNotExists(function ($hidden) use ($userId): void {
                 $hidden->selectRaw('1')
@@ -1205,24 +1203,43 @@ final class BuildHomeFeed
             })
             ->select(
                 'reels.id',
+                'reels.show_id',
                 'reels.caption',
                 'reels.published_at',
                 'shows.title as show_title',
                 'shows.artwork_url',
                 'shows.author',
+                'users.name as user_name',
                 'creator_profiles.display_name',
-                DB::raw('CASE WHEN follows.user_id IS NULL THEN 0 ELSE 1 END AS followed'),
-                DB::raw('(SELECT COUNT(*) FROM reel_view_credits WHERE reel_view_credits.reel_id = reels.id) AS viewer_count'),
             )
-            ->orderByDesc('followed')
-            ->orderByDesc('viewer_count')
             ->orderByDesc('reels.published_at')
-            ->limit(20)
+            ->orderByDesc('reels.id')
+            ->limit(40)
             ->get();
+        if ($rows->isEmpty()) {
+            return collect();
+        }
 
-        $items = $this->presentReelRows($rows, trending: false);
+        $counts = DB::table('reel_view_credits')
+            ->whereIn('reel_id', $rows->pluck('id'))
+            ->selectRaw('reel_id, COUNT(*) as viewer_count')
+            ->groupBy('reel_id')
+            ->pluck('viewer_count', 'reel_id');
+        $followed = DB::table('follows')->where('user_id', $userId)->pluck('show_id')->flip();
+        $rows = $rows
+            ->map(function (object $row) use ($counts, $followed): object {
+                $row->viewer_count = (int) ($counts[$row->id] ?? 0);
+                $row->followed = isset($followed[(string) $row->show_id]) ? 1 : 0;
+                $liveName = is_string($row->user_name) && $row->user_name !== '' ? $row->user_name : null;
+                $row->display_name = $liveName ?? $row->display_name;
 
-        return $items;
+                return $row;
+            })
+            ->sortByDesc(fn (object $row): int => ((int) $row->followed * 1000000) + (int) $row->viewer_count)
+            ->take(20)
+            ->values();
+
+        return $this->presentReelRows($rows, trending: false);
     }
 
     private function presentReelRows(Collection $rows, bool $trending): Collection
@@ -1264,6 +1281,7 @@ final class BuildHomeFeed
         return DB::table('reels')
             ->leftJoin('shows', 'shows.id', '=', 'reels.show_id')
             ->join('creator_profiles', 'creator_profiles.id', '=', 'reels.creator_profile_id')
+            ->leftJoin('users', 'users.id', '=', 'creator_profiles.user_id')
             ->where('reels.state', 'published');
     }
 

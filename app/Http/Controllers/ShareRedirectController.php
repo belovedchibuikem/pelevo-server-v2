@@ -90,6 +90,42 @@ final class ShareRedirectController extends Controller
         ]);
     }
 
+    public function creator(string $creator, Request $request): JsonResponse|Response
+    {
+        $creator = trim(rawurldecode($creator));
+        if ($creator === '' || strlen($creator) > 40 || ! preg_match('/^[A-Za-z0-9_-]+$/', $creator)) {
+            return $this->missing($request);
+        }
+        $row = DB::table('creator_profiles')
+            ->leftJoin('users', 'users.id', '=', 'creator_profiles.user_id')
+            ->where('creator_profiles.status', 'active')
+            ->where(function ($query) use ($creator): void {
+                $query->where('creator_profiles.id', $creator)->orWhere('users.handle', $creator);
+            })
+            ->first([
+                'creator_profiles.id',
+                'creator_profiles.display_name',
+                'users.name',
+            ]);
+        if (! $row) {
+            return $this->missing($request);
+        }
+        $name = is_string($row->name) && $row->name !== '' ? $row->name : (string) $row->display_name;
+        $id = (string) $row->id;
+        $origin = rtrim((string) config('app.url'), '/');
+
+        return $this->presentSubject($request, [
+            'card_id' => null,
+            'subject_type' => 'creator',
+            'subject_id' => $id,
+            'show_id' => null,
+            'title' => $name,
+            'web_path' => '/creators/'.$id,
+            'https_url' => $origin.'/creators/'.rawurlencode($id),
+            'app_scheme_url' => 'pelevo://creator/'.rawurlencode($id),
+        ]);
+    }
+
     public function reel(string $reel, Request $request): JsonResponse|Response
     {
         $exists = DB::table('reels')->where('id', $reel)->exists();

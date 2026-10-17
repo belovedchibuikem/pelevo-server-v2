@@ -7,6 +7,7 @@ use App\Actions\Catalog\SyncPodcastIndexCategories;
 use App\Http\Controllers\Controller;
 use App\Jobs\MaterializeHomeFeed;
 use App\Support\ApiResponse;
+use App\Support\ArtworkUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -36,10 +37,17 @@ final class HomeController extends Controller
             $freshness = 'stale';
             MaterializeHomeFeed::dispatch($userId)->afterResponse();
         } else {
+            // Compute from indexed catalog queries only. The previous flexible
+            // cache rebuilt the whole feed inside the request, which held the
+            // homepage on a spinner until PHP's execution limit.
             $moduleVersion = hash('sha256', (string) DB::table('home_modules')->max('updated_at'));
             $rotationSlot = now()->format('Y-m-d').'-'.intdiv((int) now()->format('G'), 6);
             $bust = (int) Cache::get("home:feed:bust:{$userId}", 0);
-            $rails = Cache::flexible("home:feed:{$userId}:v3:{$moduleVersion}:{$rotationSlot}:{$bust}", [30, 120], fn (): array => $builder->handle($userId));
+            $rails = Cache::remember(
+                "home:feed:{$userId}:v4:{$moduleVersion}:{$rotationSlot}:{$bust}",
+                now()->addMinutes(10),
+                fn (): array => $builder->handle($userId),
+            );
             $freshness = 'computed';
             MaterializeHomeFeed::dispatch($userId)->afterResponse();
         }
@@ -173,15 +181,42 @@ final class HomeController extends Controller
         }
         $snapshot = DB::table('recommendation_snapshots')->where('user_id', $request->user()->id)->where('expires_at', '>', now())->latest('version')->first();
         $raw = $snapshot ? json_decode($snapshot->items, true) : [];
-        $items = [];
+        $rows = [];
+        $showIds = [];
+        $episodeIds = [];
         foreach (is_array($raw) ? $raw : [] as $row) {
             if (! is_array($row) || ! is_string($row['id'] ?? null) || $row['id'] === '' || ! is_string($row['title'] ?? null) || $row['title'] === '') {
                 continue;
             }
+            $rows[] = $row;
+            if (is_string($row['show_id'] ?? null) && $row['show_id'] !== '') {
+                $showIds[] = $row['show_id'];
+            }
+            $showIds[] = $row['id'];
+            $episodeIds[] = $row['id'];
+        }
+        $showArt = $showIds === []
+            ? collect()
+            : DB::table('shows')->whereIn('id', array_values(array_unique($showIds)))->pluck('artwork_url', 'id');
+        $episodeArt = $episodeIds === []
+            ? collect()
+            : DB::table('episodes')
+                ->join('shows', 'shows.id', '=', 'episodes.show_id')
+                ->whereIn('episodes.id', array_values(array_unique($episodeIds)))
+                ->pluck('shows.artwork_url', 'episodes.id');
+        $items = [];
+        foreach ($rows as $row) {
+            $showId = is_string($row['show_id'] ?? null) && $row['show_id'] !== '' ? $row['show_id'] : null;
+            $explicit = is_string($row['artwork_url'] ?? null) && $row['artwork_url'] !== '' ? $row['artwork_url'] : null;
+            $artwork = $explicit
+                ?? ($showId !== null ? ($showArt[$showId] ?? null) : null)
+                ?? ($showArt[$row['id']] ?? null)
+                ?? ($episodeArt[$row['id']] ?? null);
             $items[] = [
                 'id' => $row['id'],
-                'show_id' => is_string($row['show_id'] ?? null) && $row['show_id'] !== '' ? $row['show_id'] : null,
+                'show_id' => $showId,
                 'title' => $row['title'],
+                'artwork_url' => ArtworkUrl::sanitize($artwork),
                 'reason' => is_string($row['reason'] ?? null) && $row['reason'] !== '' ? $row['reason'] : null,
             ];
         }

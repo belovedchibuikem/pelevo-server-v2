@@ -72,6 +72,12 @@ final class ProfileController extends Controller
         DB::transaction(function () use ($user, $data): void {
             $user->newQuery()->whereKey($user->id)->lockForUpdate()->firstOrFail();
             $user->update(collect($data)->only(['name', 'handle', 'phone', 'country_code'])->all());
+            if (array_key_exists('name', $data)) {
+                DB::table('creator_profiles')->where('user_id', $user->id)->update([
+                    'display_name' => $user->name,
+                    'updated_at' => now(),
+                ]);
+            }
             $profile = collect($data)->only(['bio', 'locale', 'timezone'])->all();
             if ($profile !== []) {
                 $existing = DB::table('user_profiles')->where('user_id', $user->id)->exists();

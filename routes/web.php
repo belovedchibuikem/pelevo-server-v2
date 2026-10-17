@@ -67,6 +67,14 @@ Route::get('/reels/{reel}', [ShareRedirectController::class, 'reel'])
     ->whereUlid('reel')
     ->middleware('throttle:60,1')
     ->name('share.reel');
+Route::get('/creators/{creator}', [ShareRedirectController::class, 'creator'])
+    ->where('creator', '[A-Za-z0-9_-]{1,40}')
+    ->middleware('throttle:60,1')
+    ->name('share.creator');
+Route::get('/creator/{creator}', [ShareRedirectController::class, 'creator'])
+    ->where('creator', '[A-Za-z0-9_-]{1,40}')
+    ->middleware('throttle:60,1')
+    ->name('share.creator.singular');
 
 Route::post('/webhooks/v1/{provider}', WebhookController::class)->whereIn('provider', ['paystack', 'flutterwave', 'apple', 'google']);
 
