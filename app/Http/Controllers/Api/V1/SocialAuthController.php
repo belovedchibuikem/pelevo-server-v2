@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Finance\GrantWelcomeBonus;
 use App\Actions\Identity\IssueMobileSession;
 use App\Contracts\SocialIdentityVerifier;
 use App\Http\Controllers\Controller;
@@ -52,6 +53,12 @@ final class SocialAuthController extends Controller
             return ApiResponse::error('SOCIAL_ACCOUNT_CONFLICT', 'This provider identity is already linked.', 409);
         }
 
-        return ApiResponse::success($sessions->handle($user, $request, $data['device_name']));
+        $payload = $sessions->handle($user, $request, $data['device_name']);
+        $grant = app(GrantWelcomeBonus::class)->handle($user);
+        if ($grant !== null) {
+            $payload['welcome_bonus'] = $grant;
+        }
+
+        return ApiResponse::success($payload);
     }
 }

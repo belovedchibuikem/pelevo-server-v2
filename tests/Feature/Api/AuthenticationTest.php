@@ -41,7 +41,36 @@ final class AuthenticationTest extends TestCase
         $this->assertDatabaseCount('refresh_tokens', 1);
         $this->assertDatabaseMissing('refresh_tokens', ['token_hash' => $verified->json('data.refresh_token')]);
         $this->assertNotNull(User::where('email', 'ada@example.com')->value('email_verified_at'));
-        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.com') && $mail->heading === 'Your African podcast home');
+        $verified->assertJsonPath('data.welcome_bonus.granted', true)
+            ->assertJsonPath('data.welcome_bonus.coins', 250)
+            ->assertJsonPath('data.welcome_bonus.balance', 250);
+        $this->assertDatabaseHas('ledger_transactions', ['event_type' => 'welcome.bonus']);
+        Mail::assertSent(PelevoNotice::class, fn (PelevoNotice $mail): bool => $mail->hasTo('ada@example.com') && $mail->heading === 'Your African podcast home' && str_contains($mail->intro, '250 welcome coins'));
+    }
+
+    public function test_welcome_bonus_stops_after_the_launch_cap(): void
+    {
+        Mail::fake();
+        config(['pelevo.welcome_bonus_cap' => 1]);
+        $first = $this->withHeaders(['X-Device-Id' => 'flutter-test-device'])->postJson('/api/v1/auth/register', ['name' => 'Ada', 'email' => 'ada@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Ada phone']);
+        $first->assertCreated();
+        $code = Mail::sent(OneTimeCode::class)->first()?->code;
+        $this->postJson('/api/v1/auth/otp/verify', [
+            'email' => 'ada@example.com',
+            'code' => $code,
+            'purpose' => 'email_verification',
+            'device_name' => 'Ada phone',
+        ])->assertOk()->assertJsonPath('data.welcome_bonus.coins', 250);
+
+        $this->postJson('/api/v1/auth/register', ['name' => 'Bola', 'email' => 'bola@example.com', 'password' => 'Correct-Horse-9!', 'password_confirmation' => 'Correct-Horse-9!', 'device_name' => 'Bola phone'])->assertCreated();
+        $secondCode = Mail::sent(OneTimeCode::class)->last()?->code;
+        $this->postJson('/api/v1/auth/otp/verify', [
+            'email' => 'bola@example.com',
+            'code' => $secondCode,
+            'purpose' => 'email_verification',
+            'device_name' => 'Bola phone',
+        ])->assertOk()->assertJsonMissingPath('data.welcome_bonus');
+        $this->assertDatabaseCount('ledger_transactions', 1);
     }
 
     public function test_unverified_password_login_sends_a_new_code_without_a_session(): void

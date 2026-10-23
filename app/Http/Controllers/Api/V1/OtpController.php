@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Finance\GrantWelcomeBonus;
 use App\Actions\Identity\IssueMobileSession;
 use App\Actions\Identity\OneTimeCodeService;
 use App\Http\Controllers\Controller;
@@ -34,11 +35,20 @@ final class OtpController extends Controller
         if (! $user || $user->status !== 'active' || ! $codes->consume($email, $data['purpose'], $data['code'])) {
             return ApiResponse::error('UNAUTHENTICATED', 'The verification code is invalid or expired.', 401);
         }
-        if ($user->email_verified_at === null) {
+        $justVerified = $user->email_verified_at === null;
+        if ($justVerified) {
             $user->forceFill(['email_verified_at' => now()])->save();
-            AuthController::sendWelcome($user);
+        }
+        $grant = app(GrantWelcomeBonus::class)->handle($user);
+        if ($justVerified) {
+            AuthController::sendWelcome($user, $grant['coins'] ?? null);
         }
 
-        return ApiResponse::success($sessions->handle($user, $request, $data['device_name']));
+        $payload = $sessions->handle($user, $request, $data['device_name']);
+        if ($grant !== null) {
+            $payload['welcome_bonus'] = $grant;
+        }
+
+        return ApiResponse::success($payload);
     }
 }

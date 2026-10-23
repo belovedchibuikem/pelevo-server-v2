@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Finance\GrantWelcomeBonus;
 use App\Actions\Identity\IssueMobileSession;
 use App\Actions\Identity\OneTimeCodeService;
 use App\Http\Controllers\Controller;
@@ -55,7 +56,13 @@ final class AuthController extends Controller
             return ApiResponse::error('EMAIL_UNVERIFIED', 'Verify your email to activate this account. We sent a new code.', 403);
         }
 
-        return ApiResponse::success($sessions->handle($user, $request, $data['device_name']));
+        $payload = $sessions->handle($user, $request, $data['device_name']);
+        $grant = app(GrantWelcomeBonus::class)->handle($user);
+        if ($grant !== null) {
+            $payload['welcome_bonus'] = $grant;
+        }
+
+        return ApiResponse::success($payload);
     }
 
     public static function sendVerificationCode(OneTimeCodeService $codes, string $email): void
@@ -66,13 +73,16 @@ final class AuthController extends Controller
         );
     }
 
-    public static function sendWelcome(User $user): void
+    public static function sendWelcome(User $user, ?int $welcomeCoins = null): void
     {
+        $coins = $welcomeCoins !== null && $welcomeCoins > 0
+            ? ' '.$welcomeCoins.' welcome coins are in your gift wallet. They can be gifted to creators and cannot be cashed out.'
+            : '';
         app(MailPreference::class)->queueTransactional($user->email, new PelevoNotice(
             subjectLine: 'Welcome to Pelevo',
             eyebrow: 'Welcome',
             heading: 'Your African podcast home',
-            intro: 'Hi '.$user->name.', your Pelevo account is ready. Follow shows you love and we will email you when new episodes drop, as long as Email Notifications stays on.',
+            intro: 'Hi '.$user->name.', your Pelevo account is ready.'.$coins.' Follow shows you love and we will email you when new episodes drop, as long as Email Notifications stays on.',
             actionLabel: 'Open Pelevo',
             actionUrl: config('app.url'),
         ));
