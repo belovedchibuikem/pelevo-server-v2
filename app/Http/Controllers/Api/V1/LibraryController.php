@@ -447,17 +447,37 @@ final class LibraryController extends Controller
 
     public function collections(Request $request): JsonResponse
     {
-        return $this->page(
-            DB::table('collections')->where('user_id', $request->user()->id)->orderByDesc('updated_at')->orderByDesc('id'),
-            $request,
-            fn (object $row): array => $this->presentedCollection($row, $this->collectionCounts([$row->id])[$row->id] ?? 0),
+        $page = DB::table('collections')
+            ->where('user_id', $request->user()->id)
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
+            ->cursorPaginate(min(max($request->integer('limit', 20), 1), 50));
+        $rows = collect($page->items());
+        $ids = $rows->pluck('id')->all();
+        $counts = $this->collectionCounts($ids);
+        $artworks = $this->collectionArtworks($ids);
+        $viewer = (string) $request->user()->id;
+
+        return ApiResponse::success(
+            $rows->map(fn (object $row): array => $this->presentedCollection(
+                $row,
+                $counts[$row->id] ?? 0,
+                $artworks[$row->id] ?? null,
+                $viewer,
+            ))->values()->all(),
+            ['cursor' => $page->nextCursor()?->encode(), 'has_more' => $page->hasMorePages()],
         );
     }
 
     public function showCollection(string $collection, Request $request): JsonResponse
     {
-        $row = DB::table('collections')->where('id', $collection)->where('user_id', $request->user()->id)->first();
+        $row = DB::table('collections')->where('id', $collection)->first();
         if (! $row) {
+            return ApiResponse::error('NOT_FOUND', 'Collection not found.', 404);
+        }
+        $viewer = (string) $request->user()->id;
+        $isOwner = (string) $row->user_id === $viewer;
+        if (! $isOwner && ! (bool) $row->is_public) {
             return ApiResponse::error('NOT_FOUND', 'Collection not found.', 404);
         }
         $rows = DB::table('collection_items')->where('collection_id', $row->id)->orderBy('created_at')->get();
@@ -482,33 +502,61 @@ final class LibraryController extends Controller
             }
         }
 
+        $artwork = $this->collectionArtworks([$row->id])[$row->id] ?? null;
+
         return ApiResponse::success([
-            ...$this->presentedCollection($row, count($items)),
+            ...$this->presentedCollection($row, count($items), $artwork, $viewer),
             'items' => $items,
         ]);
     }
 
     public function storeCollection(Request $request): JsonResponse
     {
-        $data = $request->validate(['name' => ['required', 'string', 'max:100']]);
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:100'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'is_public' => ['sometimes', 'boolean'],
+        ]);
         $id = (string) Str::ulid();
-        DB::table('collections')->insert(['id' => $id, 'user_id' => $request->user()->id, 'name' => $data['name'], 'version' => 1, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('collections')->insert([
+            'id' => $id,
+            'user_id' => $request->user()->id,
+            'name' => $data['name'],
+            'description' => $this->blankToNull($data['description'] ?? null),
+            'is_public' => (bool) ($data['is_public'] ?? false),
+            'version' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $row = DB::table('collections')->find($id);
 
-        return ApiResponse::success($this->presentedCollection(DB::table('collections')->find($id), 0), status: 201);
+        return ApiResponse::success($this->presentedCollection($row, 0, null, (string) $request->user()->id), status: 201);
     }
 
     public function updateCollection(string $collection, Request $request): JsonResponse
     {
-        $data = $request->validate(['name' => ['required', 'string', 'max:100'], 'version' => ['required', 'integer', 'min:1']]);
-        $updated = DB::table('collections')->where('id', $collection)->where('user_id', $request->user()->id)->where('version', $data['version'])->update(['name' => $data['name'], 'version' => $data['version'] + 1, 'updated_at' => now()]);
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:100'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'is_public' => ['sometimes', 'boolean'],
+            'version' => ['required', 'integer', 'min:1'],
+        ]);
+        $updated = DB::table('collections')->where('id', $collection)->where('user_id', $request->user()->id)->where('version', $data['version'])->update([
+            'name' => $data['name'],
+            'description' => $this->blankToNull($data['description'] ?? null),
+            'is_public' => (bool) ($data['is_public'] ?? false),
+            'version' => $data['version'] + 1,
+            'updated_at' => now(),
+        ]);
         if (! $updated) {
             return DB::table('collections')->where('id', $collection)->where('user_id', $request->user()->id)->exists()
                 ? ApiResponse::error('VERSION_CONFLICT', 'Collection changed on another device.', 409)
                 : ApiResponse::error('NOT_FOUND', 'Collection not found.', 404);
         }
         $row = DB::table('collections')->find($collection);
+        $artwork = $this->collectionArtworks([$row->id])[$row->id] ?? null;
 
-        return ApiResponse::success($this->presentedCollection($row, $this->collectionCounts([$row->id])[$row->id] ?? 0));
+        return ApiResponse::success($this->presentedCollection($row, $this->collectionCounts([$row->id])[$row->id] ?? 0, $artwork, (string) $request->user()->id));
     }
 
     public function deleteCollection(string $collection, Request $request): JsonResponse
@@ -516,6 +564,79 @@ final class LibraryController extends Controller
         $deleted = DB::table('collections')->where('id', $collection)->where('user_id', $request->user()->id)->delete();
 
         return $deleted ? ApiResponse::success(['deleted' => true]) : ApiResponse::error('NOT_FOUND', 'Collection not found.', 404);
+    }
+
+    public function addCollectionItem(string $collection, Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'collectable_type' => ['required', 'in:episode,show'],
+            'collectable_id' => ['required', 'string'],
+            'version' => ['required', 'integer', 'min:1'],
+        ]);
+
+        return DB::transaction(function () use ($collection, $request, $data): JsonResponse {
+            $row = DB::table('collections')->where('id', $collection)->where('user_id', $request->user()->id)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'Collection not found.', 404);
+            }
+            if ((int) $row->version !== (int) $data['version']) {
+                return ApiResponse::error('VERSION_CONFLICT', 'Collection changed on another device.', 409);
+            }
+            $found = $data['collectable_type'] === 'episode'
+                ? DB::table('episodes')->where('id', $data['collectable_id'])->exists()
+                : DB::table('shows')->where('id', $data['collectable_id'])->exists();
+            if (! $found) {
+                return ApiResponse::error('NOT_FOUND', 'That episode or podcast was not found.', 404);
+            }
+            $already = DB::table('collection_items')
+                ->where('collection_id', $row->id)
+                ->where('collectable_type', $data['collectable_type'])
+                ->where('collectable_id', $data['collectable_id'])
+                ->exists();
+            if (! $already) {
+                DB::table('collection_items')->insert([
+                    'id' => (string) Str::ulid(),
+                    'collection_id' => $row->id,
+                    'collectable_type' => $data['collectable_type'],
+                    'collectable_id' => $data['collectable_id'],
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+                DB::table('collections')->where('id', $row->id)->update(['version' => $row->version + 1, 'updated_at' => now()]);
+            }
+            $updated = DB::table('collections')->find($row->id);
+            $artwork = $this->collectionArtworks([$row->id])[$row->id] ?? null;
+
+            return ApiResponse::success($this->presentedCollection($updated, $this->collectionCounts([$row->id])[$row->id] ?? 0, $artwork, (string) $request->user()->id));
+        });
+    }
+
+    public function removeCollectionItem(string $collection, string $type, string $collectable, Request $request): JsonResponse
+    {
+        $data = $request->validate(['version' => ['required', 'integer', 'min:1']]);
+        if (! in_array($type, ['episode', 'show'], true)) {
+            return ApiResponse::error('VALIDATION', 'Choose an episode or a podcast.', 422);
+        }
+
+        return DB::transaction(function () use ($collection, $type, $collectable, $request, $data): JsonResponse {
+            $row = DB::table('collections')->where('id', $collection)->where('user_id', $request->user()->id)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'Collection not found.', 404);
+            }
+            if ((int) $row->version !== (int) $data['version']) {
+                return ApiResponse::error('VERSION_CONFLICT', 'Collection changed on another device.', 409);
+            }
+            DB::table('collection_items')
+                ->where('collection_id', $row->id)
+                ->where('collectable_type', $type)
+                ->where('collectable_id', $collectable)
+                ->delete();
+            DB::table('collections')->where('id', $row->id)->update(['version' => $row->version + 1, 'updated_at' => now()]);
+            $updated = DB::table('collections')->find($row->id);
+            $artwork = $this->collectionArtworks([$row->id])[$row->id] ?? null;
+
+            return ApiResponse::success($this->presentedCollection($updated, $this->collectionCounts([$row->id])[$row->id] ?? 0, $artwork, (string) $request->user()->id));
+        });
     }
 
     private function page($query, Request $request, callable $map): JsonResponse
@@ -569,9 +690,11 @@ final class LibraryController extends Controller
      */
     private function presentedCollections($rows): array
     {
-        $counts = $this->collectionCounts($rows->pluck('id')->all());
+        $ids = $rows->pluck('id')->all();
+        $counts = $this->collectionCounts($ids);
+        $artworks = $this->collectionArtworks($ids);
 
-        return $rows->map(fn (object $row): array => $this->presentedCollection($row, $counts[$row->id] ?? 0))->values()->all();
+        return $rows->map(fn (object $row): array => $this->presentedCollection($row, $counts[$row->id] ?? 0, $artworks[$row->id] ?? null, (string) $row->user_id))->values()->all();
     }
 
     private function presentedPlaylist(object $row, int $itemCount, ?string $viewerId = null): array
@@ -624,14 +747,76 @@ final class LibraryController extends Controller
         }
     }
 
-    private function presentedCollection(object $row, int $itemCount): array
+    private function presentedCollection(object $row, int $itemCount, ?string $artworkUrl = null, ?string $viewerId = null): array
     {
+        $ownerId = (string) $row->user_id;
+
         return [
             'id' => $row->id,
             'name' => $row->name,
+            'description' => $row->description ?? null,
+            'is_public' => (bool) ($row->is_public ?? false),
+            'artwork_url' => $artworkUrl,
             'version' => (int) $row->version,
             'item_count' => $itemCount,
+            'is_owner' => $viewerId === null || $ownerId === $viewerId,
         ];
+    }
+
+    /**
+     * @param  list<string>  $ids
+     * @return array<string, ?string>
+     */
+    private function collectionArtworks(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+        $items = DB::table('collection_items')
+            ->whereIn('collection_id', $ids)
+            ->orderBy('created_at')
+            ->get(['collection_id', 'collectable_type', 'collectable_id']);
+        $first = [];
+        foreach ($items as $item) {
+            $collectionId = (string) $item->collection_id;
+            if (! array_key_exists($collectionId, $first)) {
+                $first[$collectionId] = $item;
+            }
+        }
+        $episodeIds = [];
+        $showIds = [];
+        foreach ($first as $item) {
+            if ($item->collectable_type === 'episode') {
+                $episodeIds[] = $item->collectable_id;
+            } elseif ($item->collectable_type === 'show') {
+                $showIds[] = $item->collectable_id;
+            }
+        }
+        $episodeArt = $episodeIds === []
+            ? collect()
+            : DB::table('episodes')->join('shows', 'shows.id', '=', 'episodes.show_id')->whereIn('episodes.id', $episodeIds)->pluck('shows.artwork_url', 'episodes.id');
+        $showArt = $showIds === []
+            ? collect()
+            : DB::table('shows')->whereIn('id', $showIds)->pluck('artwork_url', 'id');
+        $out = [];
+        foreach ($first as $collectionId => $item) {
+            $raw = $item->collectable_type === 'episode'
+                ? ($episodeArt[$item->collectable_id] ?? null)
+                : ($showArt[$item->collectable_id] ?? null);
+            $out[$collectionId] = $this->presentedArtwork($raw);
+        }
+
+        return $out;
+    }
+
+    private function blankToNull(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+        $trimmed = trim($value);
+
+        return $trimmed === '' ? null : $trimmed;
     }
 
     private function presentedSettings(string $userId): array

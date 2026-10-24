@@ -301,6 +301,8 @@ Route::prefix('v1')->group(function (): void {
         Route::get('collections/{collection}', [LibraryController::class, 'showCollection']);
         Route::put('collections/{collection}', [LibraryController::class, 'updateCollection']);
         Route::delete('collections/{collection}', [LibraryController::class, 'deleteCollection']);
+        Route::post('collections/{collection}/items', [LibraryController::class, 'addCollectionItem']);
+        Route::delete('collections/{collection}/items/{type}/{collectable}', [LibraryController::class, 'removeCollectionItem']);
         Route::get('queue', [QueueController::class, 'show']);
         Route::put('queue', [QueueController::class, 'replace']);
         Route::post('queue/items', [QueueController::class, 'add']);
