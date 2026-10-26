@@ -30,6 +30,7 @@ use App\Http\Controllers\Admin\SupportWorkspaceController;
 use App\Http\Controllers\Admin\UserOperationsController;
 use App\Http\Controllers\Admin\WorkspaceToolsController;
 use App\Http\Controllers\Api\V1\PrivacyRequestController;
+use App\Http\Controllers\AppLinkController;
 use App\Http\Controllers\MarketingController;
 use App\Http\Controllers\ShareRedirectController;
 use App\Http\Controllers\WebhookController;
@@ -75,6 +76,19 @@ Route::get('/creator/{creator}', [ShareRedirectController::class, 'creator'])
     ->where('creator', '[A-Za-z0-9_-]{1,40}')
     ->middleware('throttle:60,1')
     ->name('share.creator.singular');
+Route::get('/playlists/{playlist}', [ShareRedirectController::class, 'playlist'])
+    ->whereUlid('playlist')
+    ->middleware('throttle:60,1')
+    ->name('share.playlist');
+Route::get('/collections/{collection}', [ShareRedirectController::class, 'collection'])
+    ->whereUlid('collection')
+    ->middleware('throttle:60,1')
+    ->name('share.collection');
+
+Route::get('/.well-known/assetlinks.json', [AppLinkController::class, 'assetLinks'])
+    ->name('well-known.assetlinks');
+Route::get('/.well-known/apple-app-site-association', [AppLinkController::class, 'appleAppSiteAssociation'])
+    ->name('well-known.aasa');
 
 Route::post('/webhooks/v1/{provider}', WebhookController::class)->whereIn('provider', ['paystack', 'flutterwave', 'apple', 'google']);
 

@@ -126,6 +126,32 @@ final class ShareRedirectController extends Controller
         ]);
     }
 
+    public function playlist(string $playlist, Request $request): JsonResponse|Response
+    {
+        $row = DB::table('playlists')
+            ->where('id', $playlist)
+            ->where('is_public', true)
+            ->first(['id', 'name']);
+        if (! $row) {
+            return $this->missing($request);
+        }
+
+        return $this->presentLibrarySubject($request, 'playlist', (string) $row->id, (string) $row->name);
+    }
+
+    public function collection(string $collection, Request $request): JsonResponse|Response
+    {
+        $row = DB::table('collections')
+            ->where('id', $collection)
+            ->where('is_public', true)
+            ->first(['id', 'name']);
+        if (! $row) {
+            return $this->missing($request);
+        }
+
+        return $this->presentLibrarySubject($request, 'collection', (string) $row->id, (string) $row->name);
+    }
+
     public function reel(string $reel, Request $request): JsonResponse|Response
     {
         $exists = DB::table('reels')->where('id', $reel)->exists();
@@ -157,6 +183,23 @@ final class ShareRedirectController extends Controller
      *   app_scheme_url: string
      * }  $resolved
      */
+    private function presentLibrarySubject(Request $request, string $type, string $id, string $title): JsonResponse|Response
+    {
+        $origin = rtrim((string) config('app.url'), '/');
+        $webPath = '/'.$type.'s/'.$id;
+
+        return $this->presentSubject($request, [
+            'card_id' => null,
+            'subject_type' => $type,
+            'subject_id' => $id,
+            'show_id' => null,
+            'title' => $title,
+            'web_path' => $webPath,
+            'https_url' => $origin.$webPath,
+            'app_scheme_url' => 'pelevo://'.$type.'/'.$id,
+        ]);
+    }
+
     private function presentSubject(Request $request, array $resolved): JsonResponse|Response
     {
         if ($request->expectsJson() || $request->query('format') === 'json') {
