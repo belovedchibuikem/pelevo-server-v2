@@ -13,6 +13,7 @@ use App\Models\RefreshToken;
 use App\Models\User;
 use App\Services\MailPreference;
 use App\Support\ApiResponse;
+use App\Support\SignupCountry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,18 +23,21 @@ use Illuminate\Validation\Rules\Password;
 
 final class AuthController extends Controller
 {
-    public function register(Request $request, OneTimeCodeService $codes): JsonResponse
+    public function register(Request $request, OneTimeCodeService $codes, SignupCountry $countries): JsonResponse
     {
-        $data = $request->validate(['name' => ['required', 'string', 'max:100'], 'handle' => ['sometimes', 'nullable', 'alpha_dash:ascii', 'min:3', 'max:30', 'unique:users,handle'], 'email' => ['required', 'email', 'max:254', 'unique:users'], 'password' => ['required', 'confirmed', Password::defaults()], 'device_name' => ['required', 'string', 'max:100']]);
+        $data = $request->validate(['name' => ['required', 'string', 'max:100'], 'handle' => ['sometimes', 'nullable', 'alpha_dash:ascii', 'min:3', 'max:30', 'unique:users,handle'], 'email' => ['required', 'email', 'max:254', 'unique:users'], 'password' => ['required', 'confirmed', Password::defaults()], 'device_name' => ['required', 'string', 'max:100'], 'country_code' => ['sometimes', 'nullable', 'string', 'size:2', 'alpha']]);
 
-        $user = DB::transaction(function () use ($data): User {
-            return User::create([
+        $user = DB::transaction(function () use ($data, $request, $countries): User {
+            $user = User::create([
                 'name' => $data['name'],
                 'handle' => $data['handle'] ?? null,
                 'email' => Str::lower($data['email']),
                 'password' => $data['password'],
                 'email_verified_at' => null,
             ]);
+            $countries->capture($user, $request, $data['country_code'] ?? null);
+
+            return $user;
         });
         $this->sendVerificationCode($codes, $user->email);
 
@@ -45,7 +49,7 @@ final class AuthController extends Controller
 
     public function login(Request $request, IssueMobileSession $sessions, OneTimeCodeService $codes): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email'], 'password' => ['required', 'string'], 'device_name' => ['required', 'string', 'max:100']]);
+        $data = $request->validate(['email' => ['required', 'email'], 'password' => ['required', 'string'], 'device_name' => ['required', 'string', 'max:100'], 'country_code' => ['sometimes', 'nullable', 'string', 'size:2', 'alpha']]);
         $user = User::where('email', Str::lower($data['email']))->first();
         if (! $user || $user->status !== 'active' || ! Hash::check($data['password'], $user->password)) {
             return ApiResponse::error('UNAUTHENTICATED', 'The supplied credentials are invalid.', 401);
@@ -57,6 +61,7 @@ final class AuthController extends Controller
         }
 
         $payload = $sessions->handle($user, $request, $data['device_name']);
+        app(SignupCountry::class)->capture($user, $request, $data['country_code'] ?? null);
         $grant = app(GrantWelcomeBonus::class)->handle($user);
         if ($grant !== null) {
             $payload['welcome_bonus'] = $grant;

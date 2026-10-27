@@ -132,7 +132,7 @@ final class AllocateReelAdRevenue implements ShouldBeUnique, ShouldQueue
                     'available_amount_minor' => 0,
                     'pending_ledger_transaction_id' => $transaction->id,
                     'idempotency_key' => $idempotencyKey,
-                    'held_until' => now()->addDays((int) config('reels_ads.hold_days')),
+                    'held_until' => now()->addHours((int) config('reels_ads.hold_days') * 24),
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);

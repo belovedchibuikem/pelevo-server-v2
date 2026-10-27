@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\CreatorProfile;
+use App\Services\Finance\AdRevenueClearance;
 use App\Services\Finance\CoinEconomy;
 use App\Support\ApiResponse;
 use App\Support\ReelPlayback;
@@ -174,7 +175,8 @@ final class StudioWorkspaceController extends Controller
             'ad_revenue_allocations' => DB::table('creator_ad_revenue_allocations')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'status', 'gross_usd_micros', 'confirmed_usd_micros', 'reserve_usd_micros', 'clawback_usd_micros', 'available_currency', 'available_amount_minor', 'held_until', 'released_at')->latest()->limit(100)->get(),
             'currency_conversions' => DB::table('currency_conversions')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'source_currency', 'source_amount_minor', 'destination_currency', 'destination_amount_minor', 'gross_rate', 'net_rate', 'spread_bps', 'rate_source', 'quoted_at', 'created_at')->latest()->limit(100)->get(),
             'payout_settings' => DB::table('creator_payout_settings')->whereIn('creator_profile_id', $creators)->select('creator_profile_id', 'currency', 'ad_payout_currency', 'ad_payout_currency_effective_at', 'compliance_state')->get(),
-            'diamonds' => app(CoinEconomy::class)->summary(app(CoinEconomy::class)->balanceForCreators($creators)),
+            'diamonds' => app(CoinEconomy::class)->summary(app(CoinEconomy::class)->balanceForCreators($creators), $request->user()->country_code),
+            'ad_clearance' => app(AdRevenueClearance::class)->present($creators, $request->user()->country_code),
             'tax_profiles' => DB::table('tax_profiles')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'country_code', 'state')->get(),
         ]);
     }

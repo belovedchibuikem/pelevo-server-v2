@@ -24,23 +24,29 @@ final class CoinEconomy
             ->first();
     }
 
-    public function summary(int $diamonds): array
+    public function summary(int $diamonds, ?string $countryCode = null): array
     {
         $regime = $this->active();
+        $quote = $regime ? $this->cashoutQuote($diamonds, $regime) : null;
 
         return [
             'unit' => self::UNIT,
             'balance' => $diamonds,
             'min_cashout_diamonds' => $regime ? (int) $regime->min_cashout_diamonds : null,
+            'minimum_cashout_usd' => TokenValuation::formatCents(TokenValuation::GIFT_MIN_USD_CENTS),
+            'anchor' => [
+                'coins' => TokenValuation::ANCHOR_COINS,
+                'usd' => TokenValuation::formatCents(TokenValuation::ANCHOR_USD_CENTS),
+                'gross_coin_usd' => TokenValuation::formatScaled(TokenValuation::GROSS_COIN_USD_SCALED),
+            ],
             'regime' => $regime ? $this->presentRegime($regime, false) : null,
-            'quotes' => $regime ? [
-                'NGN' => $this->cashoutQuote($diamonds, 'NGN', $regime),
-                'USD' => $this->cashoutQuote($diamonds, 'USD', $regime),
-            ] : null,
+            'quotes' => $quote ? ['USD' => $quote] : null,
+            'display' => $quote ? app(DisplayFx::class)->present($quote['gross_minor'], $countryCode) : null,
             'rules' => [
                 'coins_per_diamond' => 1,
                 'extra_platform_fee_on_cashout' => false,
                 'transfer_fee_deducted_from_creator' => true,
+                'ledger_currency' => 'USD',
             ],
         ];
     }
@@ -61,29 +67,42 @@ final class CoinEconomy
     }
 
     /**
+     * Diamond value is the published USD rate. Local currency is applied later from a live FX quote.
+     *
      * @return array<string, mixed>
      */
-    public function cashoutQuote(int $diamonds, string $currency, object $regime): array
+    public function cashoutQuote(int $diamonds, object $regime): array
     {
-        $currency = strtoupper($currency);
-        if (! in_array($currency, ['NGN', 'USD'], true)) {
-            throw new InvalidArgumentException('UNSUPPORTED_CURRENCY');
-        }
-        $rate = $currency === 'NGN' ? (int) $regime->diamond_ngn_rate : (int) $regime->diamond_usd_rate;
-        $gross = $this->minorForDiamonds($diamonds, $rate);
-        $fee = $diamonds === 0
-            ? 0
-            : ($currency === 'NGN' ? (int) $regime->transfer_fee_ngn_kobo : (int) $regime->transfer_fee_usd_cents);
+        $gross = $this->minorForDiamonds($diamonds, (int) $regime->diamond_usd_rate);
+        $fee = $diamonds === 0 ? 0 : (int) $regime->transfer_fee_usd_cents;
+        $net = $gross - $fee;
 
         return [
-            'currency' => $currency,
+            'currency' => 'USD',
             'diamonds' => $diamonds,
             'gross_minor' => $gross,
             'transfer_fee_minor' => $fee,
-            'net_minor' => $gross - $fee,
-            'payable' => $diamonds >= (int) $regime->min_cashout_diamonds && ($gross - $fee) > 0,
+            'net_minor' => $net,
+            'payable' => $net >= TokenValuation::GIFT_MIN_USD_CENTS,
+            'minimum_usd_cents' => TokenValuation::GIFT_MIN_USD_CENTS,
             'rate_includes_app_share' => true,
         ];
+    }
+
+    public function minimumDiamonds(int $scaledRate, int $usdCents): int
+    {
+        $low = 1;
+        $high = 10_000_000;
+        while ($low < $high) {
+            $mid = intdiv($low + $high, 2);
+            if ($this->minorForDiamonds($mid, $scaledRate) >= $usdCents) {
+                $high = $mid;
+            } else {
+                $low = $mid + 1;
+            }
+        }
+
+        return $low;
     }
 
     /**
@@ -270,6 +289,9 @@ final class CoinEconomy
     public static function seed(): void
     {
         $now = now();
+        $minimum = new self;
+        $standardRate = self::scaleRate(TokenValuation::DIAMOND_USD_STANDARD);
+        $smallRate = self::scaleRate(TokenValuation::DIAMOND_USD_SMALL_BUSINESS);
         $regimes = [
             [
                 'code' => 'standard',
@@ -277,11 +299,12 @@ final class CoinEconomy
                 'store_fee_basis_points' => 3000,
                 'creator_split_basis_points' => 7000,
                 'app_split_basis_points' => 3000,
-                'diamond_ngn_rate' => self::scaleRate('0.83'),
-                'diamond_usd_rate' => self::scaleRate('0.00052'),
+                'diamond_ngn_rate' => $standardRate,
+                'diamond_usd_rate' => $standardRate,
+                'min_cashout_diamonds' => $minimum->minimumDiamonds($standardRate, TokenValuation::GIFT_MIN_USD_CENTS),
                 'active' => true,
                 'effective_at' => '2020-01-01 00:00:00',
-                'reason' => 'Seeded standard App Store and Google Play fee. Diamond cash uses this rate until the small-business regime is activated.',
+                'reason' => 'v1.2 anchor: 300 coins = $0.38. Creator net is $0.0006207 per diamond after the 30% store fee and the 30% platform cut of net. Naira is a live FX display, not a stored rate.',
             ],
             [
                 'code' => 'small_business',
@@ -289,11 +312,12 @@ final class CoinEconomy
                 'store_fee_basis_points' => 1500,
                 'creator_split_basis_points' => 7000,
                 'app_split_basis_points' => 3000,
-                'diamond_ngn_rate' => self::scaleRate('1.01'),
-                'diamond_usd_rate' => self::scaleRate('0.00063'),
+                'diamond_ngn_rate' => $smallRate,
+                'diamond_usd_rate' => $smallRate,
+                'min_cashout_diamonds' => $minimum->minimumDiamonds($smallRate, TokenValuation::GIFT_MIN_USD_CENTS),
                 'active' => false,
                 'effective_at' => '2020-01-01 00:00:01',
-                'reason' => 'Seeded 15% store-fee regime. Activate it after Apple and Google small-business enrollment. It does not apply until it is the latest active regime.',
+                'reason' => 'v1.2 15% store-fee regime. Creator net is $0.0007537 per diamond. Activate it after Apple and Google small-business enrollment.',
             ],
         ];
         foreach ($regimes as $regime) {
@@ -308,22 +332,22 @@ final class CoinEconomy
                 'transfer_fee_ngn_min_kobo' => 1000,
                 'transfer_fee_ngn_max_kobo' => 5000,
                 'transfer_fee_usd_cents' => 0,
-                'min_cashout_diamonds' => 100,
                 'created_at' => $now,
                 'updated_at' => $now,
             ]);
         }
 
         $packs = [
-            [300, 'coin_pack_300', 50000, 35],
-            [500, 'coin_pack_500', 85000, 49],
-            [750, 'coin_pack_750', 125000, 79],
-            [1000, 'coin_pack_1000', 170000, 99],
-            [1500, 'coin_pack_1500', 250000, 149],
-            [2000, 'coin_pack_2000', 335000, 199],
+            [300, 'coin_pack_300', 50000],
+            [500, 'coin_pack_500', 85000],
+            [750, 'coin_pack_750', 125000],
+            [1000, 'coin_pack_1000', 170000],
+            [1500, 'coin_pack_1500', 250000],
+            [2000, 'coin_pack_2000', 335000],
         ];
         foreach (['apple', 'google'] as $store) {
-            foreach ($packs as [$coins, $productId, $ngnKobo, $usdCents]) {
+            foreach ($packs as [$coins, $productId, $ngnKobo]) {
+                $usdCents = TokenValuation::anchorUsdCents($coins);
                 $existing = DB::table('coin_products')->where('store', $store)->where('product_id', $productId)->first();
                 if ($existing) {
                     if ($existing->price_ngn_kobo === null || $existing->price_usd_cents === null) {

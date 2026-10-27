@@ -9,6 +9,7 @@ use App\Models\FinancialAccount;
 use App\Models\GiftType;
 use App\Models\User;
 use App\Services\Finance\CoinEconomy;
+use App\Services\Finance\TokenValuation;
 use App\Support\ApiResponse;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -56,12 +57,20 @@ final class GiftController extends Controller
         $regime = $economy->active();
 
         return ApiResponse::success([
+            'anchor' => [
+                'coins' => TokenValuation::ANCHOR_COINS,
+                'usd' => TokenValuation::formatCents(TokenValuation::ANCHOR_USD_CENTS),
+                'gross_coin_usd' => TokenValuation::formatScaled(TokenValuation::GROSS_COIN_USD_SCALED),
+            ],
+            'minimum_cashout_usd' => TokenValuation::formatCents(TokenValuation::GIFT_MIN_USD_CENTS),
+            'min_cashout_diamonds' => $regime ? (int) $regime->min_cashout_diamonds : null,
             'regime' => $regime ? $economy->presentRegime($regime, false) : null,
             'packs' => $economy->presentPacks(),
             'rules' => [
                 'coins_per_diamond' => 1,
                 'extra_platform_fee_on_cashout' => false,
                 'transfer_fee_deducted_from_creator' => true,
+                'ledger_currency' => 'USD',
             ],
         ]);
     }

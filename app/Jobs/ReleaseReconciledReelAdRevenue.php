@@ -10,8 +10,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
-use RuntimeException;
 
 final class ReleaseReconciledReelAdRevenue implements ShouldBeUnique, ShouldQueue
 {
@@ -160,13 +158,6 @@ final class ReleaseReconciledReelAdRevenue implements ShouldBeUnique, ShouldQueu
             return;
         }
 
-        $preference = DB::table('creator_payout_settings')
-            ->where('creator_profile_id', $allocation->creator_profile_id)
-            ->value('ad_payout_currency');
-        if (! in_array($preference, config('reels_ads.supported_payout_currencies'), true)) {
-            return;
-        }
-
         $reserveBps = (int) $allocation->impression_reserve_bps;
         $offset = $this->account($allocation->creator_profile_id, 'reels_ad_clawback_offset', 'USD');
         $offsetBalance = (int) DB::table('financial_accounts')->where('id', $offset->id)->lockForUpdate()->value('balance');
@@ -192,7 +183,7 @@ final class ReleaseReconciledReelAdRevenue implements ShouldBeUnique, ShouldQueu
                 array_values(array_filter($entries, fn (array $entry): bool => $entry['amount'] !== 0)),
                 ['allocation_id' => $allocation->id, 'reconciliation_batch_id' => $batch->id, 'reserve_bps' => $reserveBps, 'clawback_usd_micros' => $clawback],
             );
-        } elseif ($preference === 'USD') {
+        } else {
             $available = $this->account($allocation->creator_profile_id, 'reels_ad_available', 'USD');
             $entries[] = ['account_id' => $available->id, 'amount' => $availableUsd];
             $release = $post->handle(
@@ -202,66 +193,6 @@ final class ReleaseReconciledReelAdRevenue implements ShouldBeUnique, ShouldQueu
                 array_values(array_filter($entries, fn (array $entry): bool => $entry['amount'] !== 0)),
                 ['allocation_id' => $allocation->id, 'reconciliation_batch_id' => $batch->id, 'reserve_bps' => $reserveBps, 'clawback_usd_micros' => $clawback],
             );
-        } else {
-            $rate = DB::table('fx_rate_versions')
-                ->where('base_unit', 'USD')
-                ->where('quote_currency', 'NGN')
-                ->where('approval_state', 'approved')
-                ->where('effective_at', '<=', now())
-                ->where('effective_at', '>=', now()->subMinutes((int) config('reels_ads.fx.quote_max_age_minutes')))
-                ->latest('effective_at')
-                ->first();
-            if (! $rate) {
-                return;
-            }
-            $spreadBps = max(0, min(10_000, (int) config('reels_ads.fx.spread_bps')));
-            $grossRateScaled = $this->decimalToScaled((string) $rate->rate, 6);
-            $netRateScaled = intdiv($grossRateScaled * (10_000 - $spreadBps), 10_000);
-            $availableMinor = $this->usdMicrosToNgnKobo($availableUsd, $netRateScaled);
-            $usdClearing = $this->systemAccount('reels_ad_fx_clearing', 'USD');
-            $entries[] = ['account_id' => $usdClearing->id, 'amount' => $availableUsd];
-            $release = $post->handle(
-                'reel.ad.released_for_fx',
-                "reel-ad-allocation:{$allocation->id}:release",
-                'USD',
-                array_values(array_filter($entries, fn (array $entry): bool => $entry['amount'] !== 0)),
-                ['allocation_id' => $allocation->id, 'reconciliation_batch_id' => $batch->id, 'reserve_bps' => $reserveBps, 'clawback_usd_micros' => $clawback],
-            );
-
-            $ngnClearing = $this->systemAccount('reels_ad_fx_clearing', 'NGN');
-            $ngnAvailable = $this->account($allocation->creator_profile_id, 'reels_ad_available', 'NGN');
-            $destination = $post->handle(
-                'reel.ad.fx_settled',
-                "reel-ad-allocation:{$allocation->id}:fx-ngn",
-                'NGN',
-                [
-                    ['account_id' => $ngnClearing->id, 'amount' => -$availableMinor],
-                    ['account_id' => $ngnAvailable->id, 'amount' => $availableMinor],
-                ],
-                ['allocation_id' => $allocation->id, 'source_usd_micros' => $availableUsd],
-            );
-            $conversionId = (string) Str::ulid();
-            DB::table('currency_conversions')->insert([
-                'id' => $conversionId,
-                'creator_profile_id' => $allocation->creator_profile_id,
-                'source_currency' => 'USD',
-                'source_amount_minor' => $availableUsd,
-                'destination_currency' => 'NGN',
-                'destination_amount_minor' => $availableMinor,
-                'gross_rate' => $this->scaledToDecimal($grossRateScaled, 6),
-                'net_rate' => $this->scaledToDecimal($netRateScaled, 6),
-                'spread_bps' => $spreadBps,
-                'rate_source' => $rate->source,
-                'provider_reference' => $rate->id,
-                'quoted_at' => $rate->effective_at,
-                'quote_expires_at' => CarbonImmutable::parse($rate->effective_at)->addMinutes((int) config('reels_ads.fx.quote_max_age_minutes')),
-                'reason' => 'ad_revenue_release',
-                'idempotency_key' => "reel-ad-allocation:{$allocation->id}:fx",
-                'source_ledger_transaction_id' => $release->id,
-                'destination_ledger_transaction_id' => $destination->id,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
         }
 
         DB::table('creator_ad_revenue_allocations')->where('id', $allocation->id)->update([
@@ -269,7 +200,7 @@ final class ReleaseReconciledReelAdRevenue implements ShouldBeUnique, ShouldQueu
             'confirmed_usd_micros' => $confirmedMicros,
             'reserve_usd_micros' => $reserve,
             'clawback_usd_micros' => $clawback,
-            'available_currency' => $preference,
+            'available_currency' => 'USD',
             'available_amount_minor' => $availableMinor,
             'release_ledger_transaction_id' => $release->id,
             'reconciliation_batch_id' => $batch->id,
@@ -283,7 +214,7 @@ final class ReleaseReconciledReelAdRevenue implements ShouldBeUnique, ShouldQueu
             'confirmed_usd_micros' => $confirmedMicros,
             'reserve_usd_micros' => $reserve,
             'clawback_usd_micros' => $clawback,
-            'available_currency' => $preference,
+            'available_currency' => 'USD',
             'available_amount_minor' => $availableMinor,
         ]);
     }
@@ -360,29 +291,5 @@ final class ReleaseReconciledReelAdRevenue implements ShouldBeUnique, ShouldQueu
             ['owner_type' => null, 'owner_id' => null, 'type' => $type, 'unit' => $unit],
             ['balance' => 0],
         );
-    }
-
-    private function decimalToScaled(string $value, int $scale): int
-    {
-        if (! preg_match('/^\d+(?:\.\d+)?$/', $value)) {
-            throw new RuntimeException('Invalid FX rate.');
-        }
-        [$whole, $fraction] = array_pad(explode('.', $value, 2), 2, '');
-        $fraction = substr(str_pad($fraction, $scale, '0'), 0, $scale);
-
-        return ((int) $whole * (10 ** $scale)) + (int) $fraction;
-    }
-
-    private function scaledToDecimal(int $value, int $scale): string
-    {
-        $base = 10 ** $scale;
-
-        return intdiv($value, $base).'.'.str_pad((string) ($value % $base), $scale, '0', STR_PAD_LEFT);
-    }
-
-    private function usdMicrosToNgnKobo(int $usdMicros, int $rateScaled): int
-    {
-        // USD micros / 1e6 * NGN/USD (scaled 1e6) * 100 kobo.
-        return intdiv(($usdMicros * $rateScaled) + 5_000_000_000, 10_000_000_000);
     }
 }

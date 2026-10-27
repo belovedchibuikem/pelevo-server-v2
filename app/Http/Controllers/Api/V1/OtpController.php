@@ -10,6 +10,7 @@ use App\Mail\OneTimeCode;
 use App\Models\User;
 use App\Services\MailPreference;
 use App\Support\ApiResponse;
+use App\Support\SignupCountry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -29,7 +30,7 @@ final class OtpController extends Controller
 
     public function verify(Request $request, OneTimeCodeService $codes, IssueMobileSession $sessions): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email'], 'code' => ['required', 'digits:6'], 'purpose' => ['required', 'in:login,email_verification'], 'device_name' => ['required', 'string', 'max:100']]);
+        $data = $request->validate(['email' => ['required', 'email'], 'code' => ['required', 'digits:6'], 'purpose' => ['required', 'in:login,email_verification'], 'device_name' => ['required', 'string', 'max:100'], 'country_code' => ['sometimes', 'nullable', 'string', 'size:2', 'alpha']]);
         $email = Str::lower($data['email']);
         $user = User::where('email', $email)->first();
         if (! $user || $user->status !== 'active' || ! $codes->consume($email, $data['purpose'], $data['code'])) {
@@ -39,6 +40,7 @@ final class OtpController extends Controller
         if ($justVerified) {
             $user->forceFill(['email_verified_at' => now()])->save();
         }
+        app(SignupCountry::class)->capture($user, $request, $data['country_code'] ?? null);
         $grant = app(GrantWelcomeBonus::class)->handle($user);
         if ($justVerified) {
             AuthController::sendWelcome($user, $grant['coins'] ?? null);

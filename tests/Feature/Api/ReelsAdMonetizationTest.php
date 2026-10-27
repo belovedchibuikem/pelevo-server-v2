@@ -5,6 +5,7 @@ namespace Tests\Feature\Api;
 use App\Jobs\ReleaseReconciledReelAdRevenue;
 use App\Models\CreatorProfile;
 use App\Models\User;
+use App\Services\Finance\AdRevenueClearance;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -57,9 +58,15 @@ final class ReelsAdMonetizationTest extends TestCase
             DB::table('creator_ad_revenue_allocations')->orderBy('gross_usd_micros')->pluck('gross_usd_micros')->map(fn ($amount) => (int) $amount)->all(),
         );
 
+        $clearance = app(AdRevenueClearance::class);
+        $creatorIds = [$firstCreator->id, $secondCreator->id];
+        $this->assertSame(200, $clearance->micros($creatorIds)['pending_usd_micros']);
+        $this->assertSame(0, $clearance->micros($creatorIds)['cleared_usd_micros']);
         DB::table('creator_ad_revenue_allocations')->update(['held_until' => now()->subSecond()]);
         $this->assertSame(200, (int) DB::table('financial_accounts')->where('type', 'reels_ad_pending')->sum('balance'));
         $this->assertSame(0, (int) DB::table('financial_accounts')->where('type', 'reels_ad_available')->sum('balance'));
+        $this->assertSame(0, $clearance->micros($creatorIds)['pending_usd_micros']);
+        $this->assertSame(200, $clearance->micros($creatorIds)['cleared_usd_micros']);
         $this->payoutSetting($firstCreator->id, 'USD');
         $this->payoutSetting($secondCreator->id, 'NGN');
         DB::table('fx_rate_versions')->insert([
@@ -102,10 +109,10 @@ final class ReelsAdMonetizationTest extends TestCase
             'creator_profile_id' => $secondCreator->id,
             'status' => 'released',
             'confirmed_usd_micros' => 50,
-            'available_currency' => 'NGN',
-            'available_amount_minor' => 8,
+            'available_currency' => 'USD',
         ]);
-        $this->assertDatabaseCount('currency_conversions', 1);
+        $this->assertDatabaseCount('currency_conversions', 0);
+        $this->assertSame(0, (int) DB::table('financial_accounts')->where('type', 'reels_ad_available')->where('unit', 'NGN')->sum('balance'));
         $this->assertSame(5, (int) DB::table('financial_accounts')->where('type', 'reels_ad_reserve')->where('unit', 'USD')->sum('balance'));
         $this->assertContains(
             (int) DB::table('creator_ad_revenue_allocations')->where('creator_profile_id', $firstCreator->id)->value('available_amount_minor'),

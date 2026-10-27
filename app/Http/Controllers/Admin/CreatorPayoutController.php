@@ -6,11 +6,16 @@ use App\Actions\Finance\PostLedgerTransaction;
 use App\Http\Controllers\Controller;
 use App\Jobs\DispatchCreatorPayout;
 use App\Models\FinancialAccount;
+use App\Services\Finance\DisplayFx;
+use App\Services\Finance\PayoutRoute;
+use App\Services\Finance\TokenValuation;
 use App\Support\ApiResponse;
+use App\Support\CountryCurrency;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 
 final class CreatorPayoutController extends Controller
 {
@@ -20,7 +25,7 @@ final class CreatorPayoutController extends Controller
         if ($key === '') {
             return ApiResponse::error('VALIDATION', 'Idempotency-Key header is required.', 422);
         }
-        $data = $request->validate(['period_start' => ['required', 'date_format:Y-m-d'], 'period_end' => ['required', 'date_format:Y-m-d', 'after_or_equal:period_start'], 'unit' => ['required', 'in:PCN,USD,NGN'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
+        $data = $request->validate(['period_start' => ['required', 'date_format:Y-m-d'], 'period_end' => ['required', 'date_format:Y-m-d', 'after_or_equal:period_start'], 'unit' => ['required', 'in:PCN,USD'], 'reason' => ['required', 'string', 'min:10', 'max:2000']]);
 
         return DB::transaction(function () use ($request, $data, $key): JsonResponse {
             $existing = DB::table('creator_payout_batches')->where('idempotency_key', $key)->first();
@@ -33,7 +38,7 @@ final class CreatorPayoutController extends Controller
             $total = 0;
             $settings = DB::table('creator_payout_settings')->where('compliance_state', 'verified')->whereNotNull('payout_method_id')->orderBy('creator_profile_id')->get();
             foreach ($settings as $setting) {
-                $isAdRevenue = in_array($data['unit'], ['USD', 'NGN'], true);
+                $isAdRevenue = $data['unit'] === 'USD';
                 $accountType = $isAdRevenue ? 'reels_ad_available' : 'creator_balance';
                 $account = FinancialAccount::where('owner_type', 'App\\Models\\CreatorProfile')->where('owner_id', $setting->creator_profile_id)->where('type', $accountType)->where('unit', $data['unit'])->first();
                 if (! $account) {
@@ -41,11 +46,31 @@ final class CreatorPayoutController extends Controller
                 }
                 $fx = null;
                 if ($isAdRevenue) {
-                    $amountMinor = $data['unit'] === 'USD'
-                        ? intdiv((int) $account->balance, 10_000)
-                        : (int) $account->balance;
-                    $amount = $data['unit'] === 'USD' ? $amountMinor * 10_000 : $amountMinor;
-                    $currency = $data['unit'];
+                    $amountMinor = intdiv((int) $account->balance, 10_000);
+                    if ($amountMinor < TokenValuation::AD_MIN_USD_CENTS || $amountMinor < (int) $setting->minimum_amount) {
+                        continue;
+                    }
+                    $method = DB::table('payout_methods')->where('id', $setting->payout_method_id)->first();
+                    $country = DB::table('creator_profiles')->join('users', 'users.id', '=', 'creator_profiles.user_id')->where('creator_profiles.id', $setting->creator_profile_id)->value('users.country_code');
+                    if (! $method) {
+                        continue;
+                    }
+                    try {
+                        $route = app(PayoutRoute::class)->resolve(is_string($country) ? $country : null, $method);
+                    } catch (InvalidArgumentException) {
+                        continue;
+                    }
+                    $currency = $route['currency'];
+                    $payoutMinor = $amountMinor;
+                    if ($currency !== 'USD') {
+                        $fx = app(DisplayFx::class)->quote($currency);
+                        if (! $fx) {
+                            continue;
+                        }
+                        $payoutMinor = app(DisplayFx::class)->convertUsdCents($amountMinor, (string) $fx->rate, CountryCurrency::fractionDigits($currency));
+                    }
+                    $amount = $amountMinor * 10_000;
+                    $amountMinor = $payoutMinor;
                 } else {
                     $fx = DB::table('fx_rate_versions')->where('base_unit', $data['unit'])->where('quote_currency', $setting->currency)->where('approval_state', 'approved')->where('effective_at', '<=', $data['period_end'].' 23:59:59')->latest('effective_at')->first();
                     if (! $fx) {

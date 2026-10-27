@@ -23,43 +23,66 @@ final class CoinEconomyTest extends TestCase
         $economy = $this->actingAs(User::factory()->create(), 'sanctum')->getJson('/api/v1/gifts/economy')->assertOk();
         $economy->assertJsonPath('data.regime.code', 'standard')
             ->assertJsonPath('data.regime.store_fee_percent', 30)
-            ->assertJsonPath('data.regime.diamond_ngn', '0.83')
-            ->assertJsonPath('data.regime.diamond_usd', '0.00052')
+            ->assertJsonPath('data.regime.diamond_usd', '0.0006207')
+            ->assertJsonPath('data.anchor.coins', 300)
+            ->assertJsonPath('data.anchor.usd', '0.38')
+            ->assertJsonPath('data.anchor.gross_coin_usd', '0.0012667')
+            ->assertJsonPath('data.minimum_cashout_usd', '15.00')
             ->assertJsonPath('data.rules.coins_per_diamond', 1)
+            ->assertJsonPath('data.rules.ledger_currency', 'USD')
             ->assertJsonPath('data.rules.extra_platform_fee_on_cashout', false);
         $pack = collect($economy->json('data.packs'))->first(fn (array $row): bool => $row['product_id'] === 'coin_pack_500' && $row['store'] === 'google');
         $this->assertSame(85000, $pack['price_ngn_kobo']);
-        $this->assertSame(49, $pack['price_usd_cents']);
+        $this->assertSame(63, $pack['price_usd_cents']);
         $this->assertSame(25500, $pack['economics']['ngn']['store_fee_minor']);
         $this->assertSame(59500, $pack['economics']['ngn']['net_minor']);
         $this->assertSame(41650, $pack['economics']['ngn']['creator_minor']);
         $this->assertSame(17850, $pack['economics']['ngn']['app_minor']);
+        $anchor = collect($economy->json('data.packs'))->first(fn (array $row): bool => $row['product_id'] === 'coin_pack_300' && $row['store'] === 'apple');
+        $this->assertSame(38, $anchor['price_usd_cents']);
         $thousand = collect($economy->json('data.packs'))->first(fn (array $row): bool => $row['product_id'] === 'coin_pack_1000' && $row['store'] === 'apple');
         $this->assertSame(170000, $thousand['price_ngn_kobo']);
-        $this->assertSame(99, $thousand['price_usd_cents']);
+        $this->assertSame(127, $thousand['price_usd_cents']);
 
         $sender = User::factory()->create();
         $creatorUser = User::factory()->create();
-        $creatorUser->forceFill(['age_majority_confirmed_at' => now()])->save();
+        $creatorUser->forceFill(['age_majority_confirmed_at' => now(), 'country_code' => 'NG'])->save();
         $creator = CreatorProfile::create(['user_id' => $creatorUser->id, 'display_name' => 'Reel Creator']);
-        $giftType = GiftType::create(['slug' => 'economy-star', 'name' => 'Star', 'coins' => 500, 'version' => 1]);
+        $diamonds = (int) $economy->json('data.min_cashout_diamonds');
+        $giftType = GiftType::create(['slug' => 'economy-star', 'name' => 'Star', 'coins' => $diamonds, 'version' => 1]);
         $wallet = FinancialAccount::create(['owner_type' => User::class, 'owner_id' => $sender->id, 'type' => 'gift_wallet', 'unit' => 'PCN', 'balance' => 0]);
         $funding = FinancialAccount::create(['type' => 'iap_liability', 'unit' => 'PCN', 'balance' => 0]);
         app(PostLedgerTransaction::class)->handle('test.iap', 'economy-fund', 'PCN', [
-            ['account_id' => $funding->id, 'amount' => -500],
-            ['account_id' => $wallet->id, 'amount' => 500],
+            ['account_id' => $funding->id, 'amount' => -$diamonds],
+            ['account_id' => $wallet->id, 'amount' => $diamonds],
         ]);
         $this->actingAs($sender, 'sanctum')->withHeader('Idempotency-Key', 'economy-gift')->postJson('/api/v1/gifts/send', [
             'gift_type_id' => $giftType->id,
             'creator_profile_id' => $creator->id,
-        ])->assertCreated()->assertJsonPath('data.coins', 500)->assertJsonPath('data.diamonds', 500);
+        ])->assertCreated()->assertJsonPath('data.coins', $diamonds)->assertJsonPath('data.diamonds', $diamonds);
 
+        DB::table('fx_rate_versions')->insert([
+            'id' => (string) Str::ulid(),
+            'base_unit' => 'USD',
+            'quote_currency' => 'NGN',
+            'rate' => '1450.00000000',
+            'source' => 'test',
+            'approval_state' => 'approved',
+            'effective_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
         $quote = $this->actingAs($creatorUser, 'sanctum')->getJson('/api/v1/creators/diamonds')->assertOk();
-        $quote->assertJsonPath('data.balance', 500)
-            ->assertJsonPath('data.quotes.NGN.gross_minor', 41500)
-            ->assertJsonPath('data.quotes.NGN.transfer_fee_minor', 5000)
-            ->assertJsonPath('data.quotes.NGN.net_minor', 36500)
-            ->assertJsonPath('data.quotes.NGN.rate_includes_app_share', true);
+        $quote->assertJsonPath('data.balance', $diamonds)
+            ->assertJsonPath('data.quotes.USD.gross_minor', 1500)
+            ->assertJsonPath('data.quotes.USD.transfer_fee_minor', 0)
+            ->assertJsonPath('data.quotes.USD.net_minor', 1500)
+            ->assertJsonPath('data.quotes.USD.payable', true)
+            ->assertJsonPath('data.quotes.USD.rate_includes_app_share', true)
+            ->assertJsonPath('data.display.available_usd', '15.00')
+            ->assertJsonPath('data.display.currency', 'NGN')
+            ->assertJsonPath('data.display.fx_rate', '1450.00')
+            ->assertJsonPath('data.display.display_available', '₦21,750.00');
 
         $method = (string) Str::ulid();
         DB::table('payout_methods')->insert([
@@ -84,21 +107,24 @@ final class CoinEconomyTest extends TestCase
 
         $cashout = $this->actingAs($creatorUser, 'sanctum')->withHeader('Idempotency-Key', 'cashout-once')->postJson('/api/v1/creators/diamond-cashouts', [
             'payout_method_id' => $method,
-            'diamonds' => 500,
+            'diamonds' => $diamonds,
             'currency' => 'NGN',
         ])->assertCreated();
-        $cashout->assertJsonPath('data.gross_minor', 41500)
-            ->assertJsonPath('data.transfer_fee_minor', 5000)
-            ->assertJsonPath('data.net_minor', 36500)
+        $cashout->assertJsonPath('data.gross_usd_cents', 1500)
+            ->assertJsonPath('data.gross_minor', 2175000)
+            ->assertJsonPath('data.transfer_fee_minor', 0)
+            ->assertJsonPath('data.net_minor', 2175000)
+            ->assertJsonPath('data.fx_rate', '1450.00')
+            ->assertJsonPath('data.currency', 'NGN')
             ->assertJsonPath('data.state', 'queued');
         $cashoutId = $cashout->json('data.id');
         $this->actingAs($creatorUser, 'sanctum')->withHeader('Idempotency-Key', 'cashout-once')->postJson('/api/v1/creators/diamond-cashouts', [
             'payout_method_id' => $method,
-            'diamonds' => 500,
+            'diamonds' => $diamonds,
             'currency' => 'NGN',
         ])->assertOk()->assertJsonPath('data.id', $cashoutId);
         $this->assertSame(0, (int) FinancialAccount::where('owner_id', $creator->id)->where('type', 'diamond_wallet')->value('balance'));
-        $this->assertSame(500, (int) FinancialAccount::where('type', 'diamond_redemption')->value('balance'));
+        $this->assertSame($diamonds, (int) FinancialAccount::where('type', 'diamond_redemption')->value('balance'));
         $this->assertNull(FinancialAccount::where('type', 'gift_platform_fee')->value('balance'));
 
         $regimeId = DB::table('gifts')->value('economy_regime_id');
@@ -109,7 +135,7 @@ final class CoinEconomyTest extends TestCase
             'state' => 'rejected',
             'reason' => 'The account name did not match the creator.',
         ])->assertOk();
-        $this->assertSame(500, (int) FinancialAccount::where('owner_id', $creator->id)->where('type', 'diamond_wallet')->value('balance'));
+        $this->assertSame($diamonds, (int) FinancialAccount::where('owner_id', $creator->id)->where('type', 'diamond_wallet')->value('balance'));
         $this->assertSame(0, (int) FinancialAccount::where('type', 'diamond_redemption')->value('balance'));
         $this->assertDatabaseHas('diamond_cashouts', ['id' => $cashoutId, 'state' => 'rejected']);
 
@@ -121,9 +147,9 @@ final class CoinEconomyTest extends TestCase
         $this->actingAs($creatorUser, 'sanctum')->getJson('/api/v1/creators/diamonds')
             ->assertOk()
             ->assertJsonPath('data.regime.code', 'small_business')
-            ->assertJsonPath('data.regime.diamond_ngn', '1.01')
-            ->assertJsonPath('data.quotes.NGN.gross_minor', 50500)
-            ->assertJsonPath('data.quotes.NGN.net_minor', 45500);
+            ->assertJsonPath('data.regime.diamond_usd', '0.0007537')
+            ->assertJsonPath('data.quotes.USD.payable', true)
+            ->assertJsonPath('data.display.currency', 'NGN');
 
         $client->postJson('/api/admin/v1/finance/coin-economy', $this->regimePayload('pilot', '0.9'))->assertCreated();
         $this->actingAs($creatorUser, 'sanctum')->getJson('/api/v1/gifts/economy')

@@ -8,6 +8,7 @@ use App\Contracts\SocialIdentityVerifier;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Support\ApiResponse;
+use App\Support\SignupCountry;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,7 +19,7 @@ final class SocialAuthController extends Controller
 {
     public function __invoke(Request $request, SocialIdentityVerifier $verifier, IssueMobileSession $sessions): JsonResponse
     {
-        $data = $request->validate(['provider' => ['required', 'in:apple,google'], 'token' => ['required', 'string', 'max:10000'], 'nonce' => ['nullable', 'string', 'max:128'], 'device_name' => ['required', 'string', 'max:100']]);
+        $data = $request->validate(['provider' => ['required', 'in:apple,google'], 'token' => ['required', 'string', 'max:10000'], 'nonce' => ['nullable', 'string', 'max:128'], 'device_name' => ['required', 'string', 'max:100'], 'country_code' => ['sometimes', 'nullable', 'string', 'size:2', 'alpha']]);
         $identity = $verifier->verify($data['provider'], $data['token']);
         if (! $identity) {
             if ($data['provider'] === 'google' && config('services.google.client_ids') === []) {
@@ -54,6 +55,7 @@ final class SocialAuthController extends Controller
         }
 
         $payload = $sessions->handle($user, $request, $data['device_name']);
+        app(SignupCountry::class)->capture($user, $request, $data['country_code'] ?? null);
         $grant = app(GrantWelcomeBonus::class)->handle($user);
         if ($grant !== null) {
             $payload['welcome_bonus'] = $grant;
