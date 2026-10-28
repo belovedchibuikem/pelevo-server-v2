@@ -17,7 +17,10 @@ final class GiftCatalogAndSignupCountryTest extends TestCase
             ->assertOk();
         $names = collect($response->json('data'))->pluck('name')->all();
         $this->assertSame(['Applause', 'Love', 'Star', 'Champion', 'Crown', 'Legend'], $names);
-        $this->assertSame(20, $response->json('data.0.coins'));
+        $this->assertSame(
+            [300, 500, 750, 1000, 1500, 2000],
+            collect($response->json('data'))->pluck('coins')->all(),
+        );
         $this->assertSame('applause', $response->json('data.0.slug'));
     }
 

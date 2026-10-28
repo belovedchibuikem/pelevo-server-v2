@@ -11,9 +11,11 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class PrivacyRequestController extends Controller
@@ -62,7 +64,24 @@ final class PrivacyRequestController extends Controller
 
     public function delete(Request $request): JsonResponse
     {
-        $data = $request->validate(['password' => ['required', 'current_password'], 'reason' => ['nullable', 'string', 'max:1000']]);
+        $data = $request->validate([
+            'password' => ['nullable', 'string'],
+            'confirmation' => ['nullable', 'string', 'max:32'],
+            'reason' => ['nullable', 'string', 'max:1000'],
+        ]);
+        $password = $data['password'] ?? null;
+        $confirmation = strtoupper(trim((string) ($data['confirmation'] ?? '')));
+        if (filled($password)) {
+            if (! Hash::check($password, (string) $request->user()->password)) {
+                throw ValidationException::withMessages([
+                    'password' => ['The password is incorrect.'],
+                ]);
+            }
+        } elseif ($confirmation !== 'DELETE') {
+            throw ValidationException::withMessages([
+                'confirmation' => ['Type DELETE to confirm, or enter your password.'],
+            ]);
+        }
         $existing = DB::table('account_deletion_requests')->where('user_id', $request->user()->id)->where('state', 'queued')->first();
         if ($existing) {
             return ApiResponse::success($existing);
