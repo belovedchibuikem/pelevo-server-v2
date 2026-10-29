@@ -305,7 +305,7 @@ final class FinanceController extends Controller
             if (! $row) {
                 return ApiResponse::error('NOT_FOUND', 'Diamond cashout not found.', 404);
             }
-            $allowed = ['queued' => ['approved', 'rejected'], 'approved' => ['processing', 'rejected'], 'processing' => ['paid', 'failed'], 'paid' => ['reversed'], 'failed' => [], 'rejected' => [], 'reversed' => []];
+            $allowed = ['queued' => ['approved', 'rejected'], 'approved' => ['processing', 'paid', 'rejected'], 'processing' => ['paid', 'failed'], 'paid' => ['reversed'], 'failed' => [], 'rejected' => [], 'reversed' => []];
             if (! in_array($data['state'], $allowed[$row->state] ?? [], true)) {
                 return ApiResponse::error('CONFLICT', 'Invalid diamond cashout state transition.', 409);
             }
@@ -313,10 +313,43 @@ final class FinanceController extends Controller
                 $reverse->handle($row->ledger_transaction_id, 'diamond-cashout-release:'.$row->id, $data['reason']);
             }
             DB::table('diamond_cashouts')->where('id', $cashout)->update(['state' => $data['state'], 'provider_reference' => $data['provider_reference'] ?? $row->provider_reference, 'failure_reason' => in_array($data['state'], ['failed', 'rejected'], true) ? $data['reason'] : null, 'processed_at' => in_array($data['state'], ['paid', 'failed', 'rejected', 'reversed'], true) ? now() : null, 'updated_at' => now()]);
+            // Optional provider dispatch only when a payout URL is configured. Admin can mark paid manually.
             if ($data['state'] === 'approved') {
-                DispatchDiamondCashout::dispatch($cashout)->afterCommit();
+                $provider = DB::table('payout_methods')->where('id', $row->payout_method_id)->value('provider');
+                if (is_string($provider) && config("services.{$provider}.payout_url")) {
+                    DispatchDiamondCashout::dispatch($cashout)->afterCommit();
+                }
             }
             $this->audit($request, 'diamond_cashout.'.$data['state'], 'App\\Models\\DiamondCashout', $cashout, $data['reason'], ['from' => $row->state, 'to' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
+
+            return ApiResponse::success(['cashout_id' => $cashout, 'state' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
+        }, 3);
+    }
+
+    public function adCashout(string $cashout, Request $request, ReverseLedgerTransaction $reverse): JsonResponse
+    {
+        $data = $request->validate(['state' => ['required', 'in:approved,processing,paid,failed,rejected,reversed'], 'reason' => ['required', 'string', 'min:10', 'max:2000'], 'provider_reference' => ['nullable', 'string', 'max:191']]);
+
+        return DB::transaction(function () use ($cashout, $request, $data, $reverse): JsonResponse {
+            $row = DB::table('creator_ad_cashouts')->where('id', $cashout)->lockForUpdate()->first();
+            if (! $row) {
+                return ApiResponse::error('NOT_FOUND', 'Ad cashout not found.', 404);
+            }
+            $allowed = ['queued' => ['approved', 'rejected'], 'approved' => ['processing', 'paid', 'rejected'], 'processing' => ['paid', 'failed'], 'paid' => ['reversed'], 'failed' => [], 'rejected' => [], 'reversed' => []];
+            if (! in_array($data['state'], $allowed[$row->state] ?? [], true)) {
+                return ApiResponse::error('CONFLICT', 'Invalid ad cashout state transition.', 409);
+            }
+            if (in_array($data['state'], ['failed', 'rejected', 'reversed'], true) && $row->ledger_transaction_id) {
+                $reverse->handle($row->ledger_transaction_id, 'ad-cashout-release:'.$row->id, $data['reason']);
+            }
+            DB::table('creator_ad_cashouts')->where('id', $cashout)->update([
+                'state' => $data['state'],
+                'provider_reference' => $data['provider_reference'] ?? $row->provider_reference,
+                'failure_reason' => in_array($data['state'], ['failed', 'rejected'], true) ? $data['reason'] : null,
+                'processed_at' => in_array($data['state'], ['paid', 'failed', 'rejected', 'reversed'], true) ? now() : null,
+                'updated_at' => now(),
+            ]);
+            $this->audit($request, 'ad_cashout.'.$data['state'], 'App\\Models\\CreatorAdCashout', $cashout, $data['reason'], ['from' => $row->state, 'to' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
 
             return ApiResponse::success(['cashout_id' => $cashout, 'state' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
         }, 3);

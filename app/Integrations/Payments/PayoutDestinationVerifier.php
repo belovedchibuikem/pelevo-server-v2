@@ -6,8 +6,23 @@ use Illuminate\Support\Facades\Http;
 
 final class PayoutDestinationVerifier
 {
+    public function __construct(private readonly FlutterwaveBanks $flutterwave) {}
+
     public function verify(string $provider, string $kind, array $destination): array
     {
+        if ($provider === 'flutterwave' && $kind === 'bank') {
+            $resolved = $this->flutterwave->resolve(
+                (string) ($destination['bank_code'] ?? ''),
+                (string) ($destination['account_number'] ?? ''),
+            );
+
+            return [
+                'verified' => $resolved['verified'],
+                'reference' => $resolved['reference'],
+                'label' => $resolved['account_name'],
+            ];
+        }
+
         $endpoint = config("services.{$provider}.payout_verification_url");
         if (! $endpoint) {
             return ['verified' => false, 'reference' => null, 'label' => null];

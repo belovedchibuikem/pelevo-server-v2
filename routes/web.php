@@ -176,6 +176,7 @@ Route::prefix('api/admin/v1')->middleware(['auth.admin', 'admin.mfa'])->group(fu
     Route::put('finance/coin-economy/{regime}', [FinanceController::class, 'updateCoinEconomy'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::put('finance/coin-economy/{regime}/activation', [FinanceController::class, 'activateCoinEconomy'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::put('finance/diamond-cashouts/{cashout}', [FinanceController::class, 'diamondCashout'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh']);
+    Route::put('finance/ad-cashouts/{cashout}', [FinanceController::class, 'adCashout'])->middleware(['admin.permission:payouts.approve', 'admin.mfa.fresh']);
     Route::post('finance/gift-types', [FinanceController::class, 'giftType'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::put('finance/gift-types/{giftType}', [FinanceController::class, 'giftTypeUpdate'])->middleware(['admin.permission:finance.adjust', 'admin.mfa.fresh']);
     Route::get('advanced', [AdvancedOperationsController::class, 'index'])->middleware('admin.permission:audit.view');

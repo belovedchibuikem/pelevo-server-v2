@@ -31,14 +31,17 @@ final class PayoutMethodController extends Controller
             return $denied;
         }
         $data = $request->validate([
-            'provider' => ['required', 'in:paystack,paypal'],
+            'provider' => ['required', 'in:paystack,flutterwave,paypal'],
             'kind' => ['required', 'in:bank,paypal'],
             'destination' => ['required', 'array'],
             'destination.account_number' => ['required_if:kind,bank', 'digits_between:8,12'],
             'destination.bank_code' => ['required_if:kind,bank', 'string', 'max:20'],
+            'destination.country' => ['required_if:provider,flutterwave', 'nullable', 'string', 'size:2'],
+            'destination.account_name' => ['nullable', 'string', 'max:191'],
             'destination.email' => ['required_if:kind,paypal', 'email:rfc', 'max:191'],
         ]);
-        if (($data['provider'] === 'paystack') !== ($data['kind'] === 'bank')) {
+        $bankProvider = in_array($data['provider'], ['paystack', 'flutterwave'], true);
+        if ($bankProvider !== ($data['kind'] === 'bank') || ($data['provider'] === 'paypal') !== ($data['kind'] === 'paypal')) {
             return ApiResponse::error('VALIDATION', 'Provider and payout method type do not match.', 422);
         }
         try {
@@ -46,20 +49,31 @@ final class PayoutMethodController extends Controller
         } catch (Throwable) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Payout destination verification is unavailable.', 503);
         }
+        if ($data['provider'] === 'flutterwave' && $data['kind'] === 'bank' && ! ($verification['verified'] ?? false)) {
+            return ApiResponse::error('VALIDATION', 'We could not verify that bank account. Check the country, bank, and account number.', 422);
+        }
+        if (is_string($verification['label'] ?? null) && $verification['label'] !== '') {
+            $data['destination']['account_name'] = $verification['label'];
+        }
         $display = $data['kind'] === 'bank' ? $data['destination']['account_number'] : $data['destination']['email'];
         $id = (string) Str::ulid();
         $bank = $data['kind'] === 'bank';
+        // Flutterwave name enquiry verifies the account; bank methods still need proof for compliance.
+        $verifiedNow = ! $bank && ($verification['verified'] ?? false);
+        if ($bank && $data['provider'] === 'flutterwave' && ($verification['verified'] ?? false)) {
+            $verifiedNow = false;
+        }
         DB::table('payout_methods')->insert([
             'id' => $id,
             'owner_type' => get_class($request->user()),
             'owner_id' => $request->user()->id,
             'provider' => $data['provider'],
             'kind' => $data['kind'],
-            'label' => $verification['label'],
+            'label' => $verification['label'] ?? ($data['destination']['account_name'] ?? null),
             'destination_encrypted' => encrypt($data['destination']),
             'destination_last_four' => mb_substr($display, -4),
             'verification_reference' => $verification['reference'],
-            'verified_at' => $bank ? null : ($verification['verified'] ? now() : null),
+            'verified_at' => $verifiedNow ? now() : null,
             'proof_status' => 'none',
             'created_at' => now(),
             'updated_at' => now(),
