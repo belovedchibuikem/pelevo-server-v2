@@ -75,7 +75,7 @@ final class DiamondCashoutController extends Controller
             $route = app(PayoutRoute::class)->resolve($request->user()->country_code, $method);
         } catch (InvalidArgumentException $exception) {
             $message = $exception->getMessage() === 'AFRICAN_BANK_REQUIRED'
-                ? 'African diamond cashouts are paid to a verified Paystack or Flutterwave bank account.'
+                ? 'African diamond cashouts are paid to a verified local bank account.'
                 : 'International diamond cashouts are paid to a verified PayPal account.';
 
             return ApiResponse::error('VALIDATION', $message, 422);

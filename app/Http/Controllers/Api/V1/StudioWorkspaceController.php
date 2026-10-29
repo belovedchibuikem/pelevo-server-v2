@@ -195,8 +195,35 @@ final class StudioWorkspaceController extends Controller
     public function supporters(Request $request): JsonResponse
     {
         $creators = $this->creatorIds($request);
-        $items = DB::table('gifts')->join('users', 'users.id', '=', 'gifts.sender_id')->join('gift_types', 'gift_types.id', '=', 'gifts.gift_type_id')->whereIn('gifts.creator_profile_id', $creators)->select('users.id', 'users.name', 'users.handle', DB::raw('count(*) as gifts_count'), DB::raw('sum(gift_types.coins) as coins'))->groupBy('users.id', 'users.name', 'users.handle')->orderByDesc(DB::raw('sum(gift_types.coins)'))->orderBy('users.id')->cursorPaginate($this->limit($request));
-        $totals = DB::table('gifts')->join('gift_types', 'gift_types.id', '=', 'gifts.gift_type_id')->whereIn('gifts.creator_profile_id', $creators)->selectRaw('count(distinct gifts.sender_id) as supporters_count, coalesce(sum(gift_types.coins), 0) as coins_received')->first();
+        $giftCoins = $this->giftCoinsSql();
+        $items = DB::table('gifts')
+            ->join('users', 'users.id', '=', 'gifts.sender_id')
+            ->leftJoin('creator_revenue_events', function ($join): void {
+                $join->on('creator_revenue_events.source_id', '=', 'gifts.id')
+                    ->where('creator_revenue_events.source_type', '=', 'gift');
+            })
+            ->leftJoin('gift_types', 'gift_types.id', '=', 'gifts.gift_type_id')
+            ->whereIn('gifts.creator_profile_id', $creators)
+            ->select(
+                'users.id',
+                'users.name',
+                'users.handle',
+                DB::raw('count(*) as gifts_count'),
+                DB::raw("coalesce(sum($giftCoins), 0) as coins"),
+            )
+            ->groupBy('users.id', 'users.name', 'users.handle')
+            ->orderByDesc(DB::raw("coalesce(sum($giftCoins), 0)"))
+            ->orderBy('users.id')
+            ->cursorPaginate($this->limit($request));
+        $totals = DB::table('gifts')
+            ->leftJoin('creator_revenue_events', function ($join): void {
+                $join->on('creator_revenue_events.source_id', '=', 'gifts.id')
+                    ->where('creator_revenue_events.source_type', '=', 'gift');
+            })
+            ->leftJoin('gift_types', 'gift_types.id', '=', 'gifts.gift_type_id')
+            ->whereIn('gifts.creator_profile_id', $creators)
+            ->selectRaw("count(distinct gifts.sender_id) as supporters_count, coalesce(sum($giftCoins), 0) as coins_received")
+            ->first();
 
         return ApiResponse::success(collect($items->items())->map(fn ($row): array => ['id' => $row->id, 'name' => $row->name, 'handle' => $row->handle, 'gifts_count' => (int) $row->gifts_count, 'coins' => (int) $row->coins])->values()->all(), ['cursor' => $items->nextCursor()?->encode(), 'has_more' => $items->hasMorePages(), 'supporters_count' => (int) ($totals->supporters_count ?? 0), 'coins_received' => (int) ($totals->coins_received ?? 0)]);
     }
@@ -324,7 +351,16 @@ final class StudioWorkspaceController extends Controller
         $series = array_map(fn (array $row): array => [...$row, 'gift_coins' => 0, 'ad_usd_micros' => 0], $buckets);
         $between = [$range['from'], $range['to']];
 
-        $gifts = DB::table('gifts')->join('gift_types', 'gift_types.id', '=', 'gifts.gift_type_id')->whereIn('gifts.creator_profile_id', $creators)->whereBetween('gifts.created_at', $between)->get(['gifts.created_at', 'gift_types.coins']);
+        $giftCoins = $this->giftCoinsSql();
+        $gifts = DB::table('gifts')
+            ->leftJoin('creator_revenue_events', function ($join): void {
+                $join->on('creator_revenue_events.source_id', '=', 'gifts.id')
+                    ->where('creator_revenue_events.source_type', '=', 'gift');
+            })
+            ->leftJoin('gift_types', 'gift_types.id', '=', 'gifts.gift_type_id')
+            ->whereIn('gifts.creator_profile_id', $creators)
+            ->whereBetween('gifts.created_at', $between)
+            ->get(['gifts.created_at', DB::raw("$giftCoins as coins")]);
         $ads = DB::table('creator_ad_revenue_allocations')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['created_at', 'status', 'gross_usd_micros', 'clawback_usd_micros']);
         $payouts = DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['amount', 'unit']);
 
@@ -507,6 +543,15 @@ final class StudioWorkspaceController extends Controller
     private function episodeRow(string $episode, Request $request): ?object
     {
         return DB::table('episodes')->join('shows', 'shows.id', '=', 'episodes.show_id')->where('episodes.id', $episode)->whereIn('episodes.show_id', $this->showIds($request))->select('episodes.id', 'episodes.show_id', 'episodes.title', 'episodes.description', 'episodes.duration_seconds', 'episodes.audio_url', 'episodes.published_at', 'episodes.availability', 'shows.title as show_title', 'shows.artwork_url as artwork_url')->first();
+    }
+
+    /**
+     * Coins credited when the gift was sent — not the live gift_types catalog price.
+     * Catalog prices can change later and must not rewrite historical supporter/earnings totals.
+     */
+    private function giftCoinsSql(): string
+    {
+        return 'coalesce(creator_revenue_events.net_amount, gift_types.coins, 0)';
     }
 
     private function limit(Request $request): int

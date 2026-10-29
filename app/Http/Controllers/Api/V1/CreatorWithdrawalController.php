@@ -119,7 +119,7 @@ final class CreatorWithdrawalController extends Controller
             $route = app(PayoutRoute::class)->resolve($request->user()->country_code, $method);
         } catch (InvalidArgumentException $exception) {
             $message = $exception->getMessage() === 'AFRICAN_BANK_REQUIRED'
-                ? 'African creator withdrawals are paid to a verified Flutterwave or Paystack bank account.'
+                ? 'African creator withdrawals are paid to a verified local bank account.'
                 : 'International creator withdrawals are paid to a verified PayPal account.';
 
             return ApiResponse::error('VALIDATION', $message, 422);
