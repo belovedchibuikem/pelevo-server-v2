@@ -38,17 +38,7 @@ final class FlutterwaveBanks
         if ($country === '' || ! $this->supports($country)) {
             throw new RuntimeException('UNSUPPORTED_COUNTRY');
         }
-        $token = (string) config('services.flutterwave.checkout_token');
-        if ($token === '') {
-            throw new RuntimeException('FLUTTERWAVE_UNCONFIGURED');
-        }
-        $response = Http::withToken($token)
-            ->connectTimeout(3)
-            ->timeout(12)
-            ->acceptJson()
-            ->get('https://api.flutterwave.com/v3/banks/'.$country)
-            ->throw()
-            ->json();
+        $response = $this->request('get', 'https://api.flutterwave.com/v3/banks/'.$country);
         $rows = $response['data'] ?? [];
         if (! is_array($rows)) {
             return [];
@@ -75,28 +65,18 @@ final class FlutterwaveBanks
      */
     public function resolve(string $bankCode, string $accountNumber): array
     {
-        $token = (string) config('services.flutterwave.checkout_token');
-        if ($token === '') {
-            throw new RuntimeException('FLUTTERWAVE_UNCONFIGURED');
-        }
-        $response = Http::withToken($token)
-            ->connectTimeout(3)
-            ->timeout(12)
-            ->acceptJson()
-            ->post('https://api.flutterwave.com/v3/accounts/resolve', [
-                'account_bank' => $bankCode,
-                'account_number' => $accountNumber,
-            ])
-            ->throw()
-            ->json();
+        $response = $this->request('post', 'https://api.flutterwave.com/v3/accounts/resolve', [
+            'account_bank' => $bankCode,
+            'account_number' => $accountNumber,
+        ]);
         $data = is_array($response['data'] ?? null) ? $response['data'] : [];
         $name = trim((string) ($data['account_name'] ?? ''));
 
         return [
             'verified' => $name !== '',
             'account_name' => $name === '' ? null : $name,
-            'reference' => isset($response['data']['account_number'])
-                ? (string) $response['data']['account_number']
+            'reference' => isset($data['account_number'])
+                ? (string) $data['account_number']
                 : null,
         ];
     }
@@ -106,5 +86,35 @@ final class FlutterwaveBanks
         $country = strtoupper(trim($countryCode));
 
         return collect($this->countries())->contains(fn (array $row): bool => $row['code'] === $country);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function request(string $method, string $url, array $payload = []): array
+    {
+        $token = (string) config('services.flutterwave.checkout_token');
+        if ($token === '') {
+            throw new RuntimeException('FLUTTERWAVE_UNCONFIGURED');
+        }
+        $pending = Http::withToken($token)
+            ->connectTimeout(3)
+            ->timeout(12)
+            ->acceptJson();
+        $response = $method === 'post'
+            ? $pending->post($url, $payload)
+            : $pending->get($url);
+        $body = $response->json();
+        $json = is_array($body) ? $body : [];
+        if ($response->successful()) {
+            return $json;
+        }
+        $message = trim((string) ($json['message'] ?? ''));
+        if ($message === '') {
+            $message = 'Flutterwave returned HTTP '.$response->status().'.';
+        }
+
+        throw new RuntimeException('FLUTTERWAVE_PROVIDER:'.$message);
     }
 }

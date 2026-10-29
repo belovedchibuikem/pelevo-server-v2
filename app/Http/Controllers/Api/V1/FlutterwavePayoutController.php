@@ -23,7 +23,7 @@ final class FlutterwavePayoutController extends Controller
         try {
             return ApiResponse::success($banks->banks($data['country']));
         } catch (RuntimeException $exception) {
-            return $this->mapFailure($exception);
+            return $this->mapFailure($exception, 'Flutterwave banks could not be loaded right now.');
         } catch (Throwable) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Flutterwave banks could not be loaded right now.', 503);
         }
@@ -42,7 +42,7 @@ final class FlutterwavePayoutController extends Controller
         try {
             $resolved = $banks->resolve($data['bank_code'], $data['account_number']);
         } catch (RuntimeException $exception) {
-            return $this->mapFailure($exception);
+            return $this->mapFailure($exception, 'Account name verification is unavailable right now.');
         } catch (Throwable) {
             return ApiResponse::error('SERVICE_DEGRADED', 'Account name verification is unavailable right now.', 503);
         }
@@ -59,12 +59,23 @@ final class FlutterwavePayoutController extends Controller
         ]);
     }
 
-    private function mapFailure(RuntimeException $exception): JsonResponse
+    private function mapFailure(RuntimeException $exception, string $fallback): JsonResponse
     {
-        return match ($exception->getMessage()) {
+        $message = $exception->getMessage();
+        if (str_starts_with($message, 'FLUTTERWAVE_PROVIDER:')) {
+            $provider = trim(substr($message, strlen('FLUTTERWAVE_PROVIDER:')));
+
+            return ApiResponse::error(
+                'SERVICE_DEGRADED',
+                $provider !== '' ? $provider : $fallback,
+                503,
+            );
+        }
+
+        return match ($message) {
             'UNSUPPORTED_COUNTRY' => ApiResponse::error('VALIDATION', 'That Flutterwave country is not supported.', 422),
             'FLUTTERWAVE_UNCONFIGURED' => ApiResponse::error('SERVICE_DEGRADED', 'Flutterwave payouts are not configured yet.', 503),
-            default => ApiResponse::error('SERVICE_DEGRADED', 'Flutterwave banks could not be loaded right now.', 503),
+            default => ApiResponse::error('SERVICE_DEGRADED', $fallback, 503),
         };
     }
 }

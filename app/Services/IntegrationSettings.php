@@ -416,10 +416,18 @@ final class IntegrationSettings
         if ($token === '') {
             return ['ok' => false, 'message' => $label.' secret key is missing.'];
         }
-        $response = Http::withToken($token)->connectTimeout(3)->timeout(8)->get($url);
+        $response = Http::withToken($token)->connectTimeout(3)->timeout(8)->acceptJson()->get($url);
+        if ($response->successful()) {
+            return ['ok' => true, 'message' => $label.' accepted the secret key.'];
+        }
+        $body = $response->json();
+        $provider = is_array($body) ? trim((string) ($body['message'] ?? '')) : '';
 
-        return $response->successful()
-            ? ['ok' => true, 'message' => $label.' accepted the secret key.']
-            : ['ok' => false, 'message' => $label.' returned HTTP '.$response->status().'.'];
+        return [
+            'ok' => false,
+            'message' => $provider !== ''
+                ? $label.': '.$provider
+                : $label.' returned HTTP '.$response->status().'.',
+        ];
     }
 }
