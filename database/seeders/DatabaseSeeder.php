@@ -32,17 +32,9 @@ class DatabaseSeeder extends Seeder
             'effective_at' => now(),
         ]);
 
-        foreach ([['applause', 'Applause', 100], ['love', 'Love', 500], ['star', 'Star', 1000], ['champion', 'Champion', 5000]] as [$slug,$name,$coins]) {
-            GiftType::firstOrCreate(['slug' => $slug], ['name' => $name, 'coins' => $coins, 'version' => 1]);
-        }
+        GiftType::seed();
 
         CoinEconomy::seed();
-
-        foreach (['apple', 'google'] as $store) {
-            foreach ([500, 1200, 2500, 6500, 15000] as $coins) {
-                DB::table('coin_products')->insertOrIgnore(['id' => (string) Str::ulid(), 'store' => $store, 'product_id' => 'pelevo_coins_'.$coins, 'coins' => $coins, 'unit' => 'PCN', 'active' => true, 'created_at' => now(), 'updated_at' => now()]);
-            }
-        }
 
         $homeModules = [
             ['moods', 'What are you in the mood for?', 'Browse topics that match this moment', 'moods', 'moods'],

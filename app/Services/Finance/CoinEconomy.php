@@ -338,12 +338,12 @@ final class CoinEconomy
         }
 
         $packs = [
-            [300, 'coin_pack_300', 50000],
-            [500, 'coin_pack_500', 85000],
-            [750, 'coin_pack_750', 125000],
-            [1000, 'coin_pack_1000', 170000],
-            [1500, 'coin_pack_1500', 250000],
-            [2000, 'coin_pack_2000', 335000],
+            [300, 'coins_300', 50000],
+            [500, 'coins_500', 85000],
+            [750, 'coins_750', 125000],
+            [1000, 'coins_1000', 170000],
+            [1500, 'coins_1500', 250000],
+            [2000, 'coins_2000', 335000],
         ];
         foreach (['apple', 'google'] as $store) {
             foreach ($packs as [$coins, $productId, $ngnKobo]) {

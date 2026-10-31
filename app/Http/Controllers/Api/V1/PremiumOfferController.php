@@ -125,8 +125,7 @@ final class PremiumOfferController extends Controller
             return ApiResponse::error('SERVICE_DEGRADED', 'Premium store verification is unavailable.', 503);
         }
 
-        $expectedProduct = PremiumTrialOffer::storeProductId($plan);
-        if (($verified['product_id'] ?? null) !== $expectedProduct) {
+        if (! PremiumTrialOffer::matchesVerifiedProduct($plan, $verified)) {
             return ApiResponse::error('IAP_UNVERIFIED', 'The verified store product does not match this plan.', 422);
         }
 
@@ -204,7 +203,7 @@ final class PremiumOfferController extends Controller
 
     private function unknownOffer(string $offer): ?JsonResponse
     {
-        return $offer === PremiumTrialOffer::SLUG
+        return PremiumTrialOffer::matchesSlug($offer)
             ? null
             : ApiResponse::error('NOT_FOUND', 'Premium offer not found.', 404);
     }
@@ -223,7 +222,7 @@ final class PremiumOfferController extends Controller
     {
         return DB::table('premium_entitlements')
             ->where('user_id', $userId)
-            ->where('state', 'active')
+            ->whereIn('state', ['active', 'in_grace_period'])
             ->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>', now()))
             ->exists();
     }
