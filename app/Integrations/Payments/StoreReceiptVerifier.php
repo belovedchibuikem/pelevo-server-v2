@@ -7,7 +7,41 @@ use RuntimeException;
 
 final class StoreReceiptVerifier
 {
-    public function verify(string $store, string $receipt): array
+    public function __construct(
+        private readonly GooglePlayDeveloperClient $googlePlay,
+    ) {}
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function verify(string $store, string $receipt, ?string $productId = null): array
+    {
+        if ($store === 'google') {
+            return $this->verifyGoogle($receipt, $productId);
+        }
+
+        return $this->verifyViaConfiguredEndpoint($store, $receipt);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function verifyGoogle(string $receipt, ?string $productId): array
+    {
+        $endpoint = config('services.google.verification_url');
+        if (is_string($endpoint) && $endpoint !== '') {
+            return $this->verifyViaConfiguredEndpoint('google', $receipt);
+        }
+
+        $result = $this->googlePlay->verifyPurchase($receipt, $productId);
+
+        return $this->assertValidResult($result, 'google');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function verifyViaConfiguredEndpoint(string $store, string $receipt): array
     {
         $endpoint = config("services.{$store}.verification_url");
         if (! $endpoint) {
@@ -20,6 +54,19 @@ final class StoreReceiptVerifier
             ->post($endpoint, ['receipt' => $receipt])
             ->throw();
         $result = $response->json();
+        if (! is_array($result)) {
+            throw new RuntimeException('IAP_UNVERIFIED');
+        }
+
+        return $this->assertValidResult($result, $store);
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function assertValidResult(array $result, string $store): array
+    {
         if (($result['valid'] ?? false) !== true || empty($result['original_transaction_id']) || empty($result['product_id'])) {
             throw new RuntimeException('IAP_UNVERIFIED');
         }

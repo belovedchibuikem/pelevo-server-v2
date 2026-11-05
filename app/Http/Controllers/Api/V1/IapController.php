@@ -26,11 +26,23 @@ final class IapController extends Controller
         if ($denied = AgeMajority::missing($request->user())) {
             return $denied;
         }
-        $data = $request->validate(['store' => ['required', 'in:apple,google'], 'receipt' => ['required', 'string', 'max:20000']]);
+        $data = $request->validate([
+            'store' => ['required', 'in:apple,google'],
+            'receipt' => ['required', 'string', 'max:20000'],
+            'product_id' => ['nullable', 'string', 'max:191'],
+        ]);
         try {
-            $verified = $verifier->verify($data['store'], $data['receipt']);
+            $verified = $verifier->verify($data['store'], $data['receipt'], $data['product_id'] ?? null);
         } catch (RuntimeException $exception) {
-            return ApiResponse::error($exception->getMessage() === 'IAP_UNVERIFIED' ? 'IAP_UNVERIFIED' : 'SERVICE_DEGRADED', 'The store receipt could not be verified.', 422);
+            $unverified = $exception->getMessage() === 'IAP_UNVERIFIED';
+
+            return ApiResponse::error(
+                $unverified ? 'IAP_UNVERIFIED' : 'SERVICE_DEGRADED',
+                $unverified
+                    ? 'The store receipt could not be verified.'
+                    : 'Google Play purchase verification is not configured on the server.',
+                $unverified ? 422 : 503,
+            );
         }
 
         return DB::transaction(function () use ($request, $data, $verified, $post): JsonResponse {

@@ -62,7 +62,19 @@ return [
         'payout_token' => env('FLUTTERWAVE_SECRET_KEY'),
     ],
     'apple' => ['identity_url' => env('APPLE_IDENTITY_URL'), 'webhook_secret' => env('APPLE_WEBHOOK_SECRET'), 'verification_url' => env('APPLE_IAP_VERIFICATION_URL'), 'verification_token' => env('APPLE_IAP_VERIFICATION_TOKEN'), 'application_id' => env('APPLE_BUNDLE_ID'), 'service_id' => env('APPLE_SERVICE_ID'), 'team_id' => env('APPLE_TEAM_ID')],
-    'google' => ['identity_url' => env('GOOGLE_IDENTITY_URL', 'https://openidconnect.googleapis.com/v1/userinfo'), 'client_ids' => array_values(array_filter(array_map('trim', explode(',', (string) env('GOOGLE_CLIENT_IDS', ''))))), 'webhook_secret' => env('GOOGLE_WEBHOOK_SECRET'), 'verification_url' => env('GOOGLE_IAP_VERIFICATION_URL'), 'verification_token' => env('GOOGLE_IAP_VERIFICATION_TOKEN'), 'application_id' => env('GOOGLE_PACKAGE_NAME')],
+    'google' => [
+        'identity_url' => env('GOOGLE_IDENTITY_URL', 'https://openidconnect.googleapis.com/v1/userinfo'),
+        'client_ids' => array_values(array_filter(array_map('trim', explode(',', (string) env('GOOGLE_CLIENT_IDS', ''))))),
+        'webhook_secret' => env('GOOGLE_WEBHOOK_SECRET'),
+        // Optional proxy. When empty, Google Play purchases verify via Android Publisher API.
+        'verification_url' => env('GOOGLE_IAP_VERIFICATION_URL'),
+        'verification_token' => env('GOOGLE_IAP_VERIFICATION_TOKEN'),
+        'application_id' => env('GOOGLE_PACKAGE_NAME', 'com.Podemeraldltd.pelevo'),
+        // Play Console → Setup → API access → service account JSON path or raw JSON.
+        'play_credentials' => (($playCredentials = env('GOOGLE_PLAY_CREDENTIALS')) && trim((string) $playCredentials) !== '')
+            ? $playCredentials
+            : storage_path('app/google-play/service-account.json'),
+    ],
     'earn_integrity' => [
         'url' => env('EARN_INTEGRITY_URL'),
         'token' => env('EARN_INTEGRITY_TOKEN'),
