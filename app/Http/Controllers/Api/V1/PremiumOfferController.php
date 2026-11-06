@@ -10,6 +10,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -113,6 +114,12 @@ final class PremiumOfferController extends Controller
             $verified = $verifier->verify($data['store'], $data['receipt']);
         } catch (RuntimeException $exception) {
             $missing = $exception->getMessage() !== 'IAP_UNVERIFIED';
+            Log::warning('premium.store_purchase.verify_failed', [
+                'store' => $data['store'],
+                'plan_id' => $data['plan_id'],
+                'user_id' => $request->user()?->id,
+                'reason' => $exception->getMessage(),
+            ]);
 
             return ApiResponse::error(
                 $missing ? 'SERVICE_DEGRADED' : 'IAP_UNVERIFIED',
@@ -121,7 +128,14 @@ final class PremiumOfferController extends Controller
                     : 'The store receipt could not be verified.',
                 $missing ? 503 : 422,
             );
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            Log::error('premium.store_purchase.verify_exception', [
+                'store' => $data['store'],
+                'plan_id' => $data['plan_id'],
+                'user_id' => $request->user()?->id,
+                'reason' => $exception->getMessage(),
+            ]);
+
             return ApiResponse::error('SERVICE_DEGRADED', 'Premium store verification is unavailable.', 503);
         }
 
@@ -188,6 +202,27 @@ final class PremiumOfferController extends Controller
                     'created_at' => $start,
                     'updated_at' => $start,
                 ]);
+                // Store IAP has no Paystack-style PDF. Point members at the
+                // store order / subscription page so View Receipt is useful.
+                if (! DB::table('invoices')->where('provider', $data['store'])->where('provider_invoice_id', $transactionId)->exists()) {
+                    DB::table('invoices')->insert([
+                        'id' => (string) Str::ulid(),
+                        'user_id' => $userId,
+                        'premium_subscription_id' => $subscriptionId,
+                        'premium_checkout_id' => null,
+                        'provider' => $data['store'],
+                        'provider_invoice_id' => $transactionId,
+                        'subtotal_minor' => (int) ($plan->price_minor ?? 0),
+                        'tax_minor' => 0,
+                        'total_minor' => (int) ($plan->price_minor ?? 0),
+                        'currency' => (string) ($plan->currency ?? 'USD'),
+                        'state' => 'paid',
+                        'receipt_url' => $this->storeReceiptUrl($data['store']),
+                        'paid_at' => $start,
+                        'created_at' => $start,
+                        'updated_at' => $start,
+                    ]);
+                }
             }, 3);
         } catch (RuntimeException $exception) {
             return match ($exception->getMessage()) {
@@ -272,5 +307,16 @@ final class PremiumOfferController extends Controller
                 'cancel_at' => $subscription->cancel_at ? Carbon::parse($subscription->cancel_at)->toIso8601String() : null,
             ] : null,
         ];
+    }
+
+    private function storeReceiptUrl(string $store): string
+    {
+        if ($store === 'apple') {
+            return 'https://apps.apple.com/account/subscriptions';
+        }
+
+        $package = (string) config('services.google.application_id', 'com.Podemeraldltd.pelevo');
+
+        return 'https://play.google.com/store/account/subscriptions?package='.rawurlencode($package).'&sku='.rawurlencode(PremiumTrialOffer::GOOGLE_PRODUCT_ID);
     }
 }

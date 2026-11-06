@@ -4,6 +4,7 @@ namespace App\Integrations\Payments;
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 /**
@@ -107,6 +108,11 @@ class GooglePlayDeveloperClient
             return null;
         }
         if (! $response->successful()) {
+            Log::warning('google_play.subscription_lookup_failed', [
+                'package' => $packageName,
+                'status' => $response->status(),
+                'body' => mb_substr($response->body(), 0, 500),
+            ]);
             throw new RuntimeException(
                 $response->status() === 401 || $response->status() === 403
                     ? 'IAP verification service is not configured.'
@@ -140,6 +146,12 @@ class GooglePlayDeveloperClient
             return null;
         }
         if (! $response->successful()) {
+            Log::warning('google_play.product_lookup_failed', [
+                'package' => $packageName,
+                'product_id' => $productId,
+                'status' => $response->status(),
+                'body' => mb_substr($response->body(), 0, 500),
+            ]);
             throw new RuntimeException(
                 $response->status() === 401 || $response->status() === 403
                     ? 'IAP verification service is not configured.'
@@ -278,6 +290,10 @@ class GooglePlayDeveloperClient
                 'assertion' => $jwt,
             ]);
             if (! $response->successful() || ! is_string($response->json('access_token'))) {
+                Log::warning('google_play.oauth_token_failed', [
+                    'status' => $response->status(),
+                    'body' => mb_substr($response->body(), 0, 500),
+                ]);
                 throw new RuntimeException('IAP verification service is not configured.');
             }
 
@@ -308,10 +324,12 @@ class GooglePlayDeveloperClient
             $path = is_file($fromBase) ? $fromBase : $path;
         }
         if (! is_file($path)) {
+            Log::warning('google_play.credentials_missing', ['path' => $path]);
             throw new RuntimeException('IAP verification service is not configured.');
         }
         $decoded = json_decode((string) file_get_contents($path), true);
         if (! is_array($decoded)) {
+            Log::warning('google_play.credentials_invalid_json', ['path' => $path]);
             throw new RuntimeException('IAP verification service is not configured.');
         }
 

@@ -13,6 +13,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -35,6 +36,12 @@ final class IapController extends Controller
             $verified = $verifier->verify($data['store'], $data['receipt'], $data['product_id'] ?? null);
         } catch (RuntimeException $exception) {
             $unverified = $exception->getMessage() === 'IAP_UNVERIFIED';
+            Log::warning('iap.verify.failed', [
+                'store' => $data['store'],
+                'product_id' => $data['product_id'] ?? null,
+                'user_id' => $request->user()?->id,
+                'reason' => $exception->getMessage(),
+            ]);
 
             return ApiResponse::error(
                 $unverified ? 'IAP_UNVERIFIED' : 'SERVICE_DEGRADED',
