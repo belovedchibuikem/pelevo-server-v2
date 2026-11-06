@@ -32,6 +32,30 @@ final class AccountProofAndAgeTest extends TestCase
         $stamp = $confirmed->json('data.age_majority_confirmed_at');
         $this->actingAs($user, 'sanctum')->postJson('/api/v1/me/age-majority', ['confirmed' => true])->assertOk()->assertJsonPath('data.age_majority_confirmed_at', $stamp);
         $this->actingAs($user, 'sanctum')->getJson('/api/v1/me')->assertOk()->assertJsonPath('data.age_majority_confirmed', true);
+
+        config()->set(['finance.public_enabled' => true, 'services.paypal.payout_verification_url' => null]);
+        DB::table('payout_methods')->where('owner_id', $user->id)->delete();
+        $paypal = $this->actingAs($user, 'sanctum')->postJson('/api/v1/payout-methods', [
+            'provider' => 'paypal',
+            'kind' => 'paypal',
+            'destination' => ['email' => 'earn@example.com'],
+        ])->assertCreated();
+        $this->assertNotNull($paypal->json('data.verified_at'));
+        $this->assertSame('earn@example.com', $paypal->json('data.label'));
+        $paypalId = $paypal->json('data.id');
+
+        config()->set(['services.paypal.payout_verification_url' => 'https://paypal.test/down']);
+        Http::fake(['https://paypal.test/down' => Http::response(['message' => 'down'], 500)]);
+        $replaced = $this->actingAs($user, 'sanctum')->postJson('/api/v1/payout-methods', [
+            'provider' => 'paypal',
+            'kind' => 'paypal',
+            'destination' => ['email' => '  New.Earn@Example.COM '],
+        ])->assertOk();
+        $this->assertSame($paypalId, $replaced->json('data.id'));
+        $this->assertSame('new.earn@example.com', $replaced->json('data.label'));
+        $this->assertNotNull($replaced->json('data.verified_at'));
+        $this->assertSame(1, DB::table('payout_methods')->where('owner_id', $user->id)->where('kind', 'paypal')->count());
+        $this->assertSame('new.earn@example.com', decrypt(DB::table('payout_methods')->where('id', $paypalId)->value('destination_encrypted'))['email']);
     }
 
     public function test_bank_proof_stays_private_until_review_then_is_purged(): void
@@ -52,7 +76,8 @@ final class AccountProofAndAgeTest extends TestCase
             'provider' => 'paystack',
             'kind' => 'bank',
             'destination' => ['account_number' => '0123456789', 'bank_code' => '044'],
-        ])->assertCreated()->assertJsonPath('data.label', 'Ada Owner')->assertJsonPath('data.verified_at', null)->assertJsonPath('data.proof_status', 'none')->assertJsonMissingPath('data.proof_path')->json('data.id');
+        ])->assertCreated()->assertJsonPath('data.label', 'Ada Owner')->assertJsonPath('data.proof_status', 'none')->assertJsonMissingPath('data.proof_path')->json('data.id');
+        $this->assertNotNull(DB::table('payout_methods')->where('id', $method)->value('verified_at'));
 
         $this->actingAs($user, 'sanctum')->post('/api/v1/payout-methods/'.$method.'/account-proof', [
             'account_proof' => UploadedFile::fake()->create('notes.txt', 12, 'text/plain'),
@@ -63,7 +88,8 @@ final class AccountProofAndAgeTest extends TestCase
 
         $upload = $this->actingAs($user, 'sanctum')->post('/api/v1/payout-methods/'.$method.'/account-proof', [
             'account_proof' => UploadedFile::fake()->image('statement.jpg'),
-        ], ['Accept' => 'application/json'])->assertOk()->assertJsonPath('data.proof_status', 'pending')->assertJsonPath('data.verified_at', null)->assertJsonMissingPath('data.proof_path');
+        ], ['Accept' => 'application/json'])->assertOk()->assertJsonPath('data.proof_status', 'pending')->assertJsonMissingPath('data.proof_path');
+        $this->assertNotNull($upload->json('data.verified_at'));
         $path = DB::table('payout_methods')->where('id', $method)->value('proof_path');
         $this->assertNotEmpty($path);
         $this->assertStringNotContainsString($path, $upload->getContent());

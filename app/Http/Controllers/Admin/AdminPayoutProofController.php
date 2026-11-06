@@ -59,8 +59,10 @@ final class AdminPayoutProofController extends Controller
             }
 
             $approved = $data['decision'] === 'approved';
+            // Keep name-enquiry / PayPal auto-verification when optional proof is rejected.
+            $verifiedAt = $approved ? ($row->verified_at ?: now()) : $row->verified_at;
             DB::table('payout_methods')->where('id', $payoutMethod)->update([
-                'verified_at' => $approved ? now() : null,
+                'verified_at' => $verifiedAt,
                 'proof_status' => $data['decision'],
                 'proof_path' => null,
                 'proof_disk' => null,
@@ -80,7 +82,7 @@ final class AdminPayoutProofController extends Controller
             return ApiResponse::success([
                 'id' => $payoutMethod,
                 'proof_status' => $data['decision'],
-                'verified' => $approved,
+                'verified' => $verifiedAt !== null,
                 'purged' => true,
             ]);
         }, 3);
