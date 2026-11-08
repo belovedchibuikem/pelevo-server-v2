@@ -10,6 +10,7 @@ use App\Models\GiftType;
 use App\Models\User;
 use App\Services\Finance\CoinEconomy;
 use App\Services\Finance\TokenValuation;
+use App\Services\NotifyGiftReceived;
 use App\Support\ApiResponse;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -106,8 +107,9 @@ final class GiftController extends Controller
         $issuance = FinancialAccount::firstOrCreate(['owner_type' => null, 'owner_id' => null, 'type' => 'diamond_issuance', 'unit' => CoinEconomy::UNIT], ['balance' => 0]);
         $diamonds = FinancialAccount::firstOrCreate(['owner_type' => get_class($creator), 'owner_id' => $creator->id, 'type' => 'diamond_wallet', 'unit' => CoinEconomy::UNIT], ['balance' => 0]);
         $feeVersion = DB::table('fee_versions')->where('type', 'gift_platform')->where('active', true)->where('effective_at', '<=', now())->latest('effective_at')->first();
+        $created = false;
         try {
-            $gift = DB::transaction(function () use ($post, $key, $giftType, $sender, $clearing, $issuance, $diamonds, $feeVersion, $regime, $request, $creator, $data): object {
+            $gift = DB::transaction(function () use ($post, $key, $giftType, $sender, $clearing, $issuance, $diamonds, $feeVersion, $regime, $request, $creator, $data, &$created): object {
                 $coinTransaction = $post->handle('gift.sent', $key, 'PCN', [
                     ['account_id' => $sender->id, 'amount' => -$giftType->coins],
                     ['account_id' => $clearing->id, 'amount' => $giftType->coins],
@@ -149,6 +151,7 @@ final class GiftController extends Controller
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
+                $created = true;
 
                 return DB::table('gifts')->find($id);
             }, 3);
@@ -160,6 +163,17 @@ final class GiftController extends Controller
                 return ApiResponse::error('CONFLICT', 'Idempotency key was already used for another operation.', 409);
             }
             throw $e;
+        }
+
+        if ($created) {
+            app(NotifyGiftReceived::class)->notify(
+                giftId: (string) $gift->id,
+                creatorProfileId: (string) $creator->id,
+                senderUserId: (string) $request->user()->id,
+                giftTypeName: (string) $giftType->name,
+                coins: (int) $giftType->coins,
+                message: isset($data['message']) ? (string) $data['message'] : null,
+            );
         }
 
         return ApiResponse::success($this->presentGift($gift, $this->walletBalance($request->user())), status: 201);

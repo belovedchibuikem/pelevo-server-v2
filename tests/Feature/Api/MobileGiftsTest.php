@@ -3,6 +3,7 @@
 namespace Tests\Feature\Api;
 
 use App\Actions\Finance\PostLedgerTransaction;
+use App\Mail\PelevoNotice;
 use App\Models\CreatorProfile;
 use App\Models\FinancialAccount;
 use App\Models\GiftType;
@@ -10,6 +11,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -58,5 +60,64 @@ final class MobileGiftsTest extends TestCase
         $user->forceFill(['age_majority_confirmed_at' => now()])->save();
         $payload = ['store' => 'apple', 'receipt' => 'opaque-store-receipt'];
         $this->actingAs($user, 'sanctum')->postJson('/api/v1/iap/verify', $payload)->assertCreated()->assertJsonPath('data.coins', 500)->assertJsonPath('data.unit', 'PCN')->assertJsonPath('data.remaining_balance', 500)->assertJsonMissingPath('data.verification_payload')->assertJsonMissingPath('data.receipt_hash')->assertJsonMissingPath('data.original_transaction_id');
+    }
+
+    public function test_gift_send_emails_the_creator_once_and_skips_self_gifts(): void
+    {
+        Mail::fake();
+        config()->set(['finance.public_enabled' => true, 'features.notifications' => true]);
+
+        $sender = User::factory()->create(['name' => 'Gift Sender', 'email' => 'sender-gift@example.com']);
+        $creatorUser = User::factory()->create(['name' => 'Gift Creator', 'email' => 'creator-gift@example.com', 'status' => 'active']);
+        $creator = CreatorProfile::create(['user_id' => $creatorUser->id, 'display_name' => 'Gift Creator']);
+        $giftType = GiftType::create(['slug' => 'gift-mail-star', 'name' => 'Star', 'coins' => 50, 'version' => 1]);
+        $wallet = FinancialAccount::create(['owner_type' => User::class, 'owner_id' => $sender->id, 'type' => 'gift_wallet', 'unit' => 'PCN', 'balance' => 0]);
+        $funding = FinancialAccount::create(['type' => 'iap_liability', 'unit' => 'PCN', 'balance' => 0]);
+        app(PostLedgerTransaction::class)->handle('test.iap', 'gift-mail-fund', 'PCN', [
+            ['account_id' => $funding->id, 'amount' => -100],
+            ['account_id' => $wallet->id, 'amount' => 100],
+        ]);
+
+        $payload = [
+            'gift_type_id' => $giftType->id,
+            'creator_profile_id' => $creator->id,
+            'message' => 'Love your show',
+        ];
+        $this->actingAs($sender, 'sanctum')
+            ->withHeader('Idempotency-Key', 'gift-mail-once')
+            ->postJson('/api/v1/gifts/send', $payload)
+            ->assertCreated();
+
+        Mail::assertQueued(PelevoNotice::class, function (PelevoNotice $mail) use ($creatorUser): bool {
+            return $mail->hasTo($creatorUser->email)
+                && $mail->subjectLine === 'Gift Sender sent you a gift on Pelevo'
+                && str_contains($mail->intro, 'Star')
+                && str_contains((string) $mail->detail, 'Love your show');
+        });
+        $this->assertDatabaseHas('notifications', [
+            'user_id' => $creatorUser->id,
+            'type' => 'gift_received',
+        ]);
+
+        $this->actingAs($sender, 'sanctum')
+            ->withHeader('Idempotency-Key', 'gift-mail-once')
+            ->postJson('/api/v1/gifts/send', $payload)
+            ->assertCreated();
+        Mail::assertQueued(PelevoNotice::class, 1);
+
+        Mail::fake();
+        $selfWallet = FinancialAccount::create(['owner_type' => User::class, 'owner_id' => $creatorUser->id, 'type' => 'gift_wallet', 'unit' => 'PCN', 'balance' => 0]);
+        app(PostLedgerTransaction::class)->handle('test.iap', 'gift-mail-self-fund', 'PCN', [
+            ['account_id' => $funding->id, 'amount' => -50],
+            ['account_id' => $selfWallet->id, 'amount' => 50],
+        ]);
+        $this->actingAs($creatorUser, 'sanctum')
+            ->withHeader('Idempotency-Key', 'gift-mail-self')
+            ->postJson('/api/v1/gifts/send', [
+                'gift_type_id' => $giftType->id,
+                'creator_profile_id' => $creator->id,
+            ])
+            ->assertCreated();
+        Mail::assertNothingQueued();
     }
 }

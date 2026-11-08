@@ -32,7 +32,7 @@ final class InAppNotificationDelivery
             $options = $this->mobileOptions($preferences?->mobile_options);
             $allowed = config('features.notifications') && $user->status === 'active'
                 && ($options['in_app_enabled'] ?? true)
-                && (! ($options['high_priority_only'] ?? false) || in_array($message['type'], ['support_reply', 'live', 'earn_award'], true));
+                && (! ($options['high_priority_only'] ?? false) || in_array($message['type'], ['support_reply', 'live', 'earn_award', 'gift_received'], true));
             if ($message['type'] === 'new_episode') {
                 $allowed = $allowed && ($preferences?->new_episodes ?? true)
                     && in_array('new_episodes', $options['types'] ?? ['new_episodes'], true)
