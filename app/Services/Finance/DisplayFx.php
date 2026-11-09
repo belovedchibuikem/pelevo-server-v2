@@ -13,14 +13,30 @@ final class DisplayFx
      */
     public function present(int $usdCents, ?string $countryCode): array
     {
+        return $this->presentMicros(max(0, $usdCents) * 10_000, $countryCode, centsStyle: true);
+    }
+
+    /**
+     * Creator Studio / ad balances are tracked in USD micros. Local display uses the
+     * profile country currency when an approved payout FX rate exists.
+     *
+     * @return array{available_usd: string, currency: string, fx_rate: ?string, display_available: ?string}
+     */
+    public function presentMicros(int $usdMicros, ?string $countryCode, bool $centsStyle = false): array
+    {
         $currency = CountryCurrency::currency($countryCode);
-        $available = TokenValuation::formatCents($usdCents);
+        $available = $centsStyle
+            ? TokenValuation::formatCents(intdiv(max(0, $usdMicros) + 5_000, 10_000))
+            : $this->formatUsdMicros($usdMicros);
+
         if ($currency === 'USD') {
             return [
                 'available_usd' => $available,
                 'currency' => 'USD',
                 'fx_rate' => '1.00',
-                'display_available' => CountryCurrency::symbol('USD').$this->grouped($usdCents, 2),
+                'display_available' => CountryCurrency::symbol('USD').($centsStyle
+                    ? $this->grouped(intdiv(max(0, $usdMicros) + 5_000, 10_000), 2)
+                    : $this->formatUsdMicrosAmount($usdMicros)),
             ];
         }
 
@@ -31,12 +47,14 @@ final class DisplayFx
                 'available_usd' => $available,
                 'currency' => $currency,
                 'fx_rate' => null,
-                'display_available' => null,
+                'display_available' => CountryCurrency::symbol('USD').($centsStyle
+                    ? $this->grouped(intdiv(max(0, $usdMicros) + 5_000, 10_000), 2)
+                    : $this->formatUsdMicrosAmount($usdMicros)).' USD',
             ];
         }
 
         $digits = CountryCurrency::fractionDigits($currency);
-        $minor = $this->convertUsdCents($usdCents, (string) $quote->rate, $digits);
+        $minor = $this->convertUsdMicros($usdMicros, (string) $quote->rate, $digits);
 
         return [
             'available_usd' => $available,
@@ -101,7 +119,12 @@ final class DisplayFx
 
     public function convertUsdCents(int $usdCents, string $rate, int $fractionDigits): int
     {
-        if ($usdCents < 0 || $fractionDigits < 0 || $fractionDigits > 3) {
+        return $this->convertUsdMicros(max(0, $usdCents) * 10_000, $rate, $fractionDigits);
+    }
+
+    public function convertUsdMicros(int $usdMicros, string $rate, int $fractionDigits): int
+    {
+        if ($usdMicros < 0 || $fractionDigits < 0 || $fractionDigits > 3) {
             throw new InvalidArgumentException('INVALID_MONEY');
         }
         if (! preg_match('/^\d+(\.\d{1,8})?$/', $rate)) {
@@ -109,17 +132,33 @@ final class DisplayFx
         }
         [$whole, $fraction] = array_pad(explode('.', $rate, 2), 2, '');
         $scaled = ((int) $whole) * 100_000_000 + (int) str_pad(substr($fraction, 0, 8), 8, '0');
-        $product = $usdCents * $scaled;
-        $divisor = 100_000_000;
-        if ($fractionDigits < 2) {
-            $divisor *= 10 ** (2 - $fractionDigits);
-        } elseif ($fractionDigits > 2) {
-            $product *= 10 ** ($fractionDigits - 2);
+        $product = $usdMicros * $scaled;
+        if ($fractionDigits > 0) {
+            $product *= 10 ** $fractionDigits;
         }
+        $divisor = 100_000_000 * 1_000_000;
         $base = intdiv($product, $divisor);
         $remainder = $product % $divisor;
 
         return $base + ($remainder * 2 >= $divisor ? 1 : 0);
+    }
+
+    public function formatUsdMicros(int $usdMicros): string
+    {
+        $negative = $usdMicros < 0;
+        $usdMicros = abs($usdMicros);
+        if ($usdMicros === 0) {
+            return ($negative ? '-' : '').'0.00';
+        }
+        $dollars = $usdMicros / 1_000_000;
+        $decimals = $dollars >= 1 ? 2 : 4;
+
+        return ($negative ? '-' : '').number_format($dollars, $decimals, '.', '');
+    }
+
+    private function formatUsdMicrosAmount(int $usdMicros): string
+    {
+        return $this->formatUsdMicros($usdMicros);
     }
 
     public function formatRate(string $rate): string

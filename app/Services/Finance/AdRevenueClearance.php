@@ -55,14 +55,15 @@ final class AdRevenueClearance
     {
         $micros = $this->micros($creatorIds);
         $clearedCents = $this->centsFromMicros($micros['cleared_usd_micros']);
-        $display = $this->display->present($clearedCents, $countryCode);
+        $display = $this->display->presentMicros($micros['cleared_usd_micros'], $countryCode);
 
         return [
             ...$display,
-            'pending_ad_usd' => TokenValuation::formatCents($this->centsFromMicros($micros['pending_usd_micros'])),
+            'pending_ad_usd' => $this->display->formatUsdMicros($micros['pending_usd_micros']),
             'cleared_ad_usd' => $display['available_usd'],
             'pending_ad_usd_micros' => $micros['pending_usd_micros'],
             'cleared_ad_usd_micros' => $micros['cleared_usd_micros'],
+            'available_usd_cents' => $clearedCents,
             'minimum_cashout_usd' => TokenValuation::formatCents(TokenValuation::AD_MIN_USD_CENTS),
             'cashout_eligible' => $clearedCents >= TokenValuation::AD_MIN_USD_CENTS,
             'hold_hours' => TokenValuation::AD_HOLD_HOURS,

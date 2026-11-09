@@ -73,9 +73,10 @@ final class CreatorWithdrawalController extends Controller
             ],
             'ads' => [
                 ...$adClearance,
+                ...app(DisplayFx::class)->presentMicros($availableMicros, $country),
                 'available_usd_micros' => $availableMicros,
                 'available_usd_cents' => $availableCents,
-                'available_usd' => TokenValuation::formatCents($availableCents),
+                'cleared_ad_usd' => app(DisplayFx::class)->formatUsdMicros($availableMicros),
                 'threshold_usd' => TokenValuation::formatCents(TokenValuation::AD_MIN_USD_CENTS),
                 'threshold_usd_cents' => TokenValuation::AD_MIN_USD_CENTS,
                 'eligible' => $availableCents >= TokenValuation::AD_MIN_USD_CENTS,
