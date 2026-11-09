@@ -34,8 +34,9 @@ final class CreatorWithdrawalController extends Controller
             return ApiResponse::error('NOT_FOUND', 'A creator profile is required before withdrawals can be shown.', 404);
         }
         $country = $request->user()->country_code;
-        $diamonds = $economy->summary($economy->balanceForCreators([$creator->id]), $country);
-        $adClearance = $ads->present([$creator->id], $country);
+        // Studio / request UI shows USD; destination bank currency is for Flutterwave FX only.
+        $diamonds = $economy->summary($economy->balanceForCreators([$creator->id]), null);
+        $adClearance = $ads->present([$creator->id], null);
         $availableMicros = (int) DB::table('financial_accounts')
             ->where('owner_type', CreatorProfile::class)
             ->where('owner_id', $creator->id)
@@ -63,6 +64,7 @@ final class CreatorWithdrawalController extends Controller
                 $payoutCurrency = null;
             }
         }
+        $adsUsd = app(DisplayFx::class)->presentMicros($availableMicros, null);
 
         return ApiResponse::success([
             'gifts' => [
@@ -73,10 +75,10 @@ final class CreatorWithdrawalController extends Controller
             ],
             'ads' => [
                 ...$adClearance,
-                ...app(DisplayFx::class)->presentMicros($availableMicros, $country),
+                ...$adsUsd,
                 'available_usd_micros' => $availableMicros,
                 'available_usd_cents' => $availableCents,
-                'cleared_ad_usd' => app(DisplayFx::class)->formatUsdMicros($availableMicros),
+                'cleared_ad_usd' => $adsUsd['available_usd'],
                 'threshold_usd' => TokenValuation::formatCents(TokenValuation::AD_MIN_USD_CENTS),
                 'threshold_usd_cents' => TokenValuation::AD_MIN_USD_CENTS,
                 'eligible' => $availableCents >= TokenValuation::AD_MIN_USD_CENTS,
@@ -87,7 +89,7 @@ final class CreatorWithdrawalController extends Controller
             'has_verified_payout_method' => $verified !== null,
             'payout_currency' => $payoutCurrency,
             'manual_payout' => true,
-            'note' => 'Withdrawals are requested by you and paid by Pelevo finance. Nothing is sent automatically.',
+            'note' => 'Balances are shown in USD. You withdraw to a local bank account; Flutterwave converts and pays in local currency.',
         ]);
     }
 
