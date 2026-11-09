@@ -24,7 +24,8 @@ final class DisplayFx
             ];
         }
 
-        $quote = $this->quote($currency);
+        // Creator-facing balances should use the latest approved payout rate, not the short ads quote window.
+        $quote = $this->quoteForPayout($currency);
         if ($quote === null) {
             return [
                 'available_usd' => $available,
@@ -45,24 +46,57 @@ final class DisplayFx
         ];
     }
 
-    public function quote(string $currency): ?object
+    /**
+     * Fresh quote for ads release / reconciliation (age-limited).
+     */
+    public function quote(string $currency, bool $freshOnly = true): ?object
     {
         $currency = strtoupper($currency);
         if ($currency === 'USD') {
             return (object) ['id' => null, 'rate' => '1.00000000'];
         }
 
-        $maxAge = max(1, (int) config('reels_ads.fx.quote_max_age_minutes'));
-
-        return DB::table('fx_rate_versions')
+        $query = DB::table('fx_rate_versions')
             ->where('base_unit', 'USD')
             ->where('quote_currency', $currency)
             ->where('approval_state', 'approved')
-            ->where('effective_at', '<=', now())
-            ->where('effective_at', '>=', now()->subMinutes($maxAge))
+            ->where('effective_at', '<=', now());
+
+        if ($freshOnly) {
+            $maxAge = max(1, (int) config('reels_ads.fx.quote_max_age_minutes'));
+            $query->where('effective_at', '>=', now()->subMinutes($maxAge));
+        }
+
+        return $query
             ->orderByDesc('effective_at')
             ->orderByDesc('id')
             ->first();
+    }
+
+    /**
+     * Latest approved USD→local rate for creator bank payouts (not age-limited).
+     * Falls back to REELS_ADS_USD_NGN_RATE for NGN when no DB row exists.
+     */
+    public function quoteForPayout(string $currency): ?object
+    {
+        $currency = strtoupper($currency);
+        if ($currency === 'USD') {
+            return (object) ['id' => null, 'rate' => '1.00000000'];
+        }
+
+        $quote = $this->quote($currency, freshOnly: false);
+        if ($quote !== null) {
+            return $quote;
+        }
+
+        if ($currency === 'NGN') {
+            $rate = trim((string) config('reels_ads.fx.usd_ngn_rate', ''));
+            if ($rate !== '' && preg_match('/^\d+(\.\d{1,8})?$/', $rate)) {
+                return (object) ['id' => null, 'rate' => $rate];
+            }
+        }
+
+        return null;
     }
 
     public function convertUsdCents(int $usdCents, string $rate, int $fractionDigits): int

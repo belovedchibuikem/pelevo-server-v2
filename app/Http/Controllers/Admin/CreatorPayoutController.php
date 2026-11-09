@@ -63,7 +63,7 @@ final class CreatorPayoutController extends Controller
                     $currency = $route['currency'];
                     $payoutMinor = $amountMinor;
                     if ($currency !== 'USD') {
-                        $fx = app(DisplayFx::class)->quote($currency);
+                        $fx = app(DisplayFx::class)->quoteForPayout($currency);
                         if (! $fx) {
                             continue;
                         }

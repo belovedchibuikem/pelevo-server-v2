@@ -209,7 +209,7 @@ final class CreatorWithdrawalController extends Controller
         $netMinor = (int) $quote['net_minor'];
         $feeMinor = (int) $quote['transfer_fee_minor'];
         if ($currency !== 'USD') {
-            $fx = app(DisplayFx::class)->quote($currency);
+            $fx = app(DisplayFx::class)->quoteForPayout($currency);
             if (! $fx) {
                 return ApiResponse::error('SERVICE_DEGRADED', 'A live exchange rate is not available for this payout.', 503);
             }
@@ -303,7 +303,7 @@ final class CreatorWithdrawalController extends Controller
         $grossMinor = $usdCents;
         $netMinor = $usdCents;
         if ($currency !== 'USD') {
-            $fx = app(DisplayFx::class)->quote($currency);
+            $fx = app(DisplayFx::class)->quoteForPayout($currency);
             if (! $fx) {
                 return ApiResponse::error('SERVICE_DEGRADED', 'A live exchange rate is not available for this payout.', 503);
             }
