@@ -53,8 +53,19 @@ final class DisplayFx
             ];
         }
 
-        $digits = CountryCurrency::fractionDigits($currency);
-        $minor = $this->convertUsdMicros($usdMicros, (string) $quote->rate, $digits);
+        try {
+            $digits = CountryCurrency::fractionDigits($currency);
+            $minor = $this->convertUsdMicros($usdMicros, (string) $quote->rate, $digits);
+        } catch (InvalidArgumentException) {
+            return [
+                'available_usd' => $available,
+                'currency' => $currency,
+                'fx_rate' => null,
+                'display_available' => CountryCurrency::symbol('USD').($centsStyle
+                    ? $this->grouped(intdiv(max(0, $usdMicros) + 5_000, 10_000), 2)
+                    : $this->formatUsdMicrosAmount($usdMicros)).' USD',
+            ];
+        }
 
         return [
             'available_usd' => $available,
@@ -127,20 +138,22 @@ final class DisplayFx
         if ($usdMicros < 0 || $fractionDigits < 0 || $fractionDigits > 3) {
             throw new InvalidArgumentException('INVALID_MONEY');
         }
+        $rate = trim($rate);
         if (! preg_match('/^\d+(\.\d{1,8})?$/', $rate)) {
             throw new InvalidArgumentException('INVALID_RATE');
         }
         [$whole, $fraction] = array_pad(explode('.', $rate, 2), 2, '');
         $scaled = ((int) $whole) * 100_000_000 + (int) str_pad(substr($fraction, 0, 8), 8, '0');
-        $product = $usdMicros * $scaled;
+        // Keep multiplication in strings so large micros × rate cannot overflow PHP ints.
+        $product = bcmul((string) $usdMicros, (string) $scaled, 0);
         if ($fractionDigits > 0) {
-            $product *= 10 ** $fractionDigits;
+            $product = bcmul($product, (string) (10 ** $fractionDigits), 0);
         }
-        $divisor = 100_000_000 * 1_000_000;
-        $base = intdiv($product, $divisor);
-        $remainder = $product % $divisor;
+        $divisor = '100000000000000'; // 1e8 * 1e6
+        $base = bcdiv($product, $divisor, 0);
+        $remainder = bcmod($product, $divisor);
 
-        return $base + ($remainder * 2 >= $divisor ? 1 : 0);
+        return (int) $base + (bccomp(bcmul($remainder, '2', 0), $divisor, 0) >= 0 ? 1 : 0);
     }
 
     public function formatUsdMicros(int $usdMicros): string
