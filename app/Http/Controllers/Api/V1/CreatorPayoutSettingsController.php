@@ -45,6 +45,9 @@ final class CreatorPayoutSettingsController extends Controller
             if (! $method) {
                 return ApiResponse::error('PAYOUT_METHOD_UNVERIFIED', 'A verified payout method owned by you is required.', 409);
             }
+            if ($method->kind === 'paypal' || $method->provider === 'paypal') {
+                return ApiResponse::error('VALIDATION', 'PayPal payouts are coming soon. Select a verified local bank account.', 422);
+            }
         }
         $resetsCompliance = array_key_exists('payout_method_id', $data) || array_key_exists('tax_details', $data);
         DB::transaction(function () use ($creator, $data, $existing, $methodId, $resetsCompliance): void {

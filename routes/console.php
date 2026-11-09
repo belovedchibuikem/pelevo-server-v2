@@ -7,6 +7,7 @@ use App\Jobs\MaterializeHomeFeed;
 use App\Jobs\MaterializeRecommendations;
 use App\Jobs\MonitorReelAdMonetization;
 use App\Jobs\QualifyReferrals;
+use App\Jobs\ReleaseMaturedReelAdAllocations;
 use App\Jobs\ReleaseReconciledReelAdRevenue;
 use App\Jobs\RunReconciliation;
 use App\Jobs\ScoreEarnSession;
@@ -94,6 +95,11 @@ Schedule::call(function (): void {
         ->pluck('id')
         ->each(fn (string $id) => ReleaseReconciledReelAdRevenue::dispatch($id));
 })->name('release-reconciled-reel-ad-revenue')->hourly()->onOneServer()->withoutOverlapping(10);
+Schedule::job(new ReleaseMaturedReelAdAllocations, 'finance')
+    ->name('release-matured-reel-ad-allocations')
+    ->everyFiveMinutes()
+    ->onOneServer()
+    ->withoutOverlapping(5);
 Schedule::job(new QualifyReferrals, 'finance')->name('qualify-referrals')->everyFifteenMinutes()->onOneServer()->withoutOverlapping(10);
 
 Schedule::call(function (): void {

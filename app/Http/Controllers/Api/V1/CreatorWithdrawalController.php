@@ -49,7 +49,12 @@ final class CreatorWithdrawalController extends Controller
             ->select(['id', 'provider', 'kind', 'label', 'destination_last_four', 'verified_at', 'proof_status', 'created_at'])
             ->latest()
             ->get();
-        $verified = $methods->first(fn (object $row): bool => $row->verified_at !== null);
+        $selectedMethodId = DB::table('creator_payout_settings')
+            ->where('creator_profile_id', $creator->id)
+            ->value('payout_method_id');
+        $bankMethods = $methods->filter(fn (object $row): bool => $row->kind !== 'paypal' && $row->provider !== 'paypal' && $row->verified_at !== null)->values();
+        $verified = $bankMethods->first(fn (object $row): bool => (string) $row->id === (string) $selectedMethodId)
+            ?? $bankMethods->first();
         $payoutCurrency = null;
         if ($verified) {
             try {
@@ -77,6 +82,7 @@ final class CreatorWithdrawalController extends Controller
                 'scope' => 'all_claimed_podcasts',
             ],
             'payout_methods' => $methods,
+            'selected_payout_method_id' => $verified?->id,
             'has_verified_payout_method' => $verified !== null,
             'payout_currency' => $payoutCurrency,
             'manual_payout' => true,
@@ -114,6 +120,9 @@ final class CreatorWithdrawalController extends Controller
             ->first();
         if (! $method || ! $method->verified_at) {
             return ApiResponse::error('PAYOUT_METHOD_REQUIRED', 'Set up and verify a payout method before requesting a withdrawal.', 409);
+        }
+        if ($method->kind === 'paypal' || $method->provider === 'paypal') {
+            return ApiResponse::error('VALIDATION', 'PayPal payouts are coming soon. Select a verified local bank account.', 422);
         }
         try {
             $route = app(PayoutRoute::class)->resolve($request->user()->country_code, $method);
