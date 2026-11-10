@@ -21,7 +21,7 @@ final class TokenValuation
 
     public const DIAMOND_USD_SMALL_BUSINESS = '0.0007537';
 
-    public const GIFT_MIN_USD_CENTS = 1_500;
+    public const GIFT_MIN_USD_CENTS = 1_000;
 
     public const AD_MIN_USD_CENTS = 10_000;
 
