@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -170,9 +171,7 @@ final class StudioWorkspaceController extends Controller
         return ApiResponse::success([
             'period' => $this->earningsPeriod($request->string('period')->toString() ?: 'this_month', $creators),
             'gifts_received' => DB::table('gifts')->whereIn('creator_profile_id', $creators)->count(),
-            'payouts_count' => DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->count()
-                + DB::table('diamond_cashouts')->whereIn('creator_profile_id', $creators)->count()
-                + DB::table('creator_ad_cashouts')->whereIn('creator_profile_id', $creators)->count(),
+            'payouts_count' => $this->payoutsCountFor($creators),
             'accounts' => DB::table('financial_accounts')->where('owner_type', 'App\\Models\\CreatorProfile')->whereIn('owner_id', $creators)->select('id', 'owner_id', 'type', 'unit', 'balance')->get(),
             'ad_revenue_allocations' => DB::table('creator_ad_revenue_allocations')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'status', 'gross_usd_micros', 'confirmed_usd_micros', 'reserve_usd_micros', 'clawback_usd_micros', 'available_currency', 'available_amount_minor', 'held_until', 'released_at')->latest()->limit(100)->get(),
             'currency_conversions' => DB::table('currency_conversions')->whereIn('creator_profile_id', $creators)->select('id', 'creator_profile_id', 'source_currency', 'source_amount_minor', 'destination_currency', 'destination_amount_minor', 'gross_rate', 'net_rate', 'spread_bps', 'rate_source', 'quoted_at', 'created_at')->latest()->limit(100)->get(),
@@ -283,6 +282,21 @@ final class StudioWorkspaceController extends Controller
         return $ids;
     }
 
+    private function payoutsCountFor(Collection $creators): int
+    {
+        if ($creators->isEmpty()) {
+            return 0;
+        }
+
+        $count = (int) DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->count()
+            + (int) DB::table('diamond_cashouts')->whereIn('creator_profile_id', $creators)->count();
+        if (Schema::hasTable('creator_ad_cashouts')) {
+            $count += (int) DB::table('creator_ad_cashouts')->whereIn('creator_profile_id', $creators)->count();
+        }
+
+        return $count;
+    }
+
     private function showIds(Request $request): Collection
     {
         return DB::table('verified_show_claims')->join('show_claims', 'show_claims.id', '=', 'verified_show_claims.show_claim_id')->whereIn('show_claims.creator_profile_id', $this->creatorIds($request))->pluck('verified_show_claims.show_id');
@@ -367,7 +381,9 @@ final class StudioWorkspaceController extends Controller
         $ads = DB::table('creator_ad_revenue_allocations')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['created_at', 'status', 'gross_usd_micros', 'clawback_usd_micros']);
         $creatorPayouts = DB::table('creator_payouts')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['amount', 'unit', 'created_at']);
         $diamondCashouts = DB::table('diamond_cashouts')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['diamonds', 'created_at']);
-        $adCashouts = DB::table('creator_ad_cashouts')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['amount_usd_cents', 'created_at']);
+        $adCashouts = Schema::hasTable('creator_ad_cashouts')
+            ? DB::table('creator_ad_cashouts')->whereIn('creator_profile_id', $creators)->whereBetween('created_at', $between)->get(['gross_usd_cents', 'created_at'])
+            : collect();
 
         $statusTotals = [];
         foreach ($gifts as $gift) {
