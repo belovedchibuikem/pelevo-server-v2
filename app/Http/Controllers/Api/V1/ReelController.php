@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Reels\DeleteReel;
 use App\Http\Controllers\Controller;
 use App\Jobs\TranscodeReelMedia;
 use App\Models\CreatorProfile;
@@ -98,17 +99,15 @@ final class ReelController extends Controller
         return ApiResponse::success($presented[0]);
     }
 
-    public function destroy(string $reel, Request $request): JsonResponse
+    public function destroy(string $reel, Request $request, DeleteReel $delete): JsonResponse
     {
         $creator = CreatorProfile::where('user_id', $request->user()->id)->first();
         if (! $creator) {
             return ApiResponse::error('CLAIM_REQUIRED', 'Creator access is required.', 403);
         }
-        $deleted = DB::table('reels')->where('id', $reel)->where('creator_profile_id', $creator->id)->delete();
-        if ($deleted === 0) {
+        if ($delete->handle($reel, $creator->id) === 'missing') {
             return ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
         }
-        Cache::forget('reel:'.$reel);
 
         return ApiResponse::success(['deleted' => true]);
     }

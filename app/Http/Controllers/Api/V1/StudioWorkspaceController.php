@@ -121,7 +121,7 @@ final class StudioWorkspaceController extends Controller
 
     public function reels(Request $request): JsonResponse
     {
-        $items = DB::table('reels')->whereIn('reels.creator_profile_id', $this->creatorIds($request))->leftJoin('episodes', 'episodes.id', '=', 'reels.episode_id')->select($this->reelColumns())->when($request->string('state')->isNotEmpty(), fn ($q) => $q->where('reels.state', $request->string('state')->toString()))->when($request->boolean('linked'), fn ($q) => $q->where(fn ($inner) => $inner->whereNotNull('reels.episode_id')->orWhereExists(fn ($exists) => $exists->selectRaw('1')->from('reel_episode_links')->whereColumn('reel_episode_links.reel_id', 'reels.id'))))->orderByDesc('reels.updated_at')->orderByDesc('reels.id')->cursorPaginate($this->limit($request));
+        $items = DB::table('reels')->whereIn('reels.creator_profile_id', $this->creatorIds($request))->where('reels.state', '!=', 'deleted')->leftJoin('episodes', 'episodes.id', '=', 'reels.episode_id')->select($this->reelColumns())->when($request->string('state')->isNotEmpty(), fn ($q) => $q->where('reels.state', $request->string('state')->toString()))->when($request->boolean('linked'), fn ($q) => $q->where(fn ($inner) => $inner->whereNotNull('reels.episode_id')->orWhereExists(fn ($exists) => $exists->selectRaw('1')->from('reel_episode_links')->whereColumn('reel_episode_links.reel_id', 'reels.id'))))->orderByDesc('reels.updated_at')->orderByDesc('reels.id')->cursorPaginate($this->limit($request));
 
         return ApiResponse::success(
             collect($items->items())->map(fn (object $row): array => $this->presentReel($row, $request))->values()->all(),
@@ -131,7 +131,7 @@ final class StudioWorkspaceController extends Controller
 
     public function reel(string $reel, Request $request): JsonResponse
     {
-        $row = DB::table('reels')->where('reels.id', $reel)->whereIn('reels.creator_profile_id', $this->creatorIds($request))->leftJoin('episodes', 'episodes.id', '=', 'reels.episode_id')->select($this->reelColumns())->first();
+        $row = DB::table('reels')->where('reels.id', $reel)->where('reels.state', '!=', 'deleted')->whereIn('reels.creator_profile_id', $this->creatorIds($request))->leftJoin('episodes', 'episodes.id', '=', 'reels.episode_id')->select($this->reelColumns())->first();
 
         return $row ? ApiResponse::success($this->presentReel($row, $request)) : ApiResponse::error('NOT_FOUND', 'Reel not found.', 404);
     }

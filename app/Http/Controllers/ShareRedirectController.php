@@ -154,7 +154,7 @@ final class ShareRedirectController extends Controller
 
     public function reel(string $reel, Request $request): JsonResponse|Response
     {
-        $exists = DB::table('reels')->where('id', $reel)->exists();
+        $exists = DB::table('reels')->where('id', $reel)->where('state', '!=', 'deleted')->exists();
         if (! $exists) {
             return $this->missing($request);
         }

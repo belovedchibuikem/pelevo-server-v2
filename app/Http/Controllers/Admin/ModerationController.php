@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Actions\Reels\DeleteReel;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use App\Support\ReelLimits;
@@ -49,8 +50,9 @@ final class ModerationController extends Controller
             }
             DB::table('comments')->where('commentable_type', 'reel')->where('commentable_id', $reel)->whereNotNull('parent_id')->delete();
             DB::table('comments')->where('commentable_type', 'reel')->where('commentable_id', $reel)->delete();
-            DB::table('reels')->where('id', $reel)->delete();
-            Cache::forget('reel:'.$reel);
+            if (app(DeleteReel::class)->handle($reel) === 'missing') {
+                return ApiResponse::error('NOT_FOUND', 'Moderation subject not found.', 404);
+            }
             $actionId = (string) Str::ulid();
             $type = 'App\\Models\\Reel';
             DB::table('moderation_actions')->insert(['id' => $actionId, 'admin_id' => auth('admin')->id(), 'subject_type' => $type, 'subject_id' => $reel, 'action' => 'delete', 'reason_code' => $data['reason_code'], 'reason' => $data['reason'], 'evidence' => json_encode(['before' => $record, 'user_facing_explanation' => $data['user_facing_explanation'] ?? null], JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);

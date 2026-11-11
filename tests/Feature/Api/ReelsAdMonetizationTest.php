@@ -169,6 +169,43 @@ final class ReelsAdMonetizationTest extends TestCase
         $this->assertDatabaseCount('ad_impression_attributions', 2);
     }
 
+    public function test_delete_retires_a_reel_that_has_an_ad_attribution(): void
+    {
+        config()->set('reels_ads.enabled', true);
+        config()->set('reels_ads.allocation_enabled', false);
+        config()->set('reels_ads.threshold_min', 1);
+        config()->set('reels_ads.threshold_max', 1);
+
+        $fan = User::factory()->create();
+        $owner = User::factory()->create();
+        $creator = CreatorProfile::create(['user_id' => $owner->id, 'display_name' => 'Owner']);
+        $reel = $this->reel($creator->id);
+        $completed = $this->completeReel($fan, $reel, (string) Str::uuid(), ['X-Platform' => 'android', 'X-Device-Id' => 'test-installation']);
+        $this->assertNotEmpty($completed->json('data.ad_due.ad_impression_id'));
+
+        $this->actingAs($owner, 'sanctum')
+            ->deleteJson('/api/v1/reels/'.$reel)
+            ->assertOk()
+            ->assertJsonPath('data.deleted', true);
+
+        $this->assertDatabaseHas('reels', ['id' => $reel, 'state' => 'deleted', 'media_url' => null]);
+        $this->assertDatabaseHas('ad_impression_attributions', ['reel_id' => $reel]);
+    }
+
+    public function test_delete_removes_a_reel_with_no_ad_attribution(): void
+    {
+        $owner = User::factory()->create();
+        $creator = CreatorProfile::create(['user_id' => $owner->id, 'display_name' => 'Owner']);
+        $reel = $this->reel($creator->id);
+
+        $this->actingAs($owner, 'sanctum')
+            ->deleteJson('/api/v1/reels/'.$reel)
+            ->assertOk()
+            ->assertJsonPath('data.deleted', true);
+
+        $this->assertDatabaseMissing('reels', ['id' => $reel]);
+    }
+
     private function reel(string $creatorId): string
     {
         $id = (string) Str::ulid();

@@ -23,7 +23,7 @@ final class ReelMediaController extends Controller
     private function stream(string $reel, string $kind): Response
     {
         $row = DB::table('reels')->where('id', $reel)->first();
-        if (! $row) {
+        if (! $row || $row->state === 'deleted') {
             abort(404);
         }
         if ($kind === 'video' && is_string($row->media_url) && str_starts_with($row->media_url, 'http')) {
