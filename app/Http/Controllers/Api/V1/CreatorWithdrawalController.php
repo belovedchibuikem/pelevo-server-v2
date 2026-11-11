@@ -18,6 +18,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
@@ -160,26 +161,30 @@ final class CreatorWithdrawalController extends Controller
             ->map(fn (object $row): array => [
                 'id' => $row->id,
                 'source' => 'gifts',
-                'amount_label' => ((int) $row->diamonds).' diamonds',
+                'amount_label' => ((int) $row->diamonds).' coins',
+                'usd_label' => '$'.TokenValuation::formatCents((int) ($row->gross_usd_cents ?? 0)).' USD',
                 'net_minor' => (int) $row->net_minor,
-                'currency' => $row->currency,
+                'currency' => 'USD',
                 'state' => $row->state,
                 'created_at' => Carbon::parse($row->created_at)->toIso8601String(),
             ]);
-        $ads = DB::table('creator_ad_cashouts')
-            ->where('creator_profile_id', $creator->id)
-            ->orderByDesc('created_at')
-            ->limit(40)
-            ->get()
-            ->map(fn (object $row): array => [
-                'id' => $row->id,
-                'source' => 'ads',
-                'amount_label' => TokenValuation::formatCents((int) $row->gross_usd_cents).' ads',
-                'net_minor' => (int) $row->net_minor,
-                'currency' => $row->currency,
-                'state' => $row->state,
-                'created_at' => Carbon::parse($row->created_at)->toIso8601String(),
-            ]);
+        $ads = Schema::hasTable('creator_ad_cashouts')
+            ? DB::table('creator_ad_cashouts')
+                ->where('creator_profile_id', $creator->id)
+                ->orderByDesc('created_at')
+                ->limit(40)
+                ->get()
+                ->map(fn (object $row): array => [
+                    'id' => $row->id,
+                    'source' => 'ads',
+                    'amount_label' => '$'.TokenValuation::formatCents((int) $row->gross_usd_cents).' USD ads',
+                    'usd_label' => '$'.TokenValuation::formatCents((int) $row->gross_usd_cents).' USD',
+                    'net_minor' => (int) $row->net_minor,
+                    'currency' => 'USD',
+                    'state' => $row->state,
+                    'created_at' => Carbon::parse($row->created_at)->toIso8601String(),
+                ])
+            : collect();
 
         return ApiResponse::success(
             $gifts->concat($ads)->sortByDesc('created_at')->values()->take(50)->values()->all(),
@@ -201,11 +206,11 @@ final class CreatorWithdrawalController extends Controller
             return ApiResponse::error('SERVICE_DEGRADED', 'Diamond conversion is not configured.', 503);
         }
         if ((int) $data['diamonds'] < (int) $regime->min_cashout_diamonds) {
-            return ApiResponse::error('VALIDATION', 'Gift withdrawals start at $15.00.', 422);
+            return ApiResponse::error('VALIDATION', 'Gift withdrawals start at $10.00.', 422);
         }
         $quote = $economy->cashoutQuote((int) $data['diamonds'], $regime);
         if (! $quote['payable']) {
-            return ApiResponse::error('VALIDATION', 'Gift withdrawals start at $15.00.', 422);
+            return ApiResponse::error('VALIDATION', 'Gift withdrawals start at $10.00.', 422);
         }
         $fx = null;
         $grossMinor = (int) $quote['gross_minor'];

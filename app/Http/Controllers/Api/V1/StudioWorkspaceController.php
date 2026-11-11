@@ -248,7 +248,11 @@ final class StudioWorkspaceController extends Controller
         $items = DB::table('ledger_transactions')
             ->whereExists(fn ($q) => $q->selectRaw('1')->from('ledger_entries')->whereColumn('ledger_entries.ledger_transaction_id', 'ledger_transactions.id')->whereIn('financial_account_id', $accountIds))
             ->when($kind === 'gifts', fn ($q) => $q->where('event_type', 'gift.sent'))
-            ->when($kind === 'payouts', fn ($q) => $q->where('event_type', 'like', 'creator_payout.%'))
+            ->when($kind === 'payouts', fn ($q) => $q->where(fn ($events) => $events
+                ->where('event_type', 'like', 'creator_payout.%')
+                ->orWhere('event_type', 'like', 'diamond.cashout%')
+                ->orWhere('event_type', 'like', 'ads.cashout%')
+                ->orWhere('event_type', 'like', 'creator_ad_cashout%')))
             ->when($kind === 'reels', fn ($q) => $q->where(fn ($events) => $events->where('event_type', 'reel.revenue')->orWhere('event_type', 'like', 'reel.ad.%')))
             ->when($kind !== 'reels', fn ($q) => $q->where('event_type', '!=', 'reel.revenue')->where('event_type', 'not like', 'reel.ad.%'))
             ->when($kind === 'earnings', fn ($q) => $q->where('event_type', 'gift.sent'))
