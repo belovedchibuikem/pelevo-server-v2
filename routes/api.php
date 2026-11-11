@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\V1\ContentReportController;
 use App\Http\Controllers\Api\V1\CreatorController;
 use App\Http\Controllers\Api\V1\CreatorWithdrawalController;
 use App\Http\Controllers\Api\V1\DiamondCashoutController;
+use App\Http\Controllers\Api\V1\DirectoryController;
 use App\Http\Controllers\Api\V1\CreatorFollowController;
 use App\Http\Controllers\Api\V1\CreatorPayoutSettingsController;
 use App\Http\Controllers\Api\V1\CreatorPublicController;
@@ -111,6 +112,8 @@ Route::prefix('v1')->group(function (): void {
         Route::get('home/playlists', [HomeController::class, 'playlists']);
         Route::get('home/recommendations', [HomeController::class, 'recommendations']);
         Route::get('search', [CatalogController::class, 'search']);
+        Route::get('directory/search', [DirectoryController::class, 'search'])->middleware('throttle:30,1');
+        Route::post('directory/subscribe', [DirectoryController::class, 'subscribe'])->middleware('throttle:10,1');
         Route::get('search/recent', [SearchHistoryController::class, 'index']);
         Route::post('search/recent', [SearchHistoryController::class, 'store']);
         Route::delete('search/recent/{id}', [SearchHistoryController::class, 'destroyOne']);

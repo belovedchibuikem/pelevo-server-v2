@@ -48,6 +48,20 @@ return [
         'episode_max_pages' => (int) env('PODCAST_INDEX_EPISODE_MAX_PAGES', 10),
     ],
 
+    // Public iTunes Search API. No secret. Directory search uses this plus Podcast Index.
+    'apple_podcasts' => [
+        'enabled' => filter_var(env('APPLE_PODCASTS_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        'base_url' => env('APPLE_PODCASTS_BASE_URL', 'https://itunes.apple.com'),
+        'timeout' => (int) env('APPLE_PODCASTS_TIMEOUT', 8),
+    ],
+
+    // Shared one-minute budgets so search cannot stampede Apple, Podcast Index, or publisher feeds.
+    'directory' => [
+        'apple_per_minute' => (int) env('DIRECTORY_APPLE_PER_MINUTE', 20),
+        'podcast_index_per_minute' => (int) env('DIRECTORY_PODCAST_INDEX_PER_MINUTE', 10),
+        'probe_per_minute' => (int) env('DIRECTORY_PROBE_PER_MINUTE', 12),
+    ],
+
     'paystack' => ['webhook_secret' => env('PAYSTACK_WEBHOOK_SECRET'), 'payout_verification_url' => env('PAYSTACK_PAYOUT_VERIFICATION_URL'), 'payout_verification_token' => env('PAYSTACK_SECRET_KEY'), 'payout_url' => env('PAYSTACK_PAYOUT_URL'), 'payout_token' => env('PAYSTACK_SECRET_KEY'), 'checkout_url' => env('PAYSTACK_CHECKOUT_URL'), 'checkout_token' => env('PAYSTACK_SECRET_KEY'), 'restore_url' => env('PAYSTACK_VERIFY_URL')],
     'paypal' => ['payout_verification_url' => env('PAYPAL_PAYOUT_VERIFICATION_URL'), 'payout_verification_token' => env('PAYPAL_ACCESS_TOKEN'), 'payout_url' => env('PAYPAL_PAYOUT_URL'), 'payout_token' => env('PAYPAL_ACCESS_TOKEN')],
     'flutterwave' => [

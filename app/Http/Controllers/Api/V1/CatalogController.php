@@ -2,11 +2,17 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Catalog\DeadFeedException;
+use App\Actions\Catalog\DirectoryRateLimited;
 use App\Actions\Catalog\InvalidateDiscoveryCache;
 use App\Actions\Catalog\PersistDiscoveredShow;
+use App\Actions\Catalog\SearchPodcastDirectory;
+use App\Actions\Catalog\SubscribePodcastFeed;
 use App\Http\Controllers\Controller;
 use App\Integrations\PodcastIndex\PodcastIndexClient;
 use App\Integrations\PodcastIndex\PodcastIndexException;
+use App\Integrations\Rss\FeedAddress;
+use App\Integrations\Rss\UnsafeFeedUrlException;
 use App\Jobs\HydrateRssFeed;
 use App\Models\Episode;
 use App\Models\Show;
@@ -22,7 +28,7 @@ use Illuminate\Support\Str;
 
 final class CatalogController extends Controller
 {
-    public function search(Request $request, PodcastIndexClient $client, PersistDiscoveredShow $persist): JsonResponse
+    public function search(Request $request, PodcastIndexClient $client, PersistDiscoveredShow $persist, SearchPodcastDirectory $directory, SubscribePodcastFeed $subscribe): JsonResponse
     {
         $data = $request->validate([
             'q' => ['required', 'string', 'min:3', 'max:100'],
@@ -83,6 +89,9 @@ final class CatalogController extends Controller
                     if ($persisted >= $remoteCap) {
                         break;
                     }
+                    if (is_array($feed) && filter_var($feed['dead'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+                        continue;
+                    }
                     try {
                         if ($show = $persist->handle(is_array($feed) ? $feed : [])) {
                             $merged->put($show->id, $show);
@@ -130,6 +139,12 @@ final class CatalogController extends Controller
                 'query' => $normalizedQuery,
                 'reason' => 'disabled',
             ]);
+        }
+        if ($imported = $this->importPastedFeed($normalizedQuery, $directory, $subscribe)) {
+            $shows = collect([$imported])->merge($shows)->unique('id')->take($limit)->values();
+            if ($freshness === 'local') {
+                $freshness = 'fresh';
+            }
         }
         if (! $preview) {
             DB::table('search_history')->where('user_id', $request->user()->id)->where('query_hash', $queryHash)->update(['result_count' => $shows->count(), 'updated_at' => now()]);
@@ -309,6 +324,55 @@ final class CatalogController extends Controller
             'queued' => true,
             'episodes_syncing' => true,
         ], status: 202);
+    }
+
+    /**
+     * A pasted feed URL is resolved through the same directory lookup used by
+     * Add, then stored once. Name search stays on the catalog and Podcast Index.
+     */
+    private function importPastedFeed(string $query, SearchPodcastDirectory $directory, SubscribePodcastFeed $subscribe): ?Show
+    {
+        if (! FeedAddress::looksLikeUrl($query)) {
+            return null;
+        }
+
+        try {
+            $result = $directory->handle($query);
+        } catch (DirectoryRateLimited $exception) {
+            Log::info('catalog.search.feed_url_limited', ['message' => $exception->getMessage()]);
+
+            return null;
+        } catch (UnsafeFeedUrlException $exception) {
+            Log::info('catalog.search.feed_url_rejected', ['message' => $exception->getMessage()]);
+
+            return null;
+        }
+
+        $candidate = $result['candidates'][0] ?? null;
+        if (! is_array($candidate) || ($candidate['feed_state'] ?? '') === 'dead') {
+            return null;
+        }
+
+        $showId = $candidate['show_id'] ?? null;
+        if (is_string($showId) && $showId !== '') {
+            return Show::query()->find($showId);
+        }
+
+        try {
+            $subscribed = $subscribe->handle([
+                'source' => (string) ($candidate['source'] ?? 'rss'),
+                'external_id' => $candidate['external_id'] ?? null,
+                'feed_url' => (string) ($candidate['feed_url'] ?? $query),
+                'title' => (string) ($candidate['title'] ?? 'Podcast'),
+                'author' => $candidate['author'] ?? null,
+            ]);
+        } catch (DeadFeedException|DirectoryRateLimited|UnsafeFeedUrlException $exception) {
+            Log::info('catalog.search.feed_url_not_imported', ['message' => $exception->getMessage()]);
+
+            return null;
+        }
+
+        return $subscribed['show'];
     }
 
     private function matchingShows(string $query, int $limit)
