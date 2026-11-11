@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Actions\Finance\ActivatePremiumPayment;
 use App\Actions\Finance\ReverseLedgerTransaction;
+use App\Actions\Finance\SettleDiamondCashout;
 use App\Mail\PelevoNotice;
 use App\Services\MailPreference;
 use Illuminate\Http\JsonResponse;
@@ -17,6 +18,9 @@ final class WebhookController extends Controller
     public function __invoke(string $provider, Request $request, ReverseLedgerTransaction $reverse, ActivatePremiumPayment $activatePremium): JsonResponse
     {
         $secret = (string) config("services.{$provider}.webhook_secret");
+        if ($provider === 'flutterwave' && $request->hasHeader('verif-hash')) {
+            return $this->flutterwaveTransfer($request, $secret);
+        }
         if ($secret === '' || ! hash_equals(hash_hmac('sha256', $request->getContent(), $secret), (string) $request->header('X-Pelevo-Signature'))) {
             return response()->json(['ok' => false], 401);
         } $eventId = (string) $request->header('X-Provider-Event-Id');
@@ -81,17 +85,14 @@ final class WebhookController extends Controller
             DB::transaction(function () use ($reference, $states, $payload, $reverse, &$withdrawalMail, &$diamondMail): void {
                 $withdrawal = DB::table('withdrawals')->where('provider_reference', $reference)->lockForUpdate()->first();
                 if (! $withdrawal) {
-                    $cashout = DB::table('diamond_cashouts')->where('provider_reference', $reference)->lockForUpdate()->first();
-                    if (! $cashout) {
-                        return;
-                    }
                     $state = $states[$payload['type']];
-                    if (in_array($state, ['failed', 'reversed'], true)) {
-                        $reverse->handle($cashout->ledger_transaction_id, 'diamond-cashout-release:'.$cashout->id, 'Provider webhook reported '.$state.'.');
-                    }
-                    DB::table('diamond_cashouts')->where('id', $cashout->id)->update(['state' => $state, 'failure_reason' => $state === 'failed' ? (data_get($payload, 'data.reason') ?? 'Provider failure.') : null, 'processed_at' => now(), 'updated_at' => now()]);
-                    if (in_array($state, ['paid', 'failed'], true)) {
-                        $diamondMail = [$cashout->user_id, $state, (int) $cashout->diamonds, (int) $cashout->net_minor, $cashout->currency, $state === 'failed' ? (string) (data_get($payload, 'data.reason') ?? 'Provider failure.') : null];
+                    $reasonText = (string) (data_get($payload, 'data.reason') ?? 'Provider failure.');
+                    $changed = app(SettleDiamondCashout::class)->apply((string) $reference, $state, $reasonText);
+                    if ($changed && in_array($state, ['paid', 'failed'], true)) {
+                        $cashout = DB::table('diamond_cashouts')->where('provider_reference', $reference)->first();
+                        if ($cashout) {
+                            $diamondMail = [$cashout->user_id, $state, (int) $cashout->diamonds, (int) $cashout->net_minor, $cashout->currency, $state === 'failed' ? $reasonText : null];
+                        }
                     }
 
                     return;
@@ -164,6 +165,64 @@ final class WebhookController extends Controller
             }
         }
         DB::table('provider_webhook_events')->where('id', $id)->update(['state' => 'processed', 'processed_at' => now(), 'updated_at' => now()]);
+
+        return response()->json(['ok' => true], 202);
+    }
+
+    private function flutterwaveTransfer(Request $request, string $secret): JsonResponse
+    {
+        $hash = (string) $request->header('verif-hash');
+        if ($secret === '' || ! hash_equals($secret, $hash)) {
+            return response()->json(['ok' => false], 401);
+        }
+        $payload = $request->json()->all();
+        $data = is_array($payload['data'] ?? null) ? $payload['data'] : [];
+        $reference = trim((string) ($data['reference'] ?? ''));
+        $event = (string) ($payload['event'] ?? $payload['event.type'] ?? '');
+        $status = strtoupper((string) ($data['status'] ?? ''));
+        $state = match ($status) {
+            'SUCCESSFUL', 'SUCCESS' => 'paid',
+            'FAILED' => 'failed',
+            'REVERSED' => 'reversed',
+            default => $status === '' && $event === 'transfer.completed' ? 'paid' : null,
+        };
+        if ($reference === '' || $state === null || ! str_contains($event, 'transfer')) {
+            return response()->json(['ok' => true, 'ignored' => true], 202);
+        }
+        $eventId = (string) ($data['id'] ?? hash('sha256', $request->getContent()));
+        $reason = (string) ($data['complete_message'] ?? $data['reason'] ?? 'Flutterwave reported '.$state.'.');
+        $changed = app(SettleDiamondCashout::class)->apply($reference, $state, $reason);
+        $inserted = DB::table('provider_webhook_events')->insertOrIgnore([
+            'id' => (string) Str::ulid(),
+            'provider' => 'flutterwave',
+            'provider_event_id' => 'transfer:'.$eventId,
+            'payload_hash' => hash('sha256', $request->getContent()),
+            'payload' => $request->getContent(),
+            'state' => 'processed',
+            'processed_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        if (! $inserted) {
+            return response()->json(['ok' => true, 'replayed' => true], 202);
+        }
+        if ($changed && in_array($state, ['paid', 'failed'], true)) {
+            $cashout = DB::table('diamond_cashouts')->where('provider_reference', $reference)->first();
+            if ($cashout) {
+                $paid = $state === 'paid';
+                $digits = \App\Support\CountryCurrency::fractionDigits((string) $cashout->currency);
+                $amount = number_format(((int) $cashout->net_minor) / (10 ** $digits), $digits, '.', ',');
+                app(MailPreference::class)->queueToUser((string) $cashout->user_id, new PelevoNotice(
+                    subjectLine: $paid ? 'Your Pelevo diamond cashout was paid' : 'Your Pelevo diamond cashout did not go through',
+                    eyebrow: 'Diamonds',
+                    heading: $paid ? 'Diamond cashout paid' : 'Diamond cashout failed',
+                    intro: $paid
+                        ? 'We sent '.$cashout->currency.' '.$amount.' for '.$cashout->diamonds.' diamonds.'
+                        : 'Your cashout of '.$cashout->diamonds.' diamonds could not be completed. The diamonds have been returned.',
+                    detail: $paid ? null : $reason,
+                ));
+            }
+        }
 
         return response()->json(['ok' => true], 202);
     }

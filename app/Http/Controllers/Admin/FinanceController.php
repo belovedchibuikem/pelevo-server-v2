@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Actions\Finance\PayDiamondCashouts;
 use App\Actions\Finance\ReverseLedgerTransaction;
 use App\Http\Controllers\Controller;
-use App\Jobs\DispatchDiamondCashout;
 use App\Jobs\DispatchWithdrawal;
 use App\Jobs\RunReconciliation;
 use App\Services\Finance\CoinEconomy;
@@ -26,8 +26,13 @@ final class FinanceController extends Controller
     public function page(Request $request): Response
     {
         $desk = $request->validate(['desk' => ['nullable', 'in:fx,iap,earn,withdrawals,payouts,reels-ads,premium,ledger']])['desk'] ?? 'fx';
+        $payload = $this->workspace();
+        $payload['desk'] = $desk;
+        $payload['flutterwave'] = $desk === 'payouts'
+            ? app(PayDiamondCashouts::class)->preview()
+            : ['configured' => false, 'message' => null, 'currencies' => []];
 
-        return Inertia::render('Admin/Finance', [...$this->workspace(), 'desk' => $desk]);
+        return Inertia::render('Admin/Finance', $payload);
     }
 
     public function index(): JsonResponse
@@ -313,17 +318,47 @@ final class FinanceController extends Controller
                 $reverse->handle($row->ledger_transaction_id, 'diamond-cashout-release:'.$row->id, $data['reason']);
             }
             DB::table('diamond_cashouts')->where('id', $cashout)->update(['state' => $data['state'], 'provider_reference' => $data['provider_reference'] ?? $row->provider_reference, 'failure_reason' => in_array($data['state'], ['failed', 'rejected'], true) ? $data['reason'] : null, 'processed_at' => in_array($data['state'], ['paid', 'failed', 'rejected', 'reversed'], true) ? now() : null, 'updated_at' => now()]);
-            // Optional provider dispatch only when a payout URL is configured. Admin can mark paid manually.
-            if ($data['state'] === 'approved') {
-                $provider = DB::table('payout_methods')->where('id', $row->payout_method_id)->value('provider');
-                if (is_string($provider) && config("services.{$provider}.payout_url")) {
-                    DispatchDiamondCashout::dispatch($cashout)->afterCommit();
-                }
-            }
             $this->audit($request, 'diamond_cashout.'.$data['state'], 'App\\Models\\DiamondCashout', $cashout, $data['reason'], ['from' => $row->state, 'to' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
 
             return ApiResponse::success(['cashout_id' => $cashout, 'state' => $data['state'], 'net_minor' => (int) $row->net_minor, 'currency' => $row->currency]);
         }, 3);
+    }
+
+    public function payDiamondCashouts(Request $request, PayDiamondCashouts $pay): JsonResponse
+    {
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:10', 'max:2000'],
+            'cashout_ids' => ['nullable', 'array', 'max:50'],
+            'cashout_ids.*' => ['string', 'max:32'],
+        ]);
+        $result = $pay->handle(
+            array_values($data['cashout_ids'] ?? []),
+            $data['reason'],
+            auth('admin')->id(),
+            $request->attributes->get('request_id'),
+            $request->ip(),
+        );
+        if (! $result['ok']) {
+            $status = match ($result['code']) {
+                'INSUFFICIENT_FUNDS' => 409,
+                'NOTHING_TO_PAY' => 422,
+                default => 422,
+            };
+
+            return ApiResponse::error($result['code'], $result['message'], $status);
+        }
+
+        return ApiResponse::success($result);
+    }
+
+    public function refreshDiamondCashout(string $cashout, PayDiamondCashouts $pay): JsonResponse
+    {
+        $result = $pay->refresh($cashout);
+        if (! $result['ok']) {
+            return ApiResponse::error($result['code'], $result['message'], $result['code'] === 'NOT_FOUND' ? 404 : 422);
+        }
+
+        return ApiResponse::success($result);
     }
 
     public function adCashout(string $cashout, Request $request, ReverseLedgerTransaction $reverse): JsonResponse
@@ -415,13 +450,14 @@ final class FinanceController extends Controller
             ['label' => 'Account proofs awaiting review', 'count' => $pendingProofs, 'desk' => 'payouts', 'severity' => 'warning'],
             ['label' => 'Reconciliation drift', 'count' => $openDrift, 'desk' => 'ledger', 'severity' => 'warning'],
             ['label' => 'Draft payout batches', 'count' => $draftBatches, 'desk' => 'payouts', 'severity' => 'info'],
+            ['label' => 'Approved diamond cashouts', 'count' => DB::table('diamond_cashouts')->where('state', 'approved')->count(), 'desk' => 'payouts', 'severity' => 'warning'],
         ];
         $desks = [
             ['key' => 'fx', 'title' => 'FX & products', 'blurb' => 'Coin packs, gifts, fees, FX, and thresholds', 'count' => DB::table('coin_products')->count() + DB::table('gift_types')->count()],
             ['key' => 'iap', 'title' => 'IAP', 'blurb' => 'Unmatched receipts and verify failures', 'count' => $unmatchedReceiptCount],
             ['key' => 'earn', 'title' => 'Earn liability', 'blurb' => 'Outstanding coins, daily issuance, farms', 'count' => $earnReviewCount],
             ['key' => 'withdrawals', 'title' => 'Listener withdrawals', 'blurb' => 'Queue, paid, failed, gateway status', 'count' => DB::table('withdrawals')->whereIn('state', ['queued', 'processing'])->count()],
-            ['key' => 'payouts', 'title' => 'Creator payouts', 'blurb' => 'Monthly batch, hold, maker-checker, account proofs', 'count' => DB::table('creator_payout_batches')->whereIn('state', ['draft', 'approved'])->count() + $pendingProofs],
+            ['key' => 'payouts', 'title' => 'Creator payouts', 'blurb' => 'Diamond cashouts, Flutterwave batches, and account proofs', 'count' => DB::table('creator_payout_batches')->whereIn('state', ['draft', 'approved'])->count() + DB::table('diamond_cashouts')->where('state', 'approved')->count() + $pendingProofs],
             ['key' => 'reels-ads', 'title' => 'Reels ads', 'blurb' => 'AdMob statements, 30-day holds, USD reserve, and USD/NGN releases', 'count' => DB::table('creator_ad_revenue_allocations')->where('status', 'pending')->count()],
             ['key' => 'premium', 'title' => 'Premium', 'blurb' => 'MRR, churn, failed charges, refunds', 'count' => DB::table('premium_subscriptions')->where('state', 'active')->count()],
             ['key' => 'ledger', 'title' => 'Ledger explorer', 'blurb' => 'Immutable credits and reversing entries', 'count' => DB::table('ledger_transactions')->count()],
@@ -454,7 +490,27 @@ final class FinanceController extends Controller
             ],
             'payouts' => [
                 'batches' => DB::table('creator_payout_batches')->latest()->limit(50)->get(),
-                'diamondCashouts' => DB::table('diamond_cashouts')->whereIn('state', ['queued', 'approved', 'processing'])->latest()->limit(50)->get(),
+                'diamondCashouts' => DB::table('diamond_cashouts')
+                    ->leftJoin('creator_profiles', 'creator_profiles.id', '=', 'diamond_cashouts.creator_profile_id')
+                    ->leftJoin('payout_methods', 'payout_methods.id', '=', 'diamond_cashouts.payout_method_id')
+                    ->whereIn('diamond_cashouts.state', ['queued', 'approved', 'processing'])
+                    ->orderByDesc('diamond_cashouts.created_at')
+                    ->limit(50)
+                    ->get([
+                        'diamond_cashouts.id',
+                        'diamond_cashouts.diamonds',
+                        'diamond_cashouts.currency',
+                        'diamond_cashouts.gross_minor',
+                        'diamond_cashouts.transfer_fee_minor',
+                        'diamond_cashouts.net_minor',
+                        'diamond_cashouts.state',
+                        'diamond_cashouts.provider_reference',
+                        'diamond_cashouts.created_at',
+                        'creator_profiles.display_name as creator_name',
+                        'payout_methods.provider as payout_provider',
+                        'payout_methods.destination_last_four',
+                        'payout_methods.label as payout_label',
+                    ]),
                 'revenue' => DB::table('creator_revenue_events')->latest('occurred_at')->limit(30)->get(),
                 'accountProofs' => DB::table('payout_methods')
                     ->leftJoin('users', function ($join): void {

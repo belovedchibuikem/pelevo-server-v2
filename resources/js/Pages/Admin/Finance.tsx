@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 
 import FinanceAction, { EmptyQueue } from '../../components/admin/FinanceAction';
 
+type FlutterwaveCurrency = { currency: string; count: number; required: string; available: string | null; shortfall: string; can_pay: boolean; error: string | null };
 type Row = Record<string, string | number | null | undefined>;
 type Desk = { key: string; title: string; blurb: string; count: number };
 type Attention = { label: string; count: number; desk: string; severity: 'info' | 'warning' };
@@ -19,6 +20,7 @@ type Props = {
   earn: Earn;
   withdrawals: { queued: Row[]; processing: Row[]; failed: Row[] };
   payouts: { batches: Row[]; revenue: Row[]; accountProofs: Row[]; diamondCashouts: Row[] };
+  flutterwave?: { configured: boolean; message: string | null; currencies: FlutterwaveCurrency[] };
   reelsAds: ReelsAds;
   premium: Premium;
   ledger: { accounts: Row[]; transactions: Row[] };
@@ -71,7 +73,7 @@ export default function Finance(props: Props) {
           <h2 className="font-semibold">{props.desks.find(desk => desk.key === active)?.title ?? 'Choose a desk'}</h2>
           <p className="mt-1 text-sm text-slate-500">{props.desks.find(desk => desk.key === active)?.blurb ?? 'Select one of the seven finance surfaces to review queues and governed actions.'}</p>
         </div>
-        <div className="p-5">{active === 'fx' ? <FxDesk products={props.products} accounts={props.ledger.accounts} /> : active === 'iap' ? <IapDesk unmatched={props.iap.unmatched} /> : active === 'earn' ? <EarnDesk earn={props.earn} /> : active === 'withdrawals' ? <WithdrawalDesk withdrawals={props.withdrawals} /> : active === 'payouts' ? <PayoutDesk payouts={props.payouts} /> : active === 'reels-ads' ? <ReelsAdsDesk reelsAds={props.reelsAds} /> : active === 'premium' ? <PremiumDesk premium={props.premium} /> : active === 'ledger' ? <LedgerDesk ledger={props.ledger} exceptions={props.exceptions} reconciliation={props.reconciliation} settlements={props.settlements} /> : <p className="text-sm text-slate-500">Open a desk above. Start with any amber attention card when a queue is non-zero.</p>}</div>
+        <div className="p-5">{active === 'fx' ? <FxDesk products={props.products} accounts={props.ledger.accounts} /> : active === 'iap' ? <IapDesk unmatched={props.iap.unmatched} /> : active === 'earn' ? <EarnDesk earn={props.earn} /> : active === 'withdrawals' ? <WithdrawalDesk withdrawals={props.withdrawals} /> : active === 'payouts' ? <PayoutDesk payouts={props.payouts} flutterwave={props.flutterwave} /> : active === 'reels-ads' ? <ReelsAdsDesk reelsAds={props.reelsAds} /> : active === 'premium' ? <PremiumDesk premium={props.premium} /> : active === 'ledger' ? <LedgerDesk ledger={props.ledger} exceptions={props.exceptions} reconciliation={props.reconciliation} settlements={props.settlements} /> : <p className="text-sm text-slate-500">Open a desk above. Start with any amber attention card when a queue is non-zero.</p>}</div>
       </section>
     </div>
   </main>;
@@ -198,7 +200,137 @@ function WithdrawalDesk({ withdrawals }: { withdrawals: Props['withdrawals'] }) 
   </div>;
 }
 
-function PayoutDesk({ payouts }: { payouts: Props['payouts'] }) {
+let requestDiamondPay: (ids: string[]) => void = () => {};
+
+function csrfToken(): string {
+  return document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '';
+}
+
+function DiamondPayButton({ id }: { id: string }) {
+  return <button type="button" onClick={() => requestDiamondPay([id])} className="rounded-lg bg-teal-400 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-teal-300">Pay</button>;
+}
+
+function DiamondStatusButton({ id }: { id: string }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const check = async () => {
+    setBusy(true);
+    setNote('');
+    try {
+      const response = await fetch(`/api/admin/v1/finance/diamond-cashouts/${id}/status`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken() },
+        body: '{}',
+      });
+      const body = await response.json();
+      if (response.ok) {
+        router.reload();
+      } else {
+        setNote(body.error?.message || 'Flutterwave status could not be checked.');
+      }
+    } catch {
+      setNote('Connection interrupted. Try the check again before marking this paid or failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <span className="inline-flex flex-col items-end gap-1">
+    <button type="button" disabled={busy} onClick={check} className="rounded-lg border border-teal-700 px-3 py-1.5 text-xs font-semibold text-teal-800 disabled:opacity-50">{busy ? 'Checking…' : 'Check Flutterwave'}</button>
+    {note && <small className="max-w-48 text-right text-amber-800">{note}</small>}
+  </span>;
+}
+
+function DiamondPayBar({ rows, flutterwave }: { rows: Row[]; flutterwave?: Props['flutterwave'] }) {
+  const [open, setOpen] = useState(false);
+  const [ids, setIds] = useState<string[]>([]);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [stepUp, setStepUp] = useState(false);
+  const approved = rows.filter(row => row.state === 'approved' && row.payout_provider === 'flutterwave');
+  const currencies = flutterwave?.currencies ?? [];
+  const ready = flutterwave?.configured === true && currencies.length > 0 && currencies.every(row => row.can_pay);
+  requestDiamondPay = selected => {
+    setIds(selected);
+    setReason('');
+    setError('');
+    setStepUp(false);
+    setOpen(true);
+  };
+  const payingAll = ids.length !== 1;
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/v1/finance/diamond-cashouts/pay', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken() },
+        body: JSON.stringify({ reason, ...(payingAll ? {} : { cashout_ids: ids }) }),
+      });
+      setStepUp(response.status === 403);
+      const body = await response.json();
+      if (response.ok) {
+        const message = String(body.data?.message ?? '');
+        if (message.toLowerCase().includes('did not respond') || message.toLowerCase().includes('not sent twice')) {
+          setError(message);
+          return;
+        }
+        setOpen(false);
+        router.reload();
+      } else {
+        setError(body.error?.message || 'Flutterwave did not accept the batch.');
+      }
+    } catch {
+      setError('Connection interrupted. Refresh this page before paying again, so a transfer is not sent twice.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <>
+    {flutterwave?.message && <p className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{flutterwave.message}</p>}
+    {currencies.length > 0 && <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {currencies.map(row => <div key={row.currency} className={`rounded-xl border p-4 ${row.can_pay ? 'border-teal-200 bg-teal-50' : 'border-amber-300 bg-amber-50'}`}>
+        <div className="flex items-center justify-between gap-3">
+          <b>{row.currency}</b>
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{row.count} cashout{row.count === 1 ? '' : 's'}</span>
+        </div>
+        <dl className="mt-3 grid grid-cols-3 gap-2 text-sm">
+          <div><dt className="text-xs text-slate-500">Needed</dt><dd className="font-semibold">{row.required}</dd></div>
+          <div><dt className="text-xs text-slate-500">Available</dt><dd className="font-semibold">{row.available ?? '—'}</dd></div>
+          <div><dt className="text-xs text-slate-500">Short</dt><dd className="font-semibold">{row.shortfall}</dd></div>
+        </dl>
+        {row.error && <p className="mt-2 text-xs text-amber-900">{row.error}</p>}
+      </div>)}
+    </div>}
+    <div className="mb-4">
+      <button type="button" disabled={!ready} onClick={() => requestDiamondPay([])} className="rounded-lg bg-teal-400 px-4 py-2 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">
+        {currencies.reduce((sum, row) => sum + row.count, 0) > 0 ? `Pay ${currencies.reduce((sum, row) => sum + row.count, 0)} approved cashout${currencies.reduce((sum, row) => sum + row.count, 0) === 1 ? '' : 's'}` : 'Pay with Flutterwave'}
+      </button>
+      {approved.length > 0 && !ready && <p className="mt-2 text-xs text-slate-500">Pay stays off until Flutterwave shows enough available balance for every currency.</p>}
+    </div>
+    {open && <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 p-4" role="presentation" onMouseDown={() => { if (busy) return; setOpen(false); if (error) router.reload(); }}>
+      <div role="dialog" aria-modal="true" aria-label="Pay with Flutterwave" onMouseDown={event => event.stopPropagation()} className="admin-panel my-8 w-full max-w-xl rounded-2xl p-6">
+        <h2 className="text-xl font-semibold">Pay with Flutterwave</h2>
+        <p className="mt-2 text-sm text-slate-500">{payingAll ? 'This sends every approved Flutterwave bank cashout. The wallet was checked before this dialog opened.' : 'This sends one approved cashout. The diamonds stay reserved until Flutterwave confirms a failure.'}</p>
+        <label className="mt-5 grid gap-2 text-sm">Reason
+          <textarea value={reason} minLength={10} maxLength={2000} onChange={event => setReason(event.target.value)} className="min-h-24 rounded-lg border border-slate-300 bg-transparent p-3 outline-none focus:border-teal-500" />
+        </label>
+        {error && <p role="alert" className="mt-4 text-sm text-amber-800">{error}</p>}
+        {stepUp && <a href="/admin/step-up" target="_blank" rel="noopener noreferrer" className="mt-3 block text-sm text-teal-700">Confirm MFA in a new tab, then retry →</a>}
+        <div className="mt-6 flex justify-end gap-3">
+          <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm" onClick={() => { setOpen(false); if (error) router.reload(); }} disabled={busy}>Close</button>
+          <button type="button" disabled={busy || reason.trim().length < 10 || error.toLowerCase().includes('did not respond')} onClick={submit} className="rounded-lg bg-teal-400 px-4 py-2 text-sm font-bold text-slate-950 disabled:opacity-50">{busy ? 'Sending…' : 'Pay now'}</button>
+        </div>
+      </div>
+    </div>}
+  </>;
+}
+
+function PayoutDesk({ payouts, flutterwave }: { payouts: Props['payouts']; flutterwave?: Props['flutterwave'] }) {
   return <>
     <h3 className="font-semibold">Account proofs awaiting review</h3>
     <p className="mt-1 mb-3 max-w-3xl text-sm text-slate-500">Open the private document, compare only the visible full name and account number, and confirm the creator is 18 or older. Approving or rejecting deletes the file immediately. The storage path is never shown.</p>
@@ -217,22 +349,28 @@ function PayoutDesk({ payouts }: { payouts: Props['payouts'] }) {
       <FinanceAction title="Prepare monthly creator payout batch" description="Selects verified creators at or above their currency-specific minimum. USD and NGN ad balances are never mixed. A different finance administrator must approve." trigger="Prepare payout batch" method="POST" endpoint="/api/admin/v1/finance/creator-payout-batches" idempotent fields={[{ name: 'period_start', label: 'Period start', type: 'date' }, { name: 'period_end', label: 'Period end', type: 'date' }, { name: 'unit', label: 'Ledger currency', type: 'select', options: ['USD', 'NGN', 'PCN'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
     </div>
     <h3 className="mt-8 font-semibold">Diamond cashouts</h3>
-    <p className="mt-1 mb-3 max-w-3xl text-sm text-slate-500">The net amount is what the creator receives. The transfer fee is already removed, and the app share stays in the diamond rate, so do not take another platform percent.</p>
+    <p className="mt-1 mb-3 max-w-3xl text-sm text-slate-500">The net amount is what the creator receives. Approve a cashout, then pay the approved Flutterwave bank transfers together. The wallet is checked first. Diamonds stay reserved until Flutterwave confirms a failure.</p>
+    <DiamondPayBar rows={payouts.diamondCashouts ?? []} flutterwave={flutterwave} />
     <List rows={payouts.diamondCashouts ?? []} empty="No diamond cashouts are waiting.">{row => <Item key={String(row.id)}>
-      <div><b>{Number(row.diamonds).toLocaleString()} diamonds</b><small className="block text-slate-500">{minorMoney(Number(row.net_minor), String(row.currency))} net · fee {minorMoney(Number(row.transfer_fee_minor), String(row.currency))}</small></div>
+      <div>
+        <b>{Number(row.diamonds).toLocaleString()} diamonds</b>
+        <small className="block text-slate-500">{row.creator_name ? String(row.creator_name) : 'Creator'} · {row.payout_label ? String(row.payout_label) : String(row.payout_provider ?? 'bank')} ···· {String(row.destination_last_four ?? '')}</small>
+        <small className="block text-slate-500">{minorMoney(Number(row.net_minor), String(row.currency))} net · fee {minorMoney(Number(row.transfer_fee_minor), String(row.currency))}{row.provider_reference ? ` · ${String(row.provider_reference)}` : ''}</small>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Badge value={String(row.state)} />
         {row.state === 'queued' && <>
-          <FinanceAction title="Approve diamond cashout" description="Dispatches the net amount when a payout URL is configured. Otherwise leave it approved and mark it paid after the bank transfer." trigger="Approve" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['approved'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <FinanceAction title="Approve diamond cashout" description="Marks this cashout ready to pay. Flutterwave is not contacted until you use Pay with Flutterwave." trigger="Approve" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['approved'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
           <FinanceAction title="Reject diamond cashout" description="Returns the reserved diamonds to the creator." trigger="Reject" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['rejected'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
         </>}
         {row.state === 'approved' && <>
-          <FinanceAction title="Mark diamond cashout processing" description="Use this when the transfer was sent outside an automatic payout URL." trigger="Mark processing" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['processing'] }, { name: 'provider_reference', label: 'Provider reference', required: false }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
-          <FinanceAction title="Reject diamond cashout" description="Returns the reserved diamonds to the creator." trigger="Reject" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['rejected'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          {row.payout_provider === 'flutterwave' && <DiamondPayButton id={String(row.id)} />}
+          <FinanceAction title="Reject diamond cashout" description="Returns the reserved diamonds to the creator. Do this only before the transfer is sent." trigger="Reject" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['rejected'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
         </>}
         {row.state === 'processing' && <>
-          <FinanceAction title="Mark diamond cashout paid" description="Records that the net amount reached the creator. The transfer fee stays with the gateway." trigger="Mark paid" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['paid'] }, { name: 'provider_reference', label: 'Provider reference', required: false }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
-          <FinanceAction title="Mark diamond cashout failed" description="Returns the reserved diamonds to the creator." trigger="Mark failed" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['failed'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <DiamondStatusButton id={String(row.id)} />
+          <FinanceAction title="Mark diamond cashout paid" description="Use this only after the bank confirms the transfer, if Flutterwave has not updated the status." trigger="Mark paid" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['paid'] }, { name: 'provider_reference', label: 'Provider reference', required: false }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
+          <FinanceAction title="Mark diamond cashout failed" description="Returns the reserved diamonds to the creator. Use this only when Flutterwave confirms the transfer failed." trigger="Mark failed" method="PUT" endpoint={`/api/admin/v1/finance/diamond-cashouts/${row.id}`} fields={[{ name: 'state', label: 'State', type: 'select', options: ['failed'] }, { name: 'reason', label: 'Reason', type: 'textarea' }]} />
         </>}
       </div>
     </Item>}</List>
